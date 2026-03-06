@@ -225,7 +225,9 @@ export class WhatsAppChannel implements Channel {
                 const filePath = path.join(attachDir, filename);
                 fs.writeFileSync(filePath, buffer as Buffer);
                 const sizeKB = Math.round((buffer as Buffer).length / 1024);
-                content = `[PDF: attachments/${filename} (${sizeKB}KB)]\nUse: pdf-reader extract attachments/${filename}`;
+                const pdfRef = `[PDF: attachments/${filename} (${sizeKB}KB)]\nUse: pdf-reader extract attachments/${filename}`;
+                const caption = normalized.documentMessage.caption || '';
+                content = caption ? `${caption}\n\n${pdfRef}` : pdfRef;
                 logger.info(
                   { jid: chatJid, filename },
                   'Downloaded PDF attachment',
