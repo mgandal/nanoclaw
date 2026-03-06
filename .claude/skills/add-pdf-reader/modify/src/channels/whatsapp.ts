@@ -219,9 +219,10 @@ export class WhatsAppChannel implements Channel {
                 const groupDir = path.join(GROUPS_DIR, groups[chatJid].folder);
                 const attachDir = path.join(groupDir, 'attachments');
                 fs.mkdirSync(attachDir, { recursive: true });
-                const filename =
+                const filename = path.basename(
                   normalized.documentMessage.fileName ||
-                  `doc-${Date.now()}.pdf`;
+                  `doc-${Date.now()}.pdf`,
+                );
                 const filePath = path.join(attachDir, filename);
                 fs.writeFileSync(filePath, buffer as Buffer);
                 const sizeKB = Math.round((buffer as Buffer).length / 1024);
