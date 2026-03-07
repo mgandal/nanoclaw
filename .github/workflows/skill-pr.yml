@@ -8,52 +8,16 @@ on:
       - 'skills-engine/**'
 
 jobs:
-  # ── Job 1: Policy gate ────────────────────────────────────────────────
-  # Block PRs that add NEW skill files while also modifying source code.
-  # Skill PRs should contain instructions for Claude, not raw source edits.
-  policy-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for mixed skill + source changes
-        run: |
-          ADDED_SKILLS=$(git diff --name-only --diff-filter=A origin/main...HEAD \
-            | grep '^\\.claude/skills/' || true)
-          CHANGED=$(git diff --name-only origin/main...HEAD)
-          SOURCE=$(echo "$CHANGED" \
-            | grep -E '^src/|^container/|^package\.json|^package-lock\.json' || true)
-
-          if [ -n "$ADDED_SKILLS" ] && [ -n "$SOURCE" ]; then
-            echo "::error::PRs that add new skills should not modify source files."
-            echo ""
-            echo "New skill files:"
-            echo "$ADDED_SKILLS"
-            echo ""
-            echo "Source files:"
-            echo "$SOURCE"
-            echo ""
-            echo "Please split into separate PRs. See CONTRIBUTING.md."
-            exit 1
-          fi
-
-      - name: Comment on failure
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `This PR adds a skill while also modifying source code. A skill PR should not change source files—the skill should contain **instructions** for Claude to follow.
-
-            If you're fixing a bug or simplifying code, please submit that as a separate PR.
-
-            See [CONTRIBUTING.md](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/main/CONTRIBUTING.md) for details.`
-            })
+  # ── Job 1: Policy gate (DISABLED) ────────────────────────────────────
+  # Previously blocked PRs mixing skill files + source code.
+  # Disabled: with branch-based skills, skill PRs are expected to contain
+  # source changes alongside skill instructions.
+  # policy-check:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - name: Check for mixed skill + source changes
+  #       run: echo "Policy check disabled for branch-based skills"
 
   # ── Job 2: Detect which skills changed ────────────────────────────────
   detect-changed:
@@ -129,7 +93,6 @@ jobs:
   # ── Summary gate for branch protection ────────────────────────────────
   skill-validation-summary:
     needs:
-      - policy-check
       - detect-changed
       - validate-skills
     if: always()
@@ -137,13 +100,8 @@ jobs:
     steps:
       - name: Check results
         run: |
-          echo "policy-check: ${{ needs.policy-check.result }}"
           echo "validate-skills: ${{ needs.validate-skills.result }}"
 
-          if [ "${{ needs.policy-check.result }}" = "failure" ]; then
-            echo "::error::Policy check failed"
-            exit 1
-          fi
           if [ "${{ needs.validate-skills.result }}" = "failure" ]; then
             echo "::error::Skill validation failed"
             exit 1
