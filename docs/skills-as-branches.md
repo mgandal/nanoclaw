@@ -21,11 +21,43 @@ The upstream repo (`qwibitai/nanoclaw`) maintains:
 
 Each skill branch contains all the code changes for that skill: new files, modified source files, updated `package.json` dependencies, `.env.example` additions — everything. No manifest, no structured operations, no separate `add/` and `modify/` directories.
 
-### Skill discovery via marketplace
+### Skill discovery and installation
 
-SKILL.md files (setup instructions) live in a separate marketplace repo (`qwibitai/nanoclaw-skills`), not on `main`. Users discover and install skills through Claude Code's plugin marketplace system.
+Skills are split into two categories:
 
-NanoClaw's `.claude/settings.json` includes:
+**Operational skills** (on `main`, always available):
+- `/setup`, `/debug`, `/update-nanoclaw`, `/customize`, `/update-skills`
+- These are instruction-only SKILL.md files — no code changes, just workflows
+- Live in `.claude/skills/` on `main`, immediately available to every user
+
+**Feature skills** (in marketplace, installed on demand):
+- `/add-discord`, `/add-telegram`, `/add-slack`, `/add-gmail`, etc.
+- Each has a SKILL.md with setup instructions and a corresponding `skill/*` branch with code
+- Live in the marketplace repo (`qwibitai/nanoclaw-skills`)
+
+Users never interact with the marketplace directly. The operational skills `/setup` and `/customize` handle plugin installation transparently:
+
+```bash
+# Claude runs this behind the scenes — users don't see it
+claude plugin install nanoclaw-skills@nanoclaw-skills --scope project
+```
+
+Skills are hot-loaded after `claude plugin install` — no restart needed. This means `/setup` can install the marketplace plugin, then immediately run any feature skill, all in one session.
+
+### Selective skill installation
+
+`/setup` asks users what channels they want, then only offers relevant skills:
+
+1. "Which messaging channels do you want to use?" → Discord, Telegram, Slack, WhatsApp
+2. User picks Telegram → Claude installs the plugin and runs `/add-telegram`
+3. After Telegram is set up: "Want to add Agent Swarm support for Telegram?" → offers `/add-telegram-swarm`
+4. "Want to enable community skills?" → installs community marketplace plugins
+
+Dependent skills (e.g., `telegram-swarm` depends on `telegram`) are only offered after their parent is installed. `/customize` follows the same pattern for post-setup additions.
+
+### Marketplace configuration
+
+NanoClaw's `.claude/settings.json` registers the official marketplace:
 
 ```json
 {
@@ -40,26 +72,27 @@ NanoClaw's `.claude/settings.json` includes:
 }
 ```
 
-When users fork and clone NanoClaw, Claude Code automatically prompts them to add this marketplace. From there they can browse and install skills via `/plugin`.
-
-The marketplace repo structure:
+The marketplace repo uses Claude Code's plugin structure:
 
 ```
 qwibitai/nanoclaw-skills/
-  add-discord/
-    skills/
-      add-discord/
-        SKILL.md          # Setup instructions; step 1 is "merge the branch"
-  add-telegram/
-    skills/
-      add-telegram/
-        SKILL.md
-  add-slack/
-    skills/
-      add-slack/
-        SKILL.md
-  ...
+  .claude-plugin/
+    marketplace.json              # Plugin catalog
+  plugins/
+    nanoclaw-skills/              # Single plugin bundling all official skills
+      .claude-plugin/
+        plugin.json               # Plugin manifest
+      skills/
+        add-discord/
+          SKILL.md                # Setup instructions; step 1 is "merge the branch"
+        add-telegram/
+          SKILL.md
+        add-slack/
+          SKILL.md
+        ...
 ```
+
+Multiple skills are bundled in one plugin — installing `nanoclaw-skills` makes all feature skills available at once. Individual skills don't need separate installation.
 
 Each SKILL.md tells Claude to merge the corresponding skill branch as step 1, then walks through interactive setup (env vars, bot creation, etc.).
 
@@ -338,7 +371,7 @@ A community contributor:
 
 1. Maintains a fork of NanoClaw (e.g., `alice/nanoclaw`)
 2. Creates `skill/*` branches on their fork with their custom skills
-3. Creates a marketplace repo (e.g., `alice/nanoclaw-skills`) with SKILL.md files that point to their fork's branches
+3. Creates a marketplace repo (e.g., `alice/nanoclaw-skills`) with a `.claude-plugin/marketplace.json` and plugin structure
 
 ### Adding a community marketplace
 
@@ -364,6 +397,18 @@ If the community contributor is trusted, they can open a PR to add their marketp
 ```
 
 Once merged, all NanoClaw users automatically discover the community marketplace alongside the official one.
+
+### Installing community skills
+
+`/setup` and `/customize` ask users whether they want to enable community skills. If yes, Claude installs community marketplace plugins via `claude plugin install`:
+
+```bash
+claude plugin install alice-skills@alice-nanoclaw-skills --scope project
+```
+
+Community skills are hot-loaded and immediately available — no restart needed. Dependent skills are only offered after their prerequisites are met (e.g., community Telegram add-ons only after Telegram is installed).
+
+Users can also browse and install community plugins manually via `/plugin`.
 
 ### Properties of this system
 
@@ -458,12 +503,13 @@ The migration from the old skills engine to branches can be done gradually. The 
 
 Set up the new system without touching any existing skills.
 
-1. Create the marketplace repo (`qwibitai/nanoclaw-skills`)
+1. Create the marketplace repo (`qwibitai/nanoclaw-skills`) with `.claude-plugin/marketplace.json` and plugin structure
 2. Add `extraKnownMarketplaces` to `.claude/settings.json`
 3. Set up the CI GitHub Action for merge-forwarding skill branches
 4. Add `flavors.yaml` (can start empty)
-5. Update `/setup` to configure `upstream` remote and offer fork migration
-6. Create `/update-skills` skill
+5. Update `/setup` to configure `upstream` remote, install marketplace plugin (`claude plugin install`), and offer selective channel setup
+6. Update `/customize` to install marketplace plugin if not already installed, offer add-on skills
+7. Create `/update-skills` skill
 
 At this point the new system is ready but has no skills in it. All existing skills continue to work via the old engine.
 
@@ -499,11 +545,11 @@ Alternatively, this can be scripted — read each skill's manifest, apply the ch
 
 **Creating the marketplace entry:**
 
-Add a SKILL.md to the marketplace repo that instructs Claude to merge the branch and then walk through interactive setup.
+Add a SKILL.md to the marketplace plugin (`plugins/nanoclaw-skills/skills/add-discord/SKILL.md`) that instructs Claude to merge the branch and then walk through interactive setup. Update `marketplace.json` if adding a new plugin.
 
 **Cleaning up main:**
 
-Remove the old skill's `add/` and `modify/` directories from main. The SKILL.md on main can be removed too (it now lives in the marketplace repo), or kept temporarily with a note pointing to the new system.
+Remove the old skill's `add/`, `modify/`, and `tests/` directories, plus `manifest.yaml`, from main. Remove the feature skill's SKILL.md from `.claude/skills/` on main — it now lives in the marketplace plugin.
 
 **Validate:**
 
@@ -532,10 +578,10 @@ Once all feature skills are migrated to branches:
 1. Remove `skills-engine/` directory
 2. Remove `scripts/apply-skill.ts`, `scripts/uninstall-skill.ts`, `scripts/fix-skill-drift.ts`, `scripts/validate-all-skills.ts`
 3. Remove `.nanoclaw/` directory
-4. Remove `add/` and `modify/` subdirectories from any remaining skill directories on main
+4. Remove feature skill directories from `.claude/skills/` on main (add-discord, add-telegram, etc.) — they now live in the marketplace plugin
 5. Update README contributing guidelines
 
-Core operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`) remain on main in `.claude/skills/` — they don't have code changes and are just instruction files.
+Operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
 
 ### Migration script (optional)
 
@@ -595,15 +641,18 @@ After:
 
 ### Setup skill (`/setup`)
 
-Add a step early in setup:
+Updates to the setup flow:
 
-- Check if `upstream` remote exists
-- If not, add it: `git remote add upstream https://github.com/qwibitai/nanoclaw.git`
+- Check if `upstream` remote exists; if not, add it: `git remote add upstream https://github.com/qwibitai/nanoclaw.git`
 - Check if `origin` points to the user's fork (not qwibitai). If it points to qwibitai, guide them through the fork migration.
+- **Install marketplace plugin:** `claude plugin install nanoclaw-skills@nanoclaw-skills --scope project` — makes all feature skills available (hot-loaded, no restart)
+- **Ask which channels to add:** present channel options (Discord, Telegram, Slack, WhatsApp, Gmail), run corresponding `/add-*` skills for selected channels
+- **Offer dependent skills:** after a channel is set up, offer relevant add-ons (e.g., Agent Swarm after Telegram, voice transcription after WhatsApp)
+- **Optionally enable community marketplaces:** ask if the user wants community skills, install those marketplace plugins too
 
 ### `.claude/settings.json`
 
-Add marketplace configuration so users automatically discover the skills marketplace:
+Marketplace configuration so the official marketplace is auto-registered:
 
 ```json
 {
@@ -620,7 +669,7 @@ Add marketplace configuration so users automatically discover the skills marketp
 
 ### Skills directory on main
 
-The `.claude/skills/` directory on `main` retains only core operational skills (setup, debug, update-nanoclaw, customize). All feature skills (add-discord, add-telegram, etc.) move to the marketplace repo.
+The `.claude/skills/` directory on `main` retains only operational skills (setup, debug, update-nanoclaw, customize, update-skills). Feature skills (add-discord, add-telegram, etc.) live in the marketplace repo, installed via `claude plugin install` during `/setup` or `/customize`.
 
 ### Skills engine removal
 
@@ -633,10 +682,13 @@ The following can be removed:
 - `scripts/validate-all-skills.ts`
 - `.nanoclaw/` — state directory
 - `add/` and `modify/` subdirectories from all skill directories
+- Feature skill SKILL.md files from `.claude/skills/` on main (they now live in the marketplace)
+
+Operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
 
 ### New infrastructure
 
-- **Marketplace repo** (`qwibitai/nanoclaw-skills`) — contains SKILL.md files for each skill
+- **Marketplace repo** (`qwibitai/nanoclaw-skills`) — single Claude Code plugin bundling SKILL.md files for all feature skills
 - **CI GitHub Action** — merge-forward `main` into all `skill/*` branches on every push to `main`, using Claude (Haiku) for conflict resolution
 - **`/update-skills` skill** — checks for and applies skill branch updates using git history
 - **`CONTRIBUTORS.md`** — tracks skill contributors
