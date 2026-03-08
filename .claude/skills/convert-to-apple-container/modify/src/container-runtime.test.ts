@@ -58,11 +58,19 @@ describe('ensureContainerRuntimeRunning', () => {
     ensureContainerRuntimeRunning();
 
     expect(mockExecSync).toHaveBeenCalledTimes(1);
+<<<<<<< /home/runner/work/nanoclaw/nanoclaw/.claude/skills/convert-to-apple-container/modify/src/container-runtime.test.ts
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} system status`,
       { stdio: 'pipe' },
+=======
+    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
+      stdio: 'pipe',
+      timeout: 10000,
+    });
+    expect(logger.debug).toHaveBeenCalledWith(
+      'Container runtime already running',
+>>>>>>> /home/runner/work/nanoclaw/nanoclaw/src/container-runtime.test.ts
     );
-    expect(logger.debug).toHaveBeenCalledWith('Container runtime already running');
   });
 
   it('auto-starts when system status fails', () => {
@@ -99,6 +107,7 @@ describe('ensureContainerRuntimeRunning', () => {
 // --- cleanupOrphans ---
 
 describe('cleanupOrphans', () => {
+<<<<<<< /home/runner/work/nanoclaw/nanoclaw/.claude/skills/convert-to-apple-container/modify/src/container-runtime.test.ts
   it('stops orphaned nanoclaw containers from JSON output', () => {
     // Apple Container ls returns JSON
     const lsOutput = JSON.stringify([
@@ -108,6 +117,13 @@ describe('cleanupOrphans', () => {
       { status: 'running', configuration: { id: 'other-container' } },
     ]);
     mockExecSync.mockReturnValueOnce(lsOutput);
+=======
+  it('stops orphaned nanoclaw containers', () => {
+    // docker ps returns container names, one per line
+    mockExecSync.mockReturnValueOnce(
+      'nanoclaw-group1-111\nnanoclaw-group2-222\n',
+    );
+>>>>>>> /home/runner/work/nanoclaw/nanoclaw/src/container-runtime.test.ts
     // stop calls succeed
     mockExecSync.mockReturnValue('');
 
