@@ -161,15 +161,7 @@ Some skills depend on other skills. E.g., `skill/telegram-swarm` requires `skill
 
 This means `skill/telegram-swarm` includes all of telegram's changes plus its own additions. When a user merges `skill/telegram-swarm`, they get both — no need to merge telegram separately.
 
-The dependency graph is recorded in `skill-deps.yaml` in the upstream repo:
-
-```yaml
-skill/discord: main
-skill/telegram: main
-skill/telegram-swarm: skill/telegram
-skill/slack: main
-skill/gmail: main
-```
+Dependencies are implicit in git history — `git merge-base --is-ancestor` determines whether one skill branch is an ancestor of another. No separate dependency file is needed.
 
 ### Uninstalling a skill
 
@@ -191,13 +183,11 @@ If the user later wants to re-apply the skill, they need to revert the revert fi
 
 A GitHub Action runs on every push to `main`:
 
-1. Read `skill-deps.yaml` to get the dependency graph
-2. Topological sort — process skills in dependency order
-3. For each skill branch, merge its parent (`main` or another skill branch) into it (merge-forward, not rebase)
-4. If conflicts arise, Claude (Haiku) resolves them automatically
-5. Run tests on the merged result
-6. If tests pass, push the updated skill branch
-7. If a skill fails, skip its dependents and flag for review
+1. List all `skill/*` branches
+2. For each skill branch, merge `main` into it (merge-forward, not rebase)
+3. Run build and tests on the merged result
+4. If tests pass, push the updated skill branch
+5. If a skill fails (conflict, build error, test failure), open a GitHub issue for manual resolution
 
 **Why merge-forward instead of rebase:**
 - No force-push — preserves history for users who already merged the skill
@@ -497,127 +487,35 @@ Anyone can PR to add their flavor. The file is available locally when `/setup` r
 
 ## Migration
 
-The migration from the old skills engine to branches can be done gradually. The two systems coexist — old-format skills (with `add/`, `modify/`, manifest) continue to work alongside branch-based skills. Each skill is migrated independently.
+Migration from the old skills engine to branches is complete. All feature skills now live on `skill/*` branches, and the skills engine has been removed.
 
-### Phase 1: Infrastructure
+### Skill branches
 
-Set up the new system without touching any existing skills.
+| Branch | Base | Description |
+|--------|------|-------------|
+| `skill/whatsapp` | `main` | WhatsApp channel |
+| `skill/telegram` | `main` | Telegram channel |
+| `skill/slack` | `main` | Slack channel |
+| `skill/discord` | `main` | Discord channel |
+| `skill/gmail` | `main` | Gmail channel |
+| `skill/voice-transcription` | `skill/whatsapp` | OpenAI Whisper voice transcription |
+| `skill/image-vision` | `skill/whatsapp` | Image attachment processing |
+| `skill/pdf-reader` | `skill/whatsapp` | PDF attachment reading |
+| `skill/local-whisper` | `skill/voice-transcription` | Local whisper.cpp transcription |
+| `skill/ollama-tool` | `main` | Ollama MCP server for local models |
+| `skill/apple-container` | `main` | Apple Container runtime |
+| `skill/reactions` | `main` | WhatsApp emoji reactions |
 
-1. Create the marketplace repo (`qwibitai/nanoclaw-skills`) with `.claude-plugin/marketplace.json` and plugin structure
-2. Add `extraKnownMarketplaces` to `.claude/settings.json`
-3. Set up the CI GitHub Action for merge-forwarding skill branches
-4. Add `flavors.yaml` (can start empty)
-5. Update `/setup` to configure `upstream` remote, install marketplace plugin (`claude plugin install`), and offer selective channel setup
-6. Update `/customize` to install marketplace plugin if not already installed, offer add-on skills
-7. Create `/update-skills` skill
+### What was removed
 
-At this point the new system is ready but has no skills in it. All existing skills continue to work via the old engine.
-
-### Phase 2: Migrate one skill (proof of concept)
-
-Pick a simple skill (e.g., add-discord) and migrate it end-to-end.
-
-**Creating the skill branch:**
-
-```bash
-# Start from main
-git checkout -b skill/discord main
-
-# Apply the skill's file additions
-cp .claude/skills/add-discord/add/src/channels/discord.ts src/channels/discord.ts
-cp .claude/skills/add-discord/add/src/channels/discord.test.ts src/channels/discord.test.ts
-
-# Apply the skill's file modifications
-cp .claude/skills/add-discord/modify/src/index.ts src/index.ts
-cp .claude/skills/add-discord/modify/src/config.ts src/config.ts
-
-# Apply structured operations manually
-# - Add discord.js to package.json
-# - Add DISCORD_BOT_TOKEN and DISCORD_ONLY to .env.example
-
-# Commit and push
-git add -A
-git commit -m "skill/discord: Discord channel integration"
-git push origin skill/discord
-```
-
-Alternatively, this can be scripted — read each skill's manifest, apply the changes, commit, push.
-
-**Creating the marketplace entry:**
-
-Add a SKILL.md to the marketplace plugin (`plugins/nanoclaw-skills/skills/add-discord/SKILL.md`) that instructs Claude to merge the branch and then walk through interactive setup. Update `marketplace.json` if adding a new plugin.
-
-**Cleaning up main:**
-
-Remove the old skill's `add/`, `modify/`, and `tests/` directories, plus `manifest.yaml`, from main. Remove the feature skill's SKILL.md from `.claude/skills/` on main — it now lives in the marketplace plugin.
-
-**Validate:**
-
-- Verify the CI action successfully merges main into `skill/discord`
-- Test applying the skill on a fresh fork via branch merge
-- Verify `/update-skills` detects the branch
-
-### Phase 3: Migrate remaining skills
-
-Migrate remaining skills one at a time, in any order. Each migration follows the same pattern as Phase 2. This can be done over days or weeks — there's no pressure to do them all at once.
-
-Existing skills on main:
-- `add-discord`
-- `add-telegram`
-- `add-slack`
-- `add-gmail`
-- `add-voice-transcription`
-- `add-telegram-swarm`
-- `convert-to-apple-container`
-- `x-integration`
-
-### Phase 4: Remove the skills engine
-
-Once all feature skills are migrated to branches:
-
-1. Remove `skills-engine/` directory
-2. Remove `scripts/apply-skill.ts`, `scripts/uninstall-skill.ts`, `scripts/fix-skill-drift.ts`, `scripts/validate-all-skills.ts`
-3. Remove `.nanoclaw/` directory
-4. Remove feature skill directories from `.claude/skills/` on main (add-discord, add-telegram, etc.) — they now live in the marketplace plugin
-5. Update README contributing guidelines
+- `skills-engine/` directory (entire engine)
+- `scripts/apply-skill.ts`, `scripts/uninstall-skill.ts`, `scripts/rebase.ts`
+- `scripts/fix-skill-drift.ts`, `scripts/validate-all-skills.ts`
+- `.github/workflows/skill-drift.yml`, `.github/workflows/skill-pr.yml`
+- All `add/`, `modify/`, `tests/`, and `manifest.yaml` from skill directories
+- `.nanoclaw/` state directory
 
 Operational skills (`setup`, `debug`, `update-nanoclaw`, `customize`, `update-skills`) remain on main in `.claude/skills/`.
-
-### Migration script (optional)
-
-A script can automate the branch creation for each skill:
-
-```bash
-#!/bin/bash
-# migrate-skill.sh <skill-name>
-SKILL=$1
-SKILL_DIR=".claude/skills/$SKILL"
-MANIFEST="$SKILL_DIR/manifest.yaml"
-
-# Create branch from main
-git checkout -b "skill/$SKILL" main
-
-# Copy added files
-if [ -d "$SKILL_DIR/add" ]; then
-  cp -r "$SKILL_DIR/add/"* .
-fi
-
-# Copy modified files
-if [ -d "$SKILL_DIR/modify" ]; then
-  cp -r "$SKILL_DIR/modify/"* .
-fi
-
-# Apply npm dependencies from manifest (requires yq or similar)
-# Apply env additions from manifest
-# Run npm install
-
-git add -A
-git commit -m "skill/$SKILL: initial branch creation"
-git push origin "skill/$SKILL"
-git checkout main
-```
-
-This is a starting point — each skill may need manual adjustments (e.g., resolving differences between the modify files and current main).
 
 ## What Changes
 
