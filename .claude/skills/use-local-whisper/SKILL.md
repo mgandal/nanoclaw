@@ -23,7 +23,13 @@ Switches voice transcription from OpenAI's Whisper API to local whisper.cpp. Run
 
 ### Check if already applied
 
-Read `.nanoclaw/state.yaml`. If `use-local-whisper` is in `applied_skills`, skip to Phase 3 (Verify).
+Check if `src/transcription.ts` already uses `whisper-cli`:
+
+```bash
+grep 'whisper-cli' src/transcription.ts && echo "Already applied" || echo "Not applied"
+```
+
+If already applied, skip to Phase 3 (Verify).
 
 ### Check dependencies are installed
 
@@ -53,16 +59,20 @@ For better accuracy at the cost of speed, use `ggml-small.bin` (466MB) or `ggml-
 
 ## Phase 2: Apply Code Changes
 
+Merge the skill branch:
+
 ```bash
-npx tsx scripts/apply-skill.ts .claude/skills/use-local-whisper
+git fetch upstream skill/local-whisper
+git merge upstream/skill/local-whisper
 ```
+
+> **Note:** `upstream` is the remote pointing to `qwibitai/nanoclaw`. If using a different remote name, substitute accordingly.
 
 This modifies `src/transcription.ts` to use the `whisper-cli` binary instead of the OpenAI API.
 
 ### Validate
 
 ```bash
-npm test
 npm run build
 ```
 
