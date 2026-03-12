@@ -283,8 +283,42 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
-    this.bot.on('message:document', (ctx) => {
-      const name = ctx.message.document?.file_name || 'file';
+    this.bot.on('message:document', async (ctx) => {
+      const doc = ctx.message.document;
+      const name = doc?.file_name || 'file';
+
+      // For text-readable files, download and include the content
+      const textExts = [
+        '.txt', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
+        '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh',
+        '.log', '.ini', '.cfg', '.toml', '.env', '.sql', '.r',
+        '.tex', '.bib', '.tsv',
+      ];
+      const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
+      const isText = textExts.includes(ext) || (doc?.mime_type?.startsWith('text/') ?? false);
+
+      if (isText && doc?.file_id) {
+        try {
+          const file = await ctx.api.getFile(doc.file_id);
+          const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const content = await resp.text();
+            // Telegram Bot API file size limit is 20MB; truncate large files
+            const maxChars = 50_000;
+            const truncated = content.length > maxChars
+              ? content.slice(0, maxChars) + `\n\n[Truncated — ${content.length} chars total]`
+              : content;
+            storeNonText(ctx, `[Document: ${name}]\n\n${truncated}`);
+            logger.info({ name, chars: content.length }, 'Telegram document downloaded');
+            return;
+          }
+        } catch (err) {
+          logger.warn({ name, err }, 'Failed to download Telegram document');
+        }
+      }
+
+      // Fallback: placeholder for binary files or download failures
       storeNonText(ctx, `[Document: ${name}]`);
     });
     this.bot.on('message:sticker', (ctx) => {
