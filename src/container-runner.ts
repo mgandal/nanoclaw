@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -78,14 +79,8 @@ function buildVolumeMounts(
 
     // Shadow .env so the agent cannot read secrets from the mounted project root.
     // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
+    // Note: Apple Container only supports directory mounts, so file-level /dev/null
+    // shadowing is skipped. The entrypoint.sh truncates .env inside the container instead.
 
     // Main also gets its group folder as the working directory
     mounts.push({
@@ -237,6 +232,15 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
   } else {
     args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+  }
+
+  // Pass Letta credentials if configured (agent-runner uses these for the Letta MCP server)
+  const lettaSecrets = readEnvFile(['LETTA_BASE_URL', 'LETTA_PASSWORD']);
+  if (lettaSecrets.LETTA_BASE_URL) {
+    args.push('-e', `LETTA_BASE_URL=${lettaSecrets.LETTA_BASE_URL}`);
+  }
+  if (lettaSecrets.LETTA_PASSWORD) {
+    args.push('-e', `LETTA_PASSWORD=${lettaSecrets.LETTA_PASSWORD}`);
   }
 
   // Runtime-specific args for host gateway resolution
