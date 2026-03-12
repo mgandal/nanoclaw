@@ -289,13 +289,37 @@ export class TelegramChannel implements Channel {
 
       // For text-readable files, download and include the content
       const textExts = [
-        '.txt', '.md', '.json', '.csv', '.xml', '.yaml', '.yml',
-        '.html', '.htm', '.css', '.js', '.ts', '.py', '.sh',
-        '.log', '.ini', '.cfg', '.toml', '.env', '.sql', '.r',
-        '.tex', '.bib', '.tsv',
+        '.txt',
+        '.md',
+        '.json',
+        '.csv',
+        '.xml',
+        '.yaml',
+        '.yml',
+        '.html',
+        '.htm',
+        '.css',
+        '.js',
+        '.ts',
+        '.py',
+        '.sh',
+        '.log',
+        '.ini',
+        '.cfg',
+        '.toml',
+        '.env',
+        '.sql',
+        '.r',
+        '.tex',
+        '.bib',
+        '.tsv',
       ];
-      const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')).toLowerCase() : '';
-      const isText = textExts.includes(ext) || (doc?.mime_type?.startsWith('text/') ?? false);
+      const ext = name.includes('.')
+        ? name.slice(name.lastIndexOf('.')).toLowerCase()
+        : '';
+      const isText =
+        textExts.includes(ext) ||
+        (doc?.mime_type?.startsWith('text/') ?? false);
 
       if (isText && doc?.file_id) {
         try {
@@ -306,11 +330,16 @@ export class TelegramChannel implements Channel {
             const content = await resp.text();
             // Telegram Bot API file size limit is 20MB; truncate large files
             const maxChars = 50_000;
-            const truncated = content.length > maxChars
-              ? content.slice(0, maxChars) + `\n\n[Truncated — ${content.length} chars total]`
-              : content;
+            const truncated =
+              content.length > maxChars
+                ? content.slice(0, maxChars) +
+                  `\n\n[Truncated — ${content.length} chars total]`
+                : content;
             storeNonText(ctx, `[Document: ${name}]\n\n${truncated}`);
-            logger.info({ name, chars: content.length }, 'Telegram document downloaded');
+            logger.info(
+              { name, chars: content.length },
+              'Telegram document downloaded',
+            );
             return;
           }
         } catch (err) {
