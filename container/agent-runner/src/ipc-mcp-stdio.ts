@@ -551,6 +551,150 @@ if (isMain) {
   );
 }
 
+// --- iMessage Tools ---
+// Read/search/send iMessages via host-side SQLite + AppleScript.
+// Uses same IPC pattern: write task file, poll for result.
+
+const IMESSAGE_RESULTS_DIR = path.join(IPC_DIR, 'imessage_results');
+
+async function waitForImessageResult(requestId: string, maxWait = 30000): Promise<{ success: boolean; message: string; data?: unknown }> {
+  const resultFile = path.join(IMESSAGE_RESULTS_DIR, `${requestId}.json`);
+  const pollInterval = 500;
+  let elapsed = 0;
+  while (elapsed < maxWait) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch {
+        return { success: false, message: 'Failed to read result' };
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+  return { success: false, message: 'Request timed out' };
+}
+
+if (isMain) {
+  server.tool(
+    'imessage_search',
+    `Search iMessages by keyword, contact, or date range. Returns matching messages with sender info and timestamps.`,
+    {
+      query: z.string().optional().describe('Text to search for in message content'),
+      contact: z.string().optional().describe('Filter by contact phone number or email (partial match, e.g. "+1703" or "john@")'),
+      since_days: z.number().optional().describe('Search messages from the last N days (default: 30)'),
+      limit: z.number().optional().describe('Maximum results to return (default: 50, max: 200)'),
+    },
+    async (args) => {
+      const requestId = `imsearch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'imessage_search',
+        requestId,
+        query: args.query,
+        contact: args.contact,
+        since_days: args.since_days,
+        limit: args.limit,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForImessageResult(requestId);
+      let text = result.message;
+      if (result.data && Array.isArray(result.data)) {
+        text += '\n\n' + result.data
+          .map((m: { timestamp: string; contact: string; is_from_me: boolean; text: string }) =>
+            `[${m.timestamp}] ${m.is_from_me ? 'Me' : m.contact}: ${m.text}`)
+          .join('\n');
+      }
+      return { content: [{ type: 'text' as const, text }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'imessage_read',
+    `Read a conversation thread with a specific contact. Returns messages in chronological order.`,
+    {
+      contact: z.string().describe('Contact phone number or email (partial match)'),
+      limit: z.number().optional().describe('Maximum messages to return (default: 50, max: 200)'),
+      since_days: z.number().optional().describe('Read messages from the last N days (default: 7)'),
+    },
+    async (args) => {
+      const requestId = `imread-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'imessage_read',
+        requestId,
+        contact: args.contact,
+        limit: args.limit,
+        since_days: args.since_days,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForImessageResult(requestId);
+      let text = result.message;
+      if (result.data && typeof result.data === 'object' && 'messages' in result.data) {
+        const conv = result.data as { contact: string; messages: Array<{ timestamp: string; is_from_me: boolean; text: string }> };
+        text += `\n\nConversation with ${conv.contact}:\n` +
+          conv.messages
+            .map(m => `[${m.timestamp}] ${m.is_from_me ? 'Me' : conv.contact}: ${m.text}`)
+            .join('\n');
+      }
+      return { content: [{ type: 'text' as const, text }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'imessage_send',
+    `Send an iMessage to a contact. Requires a valid phone number or Apple ID email.`,
+    {
+      to: z.string().describe('Recipient phone number (e.g. "+17035551234") or Apple ID email'),
+      text: z.string().describe('Message text to send'),
+    },
+    async (args) => {
+      const requestId = `imsend-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'imessage_send',
+        requestId,
+        to: args.to,
+        text: args.text,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForImessageResult(requestId, 30000);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'imessage_list_contacts',
+    `List recent iMessage contacts with message counts. Useful for finding phone numbers or seeing who you've been chatting with.`,
+    {
+      since_days: z.number().optional().describe('Look back N days (default: 30)'),
+      limit: z.number().optional().describe('Maximum contacts to return (default: 30, max: 100)'),
+    },
+    async (args) => {
+      const requestId = `imcontacts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'imessage_list_contacts',
+        requestId,
+        since_days: args.since_days,
+        limit: args.limit,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForImessageResult(requestId);
+      let text = result.message;
+      if (result.data && Array.isArray(result.data)) {
+        text += '\n\n' + result.data
+          .map((c: { contact: string; message_count: number; last_message: string }) =>
+            `${c.contact}: ${c.message_count} messages (last: ${c.last_message})`)
+          .join('\n');
+      }
+      return { content: [{ type: 'text' as const, text }], isError: !result.success };
+    },
+  );
+}
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

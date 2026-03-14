@@ -470,7 +470,17 @@ export async function processTaskIpc(
 
     default: {
       let handled = false;
-      if (typeof data.type === 'string' && data.type.startsWith('x_')) {
+      if (
+        typeof data.type === 'string' &&
+        data.type.startsWith('imessage_')
+      ) {
+        handled = await handleImessageIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+        );
+      }
+      if (!handled && typeof data.type === 'string' && data.type.startsWith('x_')) {
         try {
           const modPath = [
             '..',
@@ -518,5 +528,114 @@ export async function processTaskIpc(
         logger.warn({ type: data.type }, 'Unknown IPC task type');
       }
     }
+  }
+}
+
+async function handleImessageIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+  isMain: boolean,
+): Promise<boolean> {
+  if (!isMain) {
+    logger.warn({ sourceGroup }, 'Non-main iMessage IPC attempt blocked');
+    return true; // handled (rejected)
+  }
+
+  const requestId = data.requestId as string | undefined;
+  if (!requestId) {
+    logger.warn({ data }, 'iMessage IPC missing requestId');
+    return true;
+  }
+
+  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'imessage_results');
+  fs.mkdirSync(resultsDir, { recursive: true });
+
+  const writeResult = (result: { success: boolean; message: string; data?: unknown }) => {
+    const resultFile = path.join(resultsDir, `${requestId}.json`);
+    const tmpFile = `${resultFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(result));
+    fs.renameSync(tmpFile, resultFile);
+  };
+
+  try {
+    const {
+      imessageSearch,
+      imessageRead,
+      imessageSend,
+      imessageListContacts,
+    } = await import('./imessage-host.js');
+
+    switch (data.type) {
+      case 'imessage_search': {
+        const results = imessageSearch({
+          query: data.query as string | undefined,
+          contact: data.contact as string | undefined,
+          since_days: data.since_days as number | undefined,
+          limit: data.limit as number | undefined,
+        });
+        writeResult({
+          success: true,
+          message: `Found ${results.length} messages`,
+          data: results,
+        });
+        break;
+      }
+      case 'imessage_read': {
+        const contact = data.contact as string;
+        if (!contact) {
+          writeResult({ success: false, message: 'Missing contact parameter' });
+          break;
+        }
+        const conversation = imessageRead({
+          contact,
+          limit: data.limit as number | undefined,
+          since_days: data.since_days as number | undefined,
+        });
+        writeResult({
+          success: true,
+          message: `${conversation.messages.length} messages with ${contact}`,
+          data: conversation,
+        });
+        break;
+      }
+      case 'imessage_send': {
+        const to = data.to as string;
+        const text = data.text as string;
+        if (!to || !text) {
+          writeResult({ success: false, message: 'Missing to or text parameter' });
+          break;
+        }
+        const sendResult = await imessageSend({ to, text });
+        writeResult(sendResult);
+        break;
+      }
+      case 'imessage_list_contacts': {
+        const contacts = imessageListContacts({
+          since_days: data.since_days as number | undefined,
+          limit: data.limit as number | undefined,
+        });
+        writeResult({
+          success: true,
+          message: `${contacts.length} contacts`,
+          data: contacts,
+        });
+        break;
+      }
+      default:
+        return false; // not handled
+    }
+
+    logger.info(
+      { type: data.type, requestId, sourceGroup },
+      'iMessage IPC handled',
+    );
+    return true;
+  } catch (err) {
+    logger.error({ err, type: data.type, requestId }, 'iMessage IPC error');
+    writeResult({
+      success: false,
+      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return true;
   }
 }
