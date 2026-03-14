@@ -333,6 +333,224 @@ Use available_groups.json to find the JID for a group. The folder name must be c
   },
 );
 
+// --- Browser Automation Tools ---
+// General-purpose browser control via host-side Playwright.
+// Uses same IPC pattern: write task file, poll for result.
+
+const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
+
+async function waitForBrowserResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string; data?: unknown }> {
+  const resultFile = path.join(BROWSER_RESULTS_DIR, `${requestId}.json`);
+  const pollInterval = 1000;
+  let elapsed = 0;
+  while (elapsed < maxWait) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch {
+        return { success: false, message: 'Failed to read result' };
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+  return { success: false, message: 'Request timed out' };
+}
+
+if (isMain) {
+  server.tool(
+    'browser_navigate',
+    `Navigate to a URL and return the page title and readable text content. Use this to read web pages, check websites, or start a browsing session. The browser runs on the host with a real Chrome profile, so it can access sites that require login if the user has previously authenticated.`,
+    { url: z.string().describe('The URL to navigate to') },
+    async (args) => {
+      const requestId = `nav-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'browser_navigate', requestId, url: args.url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForBrowserResult(requestId);
+      let text = result.message;
+      if (result.data && typeof result.data === 'object') {
+        const d = result.data as Record<string, unknown>;
+        text = `${result.message}\n\nTitle: ${d.title}\nURL: ${d.url}\n\n${d.text}`;
+      }
+      return { content: [{ type: 'text' as const, text }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'browser_click',
+    `Click an element on a web page by CSS selector. Optionally navigate to a URL first. Returns the page state after clicking.`,
+    {
+      selector: z.string().describe('CSS selector of the element to click (e.g., "button.submit", "#login-btn", "a[href*=next]")'),
+      url: z.string().optional().describe('URL to navigate to before clicking (omit to click on current page)'),
+    },
+    async (args) => {
+      const requestId = `click-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'browser_click', requestId, selector: args.selector, url: args.url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForBrowserResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'browser_fill',
+    `Fill form fields on a web page and optionally submit. Each field is specified by CSS selector and value. Useful for login forms, search boxes, contact forms, etc.`,
+    {
+      fields: z.array(z.object({
+        selector: z.string().describe('CSS selector of the input field'),
+        value: z.string().describe('Value to fill in'),
+      })).describe('Array of {selector, value} pairs to fill'),
+      submit_selector: z.string().optional().describe('CSS selector of the submit button to click after filling'),
+      url: z.string().optional().describe('URL to navigate to before filling'),
+    },
+    async (args) => {
+      const requestId = `fill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'browser_fill', requestId, fields: args.fields, submit_selector: args.submit_selector, url: args.url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForBrowserResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'browser_extract',
+    `Extract structured content from a web page. Can extract: text (readable content), links (all hrefs), tables (structured data), or html (raw markup). Optionally scope extraction to a CSS selector.`,
+    {
+      extract_type: z.enum(['text', 'links', 'tables', 'html']).describe('What to extract: text=readable content, links=all hrefs, tables=structured data, html=raw markup'),
+      selector: z.string().optional().describe('CSS selector to scope extraction (default: entire page)'),
+      url: z.string().optional().describe('URL to navigate to before extracting'),
+    },
+    async (args) => {
+      const requestId = `ext-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'browser_extract', requestId, extract_type: args.extract_type, selector: args.selector, url: args.url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForBrowserResult(requestId);
+      let text = result.message;
+      if (result.data && typeof result.data === 'object' && 'content' in result.data) {
+        const content = (result.data as { content: unknown }).content;
+        text += '\n\n' + (typeof content === 'string' ? content : JSON.stringify(content, null, 2));
+      }
+      return { content: [{ type: 'text' as const, text }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'browser_screenshot',
+    `Take a screenshot of a web page or specific element. Returns a base64-encoded PNG. Useful for visual verification or capturing dynamic content.`,
+    {
+      url: z.string().optional().describe('URL to navigate to before taking screenshot'),
+      selector: z.string().optional().describe('CSS selector to screenshot (default: full viewport)'),
+      full_page: z.boolean().optional().describe('Capture the full scrollable page (default: viewport only)'),
+    },
+    async (args) => {
+      const requestId = `ss-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'browser_screenshot', requestId, url: args.url, selector: args.selector, full_page: args.full_page, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForBrowserResult(requestId);
+      if (result.success && result.data && typeof result.data === 'object' && 'screenshot_base64' in result.data) {
+        return {
+          content: [
+            { type: 'text' as const, text: result.message },
+            { type: 'image' as const, data: (result.data as { screenshot_base64: string }).screenshot_base64, mimeType: 'image/png' },
+          ],
+        };
+      }
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+}
+
+// --- X (Twitter) Integration Tools ---
+// These tools communicate with the host via IPC task files.
+// The host runs browser automation scripts to interact with X.
+
+const X_RESULTS_DIR = path.join(IPC_DIR, 'x_results');
+
+async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string }> {
+  const resultFile = path.join(X_RESULTS_DIR, `${requestId}.json`);
+  const pollInterval = 1000;
+  let elapsed = 0;
+  while (elapsed < maxWait) {
+    if (fs.existsSync(resultFile)) {
+      try {
+        const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+        fs.unlinkSync(resultFile);
+        return result;
+      } catch {
+        return { success: false, message: 'Failed to read result' };
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+    elapsed += pollInterval;
+  }
+  return { success: false, message: 'Request timed out' };
+}
+
+if (isMain) {
+  server.tool(
+    'x_post',
+    'Post a tweet to X (Twitter). Main group only. Content max 280 characters.',
+    { content: z.string().max(280).describe('The tweet content to post') },
+    async (args) => {
+      const requestId = `xpost-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'x_post', requestId, content: args.content, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForXResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'x_like',
+    'Like a tweet on X (Twitter). Main group only.',
+    { tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123)') },
+    async (args) => {
+      const requestId = `xlike-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'x_like', requestId, tweetUrl: args.tweet_url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForXResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'x_reply',
+    'Reply to a tweet on X (Twitter). Main group only.',
+    {
+      tweet_url: z.string().describe('The tweet URL'),
+      content: z.string().max(280).describe('The reply content'),
+    },
+    async (args) => {
+      const requestId = `xreply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'x_reply', requestId, tweetUrl: args.tweet_url, content: args.content, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForXResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'x_retweet',
+    'Retweet a tweet on X (Twitter). Main group only.',
+    { tweet_url: z.string().describe('The tweet URL') },
+    async (args) => {
+      const requestId = `xretweet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'x_retweet', requestId, tweetUrl: args.tweet_url, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForXResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'x_quote',
+    'Quote tweet on X (Twitter) with your own comment. Main group only.',
+    {
+      tweet_url: z.string().describe('The tweet URL'),
+      comment: z.string().max(280).describe('Your comment for the quote tweet'),
+    },
+    async (args) => {
+      const requestId = `xquote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, { type: 'x_quote', requestId, tweetUrl: args.tweet_url, comment: args.comment, groupFolder, timestamp: new Date().toISOString() });
+      const result = await waitForXResult(requestId);
+      return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+}
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
