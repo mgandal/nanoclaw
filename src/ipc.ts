@@ -472,18 +472,44 @@ export async function processTaskIpc(
       let handled = false;
       if (typeof data.type === 'string' && data.type.startsWith('x_')) {
         try {
-          const modPath = ['..', '.claude', 'skills', 'x-integration', 'host.js'].join('/');
+          const modPath = [
+            '..',
+            '.claude',
+            'skills',
+            'x-integration',
+            'host.js',
+          ].join('/');
           const mod = await import(modPath);
-          handled = await mod.handleXIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
+          handled = await mod.handleXIpc(
+            data as Record<string, unknown>,
+            sourceGroup,
+            isMain,
+            DATA_DIR,
+          );
         } catch (err) {
           logger.warn({ err }, 'X integration handler not available');
         }
       }
-      if (!handled && typeof data.type === 'string' && data.type.startsWith('browser_')) {
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type.startsWith('browser_')
+      ) {
         try {
-          const modPath = ['..', '.claude', 'skills', 'browser-automation', 'host.js'].join('/');
+          const modPath = [
+            '..',
+            '.claude',
+            'skills',
+            'browser-automation',
+            'host.js',
+          ].join('/');
           const mod = await import(modPath);
-          handled = await mod.handleBrowserIpc(data as Record<string, unknown>, sourceGroup, isMain, DATA_DIR);
+          handled = await mod.handleBrowserIpc(
+            data as Record<string, unknown>,
+            sourceGroup,
+            isMain,
+            DATA_DIR,
+          );
         } catch (err) {
           logger.warn({ err }, 'Browser automation handler not available');
         }
