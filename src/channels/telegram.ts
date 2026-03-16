@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import fs from 'fs';
+import https from 'https';
 import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
@@ -226,7 +227,11 @@ export class TelegramChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    this.bot = new Bot(this.botToken);
+    this.bot = new Bot(this.botToken, {
+      client: {
+        baseFetchConfig: { agent: https.globalAgent, compress: true },
+      },
+    });
 
     // Command to get chat ID (useful for registration)
     this.bot.command('chatid', (ctx) => {
