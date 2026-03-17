@@ -343,12 +343,13 @@ async function runAgent(
   let sessionId: string | undefined = sessions[group.folder];
   if (sessionId) {
     const lastUsed = getSessionLastUsed(group.folder);
-    const age = lastUsed
-      ? Date.now() - new Date(lastUsed).getTime()
-      : Infinity; // No timestamp = treat as expired (migrated from old format)
+    const age = lastUsed ? Date.now() - new Date(lastUsed).getTime() : Infinity; // No timestamp = treat as expired (migrated from old format)
     if (age > SESSION_MAX_AGE_MS) {
       logger.info(
-        { group: group.name, ageMinutes: lastUsed ? Math.round(age / 60000) : 'unknown' },
+        {
+          group: group.name,
+          ageMinutes: lastUsed ? Math.round(age / 60000) : 'unknown',
+        },
         'Session expired, starting fresh',
       );
       delete sessions[group.folder];
@@ -412,6 +413,9 @@ async function runAgent(
     if (output.newSessionId) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
+    } else if (sessions[group.folder]) {
+      // Session resumed without new ID — still update last_used
+      touchSession(group.folder);
     }
 
     if (output.status === 'error') {

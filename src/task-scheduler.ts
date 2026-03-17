@@ -14,6 +14,7 @@ import {
   getTaskById,
   logTaskRun,
   setSession,
+  touchSession,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -206,6 +207,16 @@ async function runTask(
     );
 
     if (closeTimer) clearTimeout(closeTimer);
+
+    // Update session after task completion (group-context tasks keep session alive)
+    if (task.context_mode === 'group') {
+      if (output.newSessionId) {
+        sessions[task.group_folder] = output.newSessionId;
+        setSession(task.group_folder, output.newSessionId);
+      } else if (sessions[task.group_folder]) {
+        touchSession(task.group_folder);
+      }
+    }
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
