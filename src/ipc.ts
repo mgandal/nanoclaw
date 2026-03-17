@@ -12,8 +12,9 @@ import {
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { handlePageindexIpc } from './pageindex-ipc.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -476,7 +477,31 @@ export async function processTaskIpc(
 
     default: {
       let handled = false;
-      if (typeof data.type === 'string' && data.type.startsWith('imessage_')) {
+      if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
+        // Build mount mappings from registered group config
+        const groupEntry = Object.values(registeredGroups).find(g => g.folder === sourceGroup);
+        const mounts: Array<{ hostPath: string; containerPath: string; readonly: boolean }> = [];
+        if (groupEntry?.containerConfig?.additionalMounts) {
+          for (const m of groupEntry.containerConfig.additionalMounts) {
+            const containerPath = `/workspace/extra/${m.containerPath || path.basename(m.hostPath)}`;
+            mounts.push({ hostPath: m.hostPath, containerPath, readonly: m.readonly !== false });
+          }
+        }
+        // Add group folder mount
+        mounts.push({
+          hostPath: resolveGroupFolderPath(sourceGroup),
+          containerPath: '/workspace/group',
+          readonly: false,
+        });
+        handled = await handlePageindexIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+          DATA_DIR,
+          mounts,
+        );
+      }
+      if (!handled && typeof data.type === 'string' && data.type.startsWith('imessage_')) {
         handled = await handleImessageIpc(
           data as Record<string, unknown>,
           sourceGroup,
