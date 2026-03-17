@@ -39,6 +39,7 @@ import {
   initDatabase,
   setRegisteredGroup,
   setRouterState,
+  deleteSession,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -175,6 +176,25 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   );
 
   if (missedMessages.length === 0) return true;
+
+  // --- /new command: reset session (host-side, no agent involved) ---
+  const newCmdMsg = missedMessages.find((m) => {
+    const text = m.content.trim().replace(TRIGGER_PATTERN, '').trim();
+    return text === '/new';
+  });
+  if (newCmdMsg) {
+    const isAllowed =
+      isMainGroup || newCmdMsg.is_from_me === true;
+    if (isAllowed) {
+      delete sessions[group.folder];
+      deleteSession(group.folder);
+      lastAgentTimestamp[chatJid] = newCmdMsg.timestamp;
+      saveState();
+      await channel.sendMessage(chatJid, 'Session cleared. Starting fresh.');
+      logger.info({ group: group.name }, 'Session reset via /new');
+    }
+    return true;
+  }
 
   // --- Session command interception (before trigger check) ---
   const cmdResult = await handleSessionCommand({
