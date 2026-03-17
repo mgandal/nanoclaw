@@ -71,7 +71,8 @@ function createSchema(database: Database.Database): void {
     );
     CREATE TABLE IF NOT EXISTS sessions (
       group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      session_id TEXT NOT NULL,
+      last_used TEXT
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -89,6 +90,13 @@ function createSchema(database: Database.Database): void {
     database.exec(
       `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
     );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add last_used column to sessions if it doesn't exist
+  try {
+    database.exec(`ALTER TABLE sessions ADD COLUMN last_used TEXT`);
   } catch {
     /* column already exists */
   }
@@ -522,8 +530,15 @@ export function getSession(groupFolder: string): string | undefined {
 
 export function setSession(groupFolder: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, session_id, last_used) VALUES (?, ?, ?)',
+  ).run(groupFolder, sessionId, new Date().toISOString());
+}
+
+export function getSessionLastUsed(groupFolder: string): string | undefined {
+  const row = db
+    .prepare('SELECT last_used FROM sessions WHERE group_folder = ?')
+    .get(groupFolder) as { last_used: string | null } | undefined;
+  return row?.last_used ?? undefined;
 }
 
 export function deleteSession(groupFolder: string): void {
