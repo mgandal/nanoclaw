@@ -347,12 +347,18 @@ async function runAgent(
   let sessionId: string | undefined = sessions[group.folder];
   if (sessionId) {
     const { lastUsed, createdAt } = getSessionTimestamps(group.folder);
-    const idleAge = lastUsed ? Date.now() - new Date(lastUsed).getTime() : Infinity;
-    const totalAge = createdAt ? Date.now() - new Date(createdAt).getTime() : Infinity;
+    const idleAge = lastUsed
+      ? Date.now() - new Date(lastUsed).getTime()
+      : Infinity;
+    const totalAge = createdAt
+      ? Date.now() - new Date(createdAt).getTime()
+      : Infinity;
     const expireReason =
-      totalAge > SESSION_MAX_AGE_MS ? 'max age (4h)' :
-      idleAge > SESSION_IDLE_MS ? 'idle (2h)' :
-      null;
+      totalAge > SESSION_MAX_AGE_MS
+        ? 'max age (4h)'
+        : idleAge > SESSION_IDLE_MS
+          ? 'idle (2h)'
+          : null;
     if (expireReason) {
       logger.info(
         {
@@ -544,6 +550,26 @@ async function startMessageLoop(): Promise<void> {
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
+
+          // Before piping to an active container, check if the session
+          // has exceeded max age. If so, kill the container so the message
+          // goes through runAgent() which spawns a fresh session.
+          if (queue.isActive(chatJid) && group) {
+            const { createdAt } = getSessionTimestamps(group.folder);
+            const totalAge = createdAt
+              ? Date.now() - new Date(createdAt).getTime()
+              : Infinity;
+            if (totalAge > 4 * 60 * 60 * 1000) {
+              logger.info(
+                { group: group.name, totalMinutes: Math.round(totalAge / 60000) },
+                'Active session exceeded max age, killing container for fresh start',
+              );
+              queue.closeStdin(chatJid);
+              // Don't pipe — enqueue so processGroupMessages handles it with a fresh session
+              queue.enqueueMessageCheck(chatJid);
+              continue;
+            }
+          }
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(

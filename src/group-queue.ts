@@ -153,6 +153,12 @@ export class GroupQueue {
     }
   }
 
+  /** Check if a container is currently active for a group. */
+  isActive(groupJid: string): boolean {
+    const state = this.getGroup(groupJid);
+    return state.active && !state.isTaskContainer;
+  }
+
   /**
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
