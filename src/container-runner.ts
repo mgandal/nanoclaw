@@ -26,6 +26,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -237,8 +238,9 @@ function buildContainerArgs(
   const qmdUrl = `http://${CONTAINER_HOST_GATEWAY}:8181/mcp`;
   args.push('-e', `QMD_URL=${qmdUrl}`);
 
-  // Pass SimpleMem memory URL if configured
-  const simpleMemUrl = process.env.SIMPLEMEM_URL;
+  // Pass SimpleMem memory URL if configured (read from .env since launchd doesn't set it)
+  const simpleMemEnv = readEnvFile(['SIMPLEMEM_URL']);
+  const simpleMemUrl = process.env.SIMPLEMEM_URL || simpleMemEnv.SIMPLEMEM_URL;
   if (simpleMemUrl) {
     args.push(
       '-e',
