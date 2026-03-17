@@ -40,6 +40,7 @@ import {
   setRegisteredGroup,
   setRouterState,
   deleteSession,
+  getSessionLastUsed,
   setSession,
   storeChatMetadata,
   storeMessage,
@@ -183,8 +184,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return text === '/new';
   });
   if (newCmdMsg) {
-    const isAllowed =
-      isMainGroup || newCmdMsg.is_from_me === true;
+    const isAllowed = isMainGroup || newCmdMsg.is_from_me === true;
     if (isAllowed) {
       delete sessions[group.folder];
       deleteSession(group.folder);
@@ -336,7 +336,25 @@ async function runAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
+
+  // Expire sessions older than 2 hours to prevent unbounded context growth
+  const SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+  let sessionId: string | undefined = sessions[group.folder];
+  if (sessionId) {
+    const lastUsed = getSessionLastUsed(group.folder);
+    if (lastUsed) {
+      const age = Date.now() - new Date(lastUsed).getTime();
+      if (age > SESSION_MAX_AGE_MS) {
+        logger.info(
+          { group: group.name, ageMinutes: Math.round(age / 60000) },
+          'Session expired, starting fresh',
+        );
+        delete sessions[group.folder];
+        deleteSession(group.folder);
+        sessionId = undefined;
+      }
+    }
+  }
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
