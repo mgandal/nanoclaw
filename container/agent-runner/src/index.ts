@@ -409,7 +409,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__qmd__*',
-        'mcp__simplemem__*'
+        'mcp__simplemem__*',
+        'mcp__apple_notes__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -429,12 +430,26 @@ async function runQuery(
           qmd: {
             type: 'http' as const,
             url: process.env.QMD_URL,
+            headers: { Accept: 'application/json, text/event-stream' },
           },
         } : {}),
         ...(process.env.SIMPLEMEM_URL ? {
           simplemem: {
             type: 'http' as const,
             url: process.env.SIMPLEMEM_URL,
+            headers: {
+              Accept: 'application/json, text/event-stream',
+              ...(process.env.SIMPLEMEM_TOKEN ? {
+                Authorization: `Bearer ${process.env.SIMPLEMEM_TOKEN}`,
+              } : {}),
+            },
+          },
+        } : {}),
+        ...(process.env.APPLE_NOTES_URL ? {
+          apple_notes: {
+            type: 'http' as const,
+            url: process.env.APPLE_NOTES_URL,
+            headers: { Accept: 'application/json, text/event-stream' },
           },
         } : {}),
       },

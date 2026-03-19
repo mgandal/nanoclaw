@@ -239,14 +239,28 @@ function buildContainerArgs(
   args.push('-e', `QMD_URL=${qmdUrl}`);
 
   // Pass SimpleMem memory URL if configured (read from .env since launchd doesn't set it)
+  // Parse the URL to extract token and rewrite to Streamable HTTP endpoint (/mcp)
   const simpleMemEnv = readEnvFile(['SIMPLEMEM_URL']);
   const simpleMemUrl = process.env.SIMPLEMEM_URL || simpleMemEnv.SIMPLEMEM_URL;
   if (simpleMemUrl) {
-    args.push(
-      '-e',
-      `SIMPLEMEM_URL=${simpleMemUrl.replaceAll('localhost', CONTAINER_HOST_GATEWAY)}`,
-    );
+    try {
+      const parsed = new URL(simpleMemUrl);
+      const token = parsed.searchParams.get('token') || '';
+      // Rewrite to Streamable HTTP endpoint: http://host:port/mcp
+      const hostname = parsed.hostname === 'localhost' ? CONTAINER_HOST_GATEWAY : parsed.hostname;
+      const baseUrl = `${parsed.protocol}//${hostname}:${parsed.port}/mcp`;
+      args.push('-e', `SIMPLEMEM_URL=${baseUrl}`);
+      if (token) {
+        args.push('-e', `SIMPLEMEM_TOKEN=${token}`);
+      }
+    } catch {
+      logger.warn({ simpleMemUrl }, 'Invalid SIMPLEMEM_URL, skipping SimpleMem');
+    }
   }
+
+  // Pass Apple Notes MCP endpoint URL
+  const appleNotesUrl = `http://${CONTAINER_HOST_GATEWAY}:8184/mcp`;
+  args.push('-e', `APPLE_NOTES_URL=${appleNotesUrl}`);
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
