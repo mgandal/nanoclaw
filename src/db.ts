@@ -553,10 +553,17 @@ export function touchSession(groupFolder: string): void {
   );
 }
 
-export function getSessionTimestamps(groupFolder: string): { lastUsed?: string; createdAt?: string } {
+export function getSessionTimestamps(groupFolder: string): {
+  lastUsed?: string;
+  createdAt?: string;
+} {
   const row = db
-    .prepare('SELECT last_used, created_at FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { last_used: string | null; created_at: string | null } | undefined;
+    .prepare(
+      'SELECT last_used, created_at FROM sessions WHERE group_folder = ?',
+    )
+    .get(groupFolder) as
+    | { last_used: string | null; created_at: string | null }
+    | undefined;
   return {
     lastUsed: row?.last_used ?? undefined,
     createdAt: row?.created_at ?? undefined,

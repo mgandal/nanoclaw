@@ -561,7 +561,10 @@ async function startMessageLoop(): Promise<void> {
               : Infinity;
             if (totalAge > 4 * 60 * 60 * 1000) {
               logger.info(
-                { group: group.name, totalMinutes: Math.round(totalAge / 60000) },
+                {
+                  group: group.name,
+                  totalMinutes: Math.round(totalAge / 60000),
+                },
                 'Active session exceeded max age, killing container for fresh start',
               );
               queue.closeStdin(chatJid);
