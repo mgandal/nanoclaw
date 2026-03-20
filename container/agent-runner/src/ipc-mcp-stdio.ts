@@ -82,35 +82,67 @@ MESSAGING BEHAVIOR - The task agent's output is sent to the user or group. It ca
 \u2022 Never send a message (background maintenance tasks)
 
 SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
-\u2022 cron: Standard cron expression (e.g., "*/5 * * * *" for every 5 minutes, "0 9 * * *" for daily at 9am LOCAL time)
-\u2022 interval: Milliseconds between runs (e.g., "300000" for 5 minutes, "3600000" for 1 hour)
-\u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.`,
+\u2022 cron: MUST use 5-field format (min hour dom mon dow). Examples: "0 9 * * *" (daily 9am), "0 */3 * * *" (every 3 hours), "0 9 * * 1" (Mondays 9am). Do NOT use 6-field format. Minimum interval: 30 minutes.
+\u2022 interval: Milliseconds between runs (e.g., "3600000" for 1 hour). Minimum: 1800000 (30 min).
+\u2022 once: Local time WITHOUT "Z" suffix (e.g., "2026-02-01T15:30:00"). Do NOT use UTC/Z suffix.
+WARNING: Each task run spawns a full agent container and costs tokens. Always verify the schedule preview in the response.`,
   {
     prompt: z.string().describe('What the agent should do when the task runs. For isolated mode, include all necessary context here.'),
     schedule_type: z.enum(['cron', 'interval', 'once']).describe('cron=recurring at specific times, interval=recurring every N ms, once=run once at specific time'),
-    schedule_value: z.string().describe('cron: "*/5 * * * *" | interval: milliseconds like "300000" | once: local timestamp like "2026-02-01T15:30:00" (no Z suffix!)'),
+    schedule_value: z.string().describe('cron: 5-field "min hour dom mon dow" like "0 9 * * *" (daily 9am) or "0 */3 * * *" (every 3h). interval: ms like "3600000" (1h). once: local time "2026-02-01T15:30:00" (no Z). Min interval: 30min.'),
     context_mode: z.enum(['group', 'isolated']).default('group').describe('group=runs with chat history and memory, isolated=fresh session (include context in prompt)'),
     target_group_jid: z.string().optional().describe('(Main group only) JID of the group to schedule the task for. Defaults to the current group.'),
   },
   async (args) => {
     // Validate schedule_value before writing IPC
+    const MIN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes minimum
+    let schedulePreview = '';
+
     if (args.schedule_type === 'cron') {
+      let interval;
       try {
-        CronExpressionParser.parse(args.schedule_value);
+        interval = CronExpressionParser.parse(args.schedule_value);
       } catch {
         return {
-          content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}". Use format like "0 9 * * *" (daily 9am) or "*/5 * * * *" (every 5 min).` }],
+          content: [{ type: 'text' as const, text: `Invalid cron: "${args.schedule_value}". Use 5-field format: "min hour dom mon dow" (e.g., "0 9 * * *" for daily 9am, "0 */3 * * *" for every 3 hours). Do NOT use 6-field format with seconds.` }],
           isError: true,
         };
       }
+
+      // Compute next 3 fire times and check minimum interval
+      const fireTimes: Date[] = [];
+      for (let i = 0; i < 3; i++) {
+        fireTimes.push(interval.next().toDate());
+      }
+      const gapMs = fireTimes[1].getTime() - fireTimes[0].getTime();
+      const gapMinutes = Math.round(gapMs / 60000);
+
+      if (gapMs < MIN_INTERVAL_MS) {
+        return {
+          content: [{ type: 'text' as const, text: `REJECTED: Cron "${args.schedule_value}" fires every ${gapMinutes} minute(s). Minimum allowed interval is 30 minutes. Each run costs tokens (spawns a full agent container). If you meant every ${gapMinutes} hours, use 5-field cron: "0 */${gapMinutes} * * *". Next 3 would-be fire times: ${fireTimes.map(d => d.toLocaleString()).join(', ')}` }],
+          isError: true,
+        };
+      }
+
+      schedulePreview = `\n\nSchedule preview (next 3 runs):\n${fireTimes.map((d, i) => `  ${i + 1}. ${d.toLocaleString()}`).join('\n')}\nInterval between runs: ~${gapMinutes} minutes (${(gapMinutes / 60).toFixed(1)} hours)`;
+
     } else if (args.schedule_type === 'interval') {
       const ms = parseInt(args.schedule_value, 10);
       if (isNaN(ms) || ms <= 0) {
         return {
-          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}". Must be positive milliseconds (e.g., "300000" for 5 min).` }],
+          content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}". Must be positive milliseconds (e.g., "3600000" for 1 hour).` }],
           isError: true,
         };
       }
+      if (ms < MIN_INTERVAL_MS) {
+        return {
+          content: [{ type: 'text' as const, text: `REJECTED: Interval ${ms}ms (${Math.round(ms / 60000)} minutes) is too frequent. Minimum allowed is 30 minutes (1800000ms). Each run costs tokens.` }],
+          isError: true,
+        };
+      }
+      const hours = (ms / 3600000).toFixed(1);
+      schedulePreview = `\n\nInterval: every ${hours} hours (${ms}ms)`;
+
     } else if (args.schedule_type === 'once') {
       if (/[Zz]$/.test(args.schedule_value) || /[+-]\d{2}:\d{2}$/.test(args.schedule_value)) {
         return {
@@ -125,6 +157,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
           isError: true,
         };
       }
+      schedulePreview = `\n\nWill run once at: ${date.toLocaleString()}`;
     }
 
     // Non-main groups can only schedule for themselves
@@ -147,7 +180,7 @@ SCHEDULE VALUE FORMAT (all times are LOCAL timezone):
     writeIpcFile(TASKS_DIR, data);
 
     return {
-      content: [{ type: 'text' as const, text: `Task ${taskId} scheduled: ${args.schedule_type} - ${args.schedule_value}` }],
+      content: [{ type: 'text' as const, text: `Task ${taskId} scheduled (${args.schedule_type}: ${args.schedule_value}).${schedulePreview}\n\nIMPORTANT: Verify the schedule preview above looks correct. Each run spawns a full agent container and costs tokens.` }],
     };
   },
 );
