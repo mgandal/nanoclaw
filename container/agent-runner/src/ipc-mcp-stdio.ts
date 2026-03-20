@@ -728,6 +728,64 @@ if (isMain) {
   );
 }
 
+// bus_publish — post a finding to the inter-agent message bus
+server.tool(
+  'bus_publish',
+  'Publish a finding or status update to the inter-agent message bus. Other agents subscribed to the topic will see it on their next invocation.',
+  {
+    topic: z.string().describe('Topic: research, scheduling, lab-ops, personal, or custom'),
+    finding: z.string().describe('What you found or want to communicate'),
+    action_needed: z.string().optional().describe('Group folder that should act on this (e.g., "telegram_science-claw")'),
+    priority: z.enum(['low', 'medium', 'high']).default('medium'),
+  },
+  async (args) => {
+    const data = {
+      type: 'bus_publish',
+      from: groupFolder,
+      topic: args.topic,
+      finding: args.finding,
+      action_needed: args.action_needed,
+      priority: args.priority,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{ type: 'text' as const, text: `Published to bus: [${args.topic}] ${args.finding.slice(0, 80)}...` }],
+    };
+  },
+);
+
+// bus_read — read pending items from the message bus
+server.tool(
+  'bus_read',
+  'Read pending messages from other agents. Items are loaded at container start from the bus queue.',
+  {
+    topic: z.string().optional().describe('Filter by topic (optional)'),
+  },
+  async (args) => {
+    const queuePath = '/workspace/ipc/bus-queue.json';
+    if (!fs.existsSync(queuePath)) {
+      return { content: [{ type: 'text' as const, text: 'No pending bus messages.' }] };
+    }
+    try {
+      const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+      const filtered = args.topic
+        ? queue.filter((m: { topic: string }) => m.topic === args.topic)
+        : queue;
+      if (filtered.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No pending bus messages.' }] };
+      }
+      const formatted = filtered
+        .map((m: { from: string; topic: string; finding: string; priority: string }) =>
+          `[${m.priority || 'medium'}] From ${m.from} (${m.topic}): ${m.finding}`)
+        .join('\n');
+      return { content: [{ type: 'text' as const, text: `Pending bus messages:\n${formatted}` }] };
+    } catch {
+      return { content: [{ type: 'text' as const, text: 'Error reading bus queue.' }] };
+    }
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
