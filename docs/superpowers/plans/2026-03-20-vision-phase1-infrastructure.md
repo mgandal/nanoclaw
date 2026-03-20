@@ -6,7 +6,7 @@
 
 **Architecture:** Extend NanoClaw's existing Node.js orchestrator, IPC filesystem, and container runner. No new services — just new modules within the existing process. The message bus uses the existing `data/ipc/` filesystem pattern. The context assembler is a host-side script that runs before each container spawn. The health monitor is a lightweight loop within the main process.
 
-**Tech Stack:** TypeScript (Node.js), SQLite (better-sqlite3), filesystem IPC (JSON), existing container-runner.ts, existing config.ts.
+**Tech Stack:** TypeScript (Node.js), SQLite (better-sqlite3), filesystem IPC (JSON), vitest for tests (ESM-compatible mocking via `vi.mock` + `vi.mocked`).
 
 **Spec:** `docs/VISION3.md` — sections "Token Conservation", "System Self-Awareness", and "How They Coordinate"
 
@@ -15,6 +15,15 @@
 - **Phase 2:** Ollama classification tier, event-driven email/calendar perception
 - **Phase 3:** Trust/autonomy framework, knowledge graph (Layer 5)
 - **Phase 4:** Coherent temporal identity, advanced judgment under ambiguity
+
+**Key codebase facts (verified against actual files):**
+- `src/container-runner.ts`: `runContainerAgent` at line 345, `spawn` at line 388
+- `src/index.ts`: `main()` at line 701, `startIpcWatcher` called at line 851, `channels` at line 85, `findChannel` imported from `router.js` at line 55
+- `container/agent-runner/src/index.ts`: `runQuery` at line 332, `systemPrompt` at line 399-400, `globalClaudeMd` at line 370-373
+- `src/ipc.ts`: `IpcDeps` interface at line 20-33, `startIpcWatcher` at line 37, task switch default at line 484
+- `src/db.ts`: `getAllTasks` at line 434, `createTask` at line 386. **No `getRecentMessages` function exists — must be created.**
+- ESM project: all imports use `import`, no `require()`. Tests use vitest with `vi.mock()` and `vi.mocked()`.
+- Messages are sent via `deps.sendMessage(jid, text)` in IPC, or `findChannel(channels, jid)?.sendMessage(jid, text)` in index.ts.
 
 ---
 
@@ -33,288 +42,29 @@
 
 ### Modified Files
 
-| File | Changes |
-|------|---------|
-| `src/container-runner.ts` | Call context assembler before container spawn, inject context packet as env var or file |
-| `src/index.ts` | Start health monitor loop, initialize message bus |
-| `src/config.ts` | Add health monitor thresholds and bus configuration |
-| `src/ipc.ts` | Wire message bus events into IPC handler |
-| `container/agent-runner/src/ipc-mcp-stdio.ts` | Add `bus_publish` and `bus_read` MCP tools for agents |
+| File | Line Range | Changes |
+|------|-----------|---------|
+| `src/db.ts` | after line 434 | Add `getRecentMessages()` function |
+| `src/config.ts` | end of file | Add context, health, and bus configuration constants |
+| `src/container-runner.ts` | ~line 370 (before spawn) | Call `writeContextPacket` before container spawn |
+| `src/index.ts` | line 701+ (`main()`) | Initialize health monitor and message bus, pass to deps |
+| `src/ipc.ts` | line 20-33 (`IpcDeps`), before line 484 (`default`) | Extend IpcDeps with `messageBus`, add `bus_publish` case |
+| `container/agent-runner/src/index.ts` | line 370-401 | Read context packet, prepend to system prompt append |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | after existing tools | Add `bus_publish` and `bus_read` MCP tools |
 
 ---
 
-## Task 1: Precomputed Context Assembler
+## Task 1: Database and Config Prerequisites
 
-The single highest-impact change. Instead of agents spending 10-30 seconds querying SimpleMem, QMD, and state files at session start, the host pre-assembles a context packet and injects it into the container.
+Create the `getRecentMessages` function and config constants that other tasks depend on. **This must be done first** because the context assembler imports from db.ts.
 
 **Files:**
-- Create: `src/context-assembler.ts`
-- Create: `src/context-assembler.test.ts`
-- Modify: `src/container-runner.ts:294-310` (inject context before spawn)
-- Modify: `src/config.ts` (add context config)
-- Modify: `container/agent-runner/src/index.ts:370-400` (read injected context into system prompt)
+- Modify: `src/db.ts` (add `getRecentMessages` after line 434)
+- Modify: `src/config.ts` (add constants at end of file)
 
-### Step 1.1: Define context packet schema and config
+### Step 1.1: Add `getRecentMessages` to db.ts
 
-- [ ] **Add context config to `src/config.ts`**
-
-```typescript
-// Context assembler configuration
-export const CONTEXT_PACKET_MAX_SIZE = parseInt(
-  process.env.CONTEXT_PACKET_MAX_SIZE || '8000',
-  10,
-); // max chars for context packet
-```
-
-- [ ] **Commit:** `feat: add context assembler config`
-
-### Step 1.2: Write failing tests for context assembler
-
-- [ ] **Create `src/context-assembler.test.ts`**
-
-```typescript
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assembleContextPacket } from './context-assembler.js';
-
-// Mock filesystem
-vi.mock('fs', () => ({
-  default: {
-    existsSync: vi.fn(),
-    readFileSync: vi.fn(),
-    mkdirSync: vi.fn(),
-    writeFileSync: vi.fn(),
-  },
-}));
-
-// Mock db
-vi.mock('./db.js', () => ({
-  getRecentMessages: vi.fn(() => []),
-  getAllTasks: vi.fn(() => []),
-}));
-
-describe('assembleContextPacket', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('includes current date and timezone', () => {
-    const packet = assembleContextPacket('main', true);
-    expect(packet).toContain('Current date:');
-    expect(packet).toContain('Timezone:');
-  });
-
-  it('includes recent messages when available', () => {
-    const { getRecentMessages } = require('./db.js');
-    getRecentMessages.mockReturnValue([
-      { sender: 'user1', content: 'hello', timestamp: '2026-03-20T10:00:00Z' },
-    ]);
-    const packet = assembleContextPacket('main', true);
-    expect(packet).toContain('Recent messages');
-    expect(packet).toContain('hello');
-  });
-
-  it('includes active scheduled tasks', () => {
-    const { getAllTasks } = require('./db.js');
-    getAllTasks.mockReturnValue([
-      { id: 'task-1', prompt: 'Morning briefing', schedule_value: '0 7 * * 1-5', status: 'active', group_folder: 'main' },
-    ]);
-    const packet = assembleContextPacket('main', true);
-    expect(packet).toContain('Scheduled tasks');
-    expect(packet).toContain('Morning briefing');
-  });
-
-  it('reads group memory.md if it exists', () => {
-    const fs = require('fs').default;
-    fs.existsSync.mockReturnValue(true);
-    fs.readFileSync.mockReturnValue('# Team Memory\n- Einstein: researcher');
-    const packet = assembleContextPacket('telegram_science-claw', false);
-    expect(packet).toContain('Einstein');
-  });
-
-  it('reads current.md for priorities', () => {
-    const fs = require('fs').default;
-    fs.existsSync.mockImplementation((p: string) => p.includes('current.md'));
-    fs.readFileSync.mockReturnValue('## Top 3\n1) Grant deadline Friday');
-    const packet = assembleContextPacket('main', true);
-    expect(packet).toContain('Grant deadline');
-  });
-
-  it('truncates to max size', () => {
-    const { getRecentMessages } = require('./db.js');
-    getRecentMessages.mockReturnValue(
-      Array.from({ length: 200 }, (_, i) => ({
-        sender: 'user', content: 'x'.repeat(100), timestamp: '2026-03-20T10:00:00Z',
-      })),
-    );
-    const packet = assembleContextPacket('main', true);
-    expect(packet.length).toBeLessThanOrEqual(8200); // some overhead allowed
-  });
-});
-```
-
-- [ ] **Run tests to verify they fail:**
-  Run: `npx vitest run src/context-assembler.test.ts`
-  Expected: FAIL — module not found
-
-- [ ] **Commit:** `test: add context assembler tests`
-
-### Step 1.3: Implement context assembler
-
-- [ ] **Create `src/context-assembler.ts`**
-
-```typescript
-/**
- * Context Assembler for NanoClaw
- *
- * Pre-assembles a context packet for each agent container, including:
- * - Current date/time/timezone
- * - Recent messages in the group
- * - Active scheduled tasks
- * - Group memory.md content
- * - current.md priorities
- * - Pending message bus items for this group
- *
- * This eliminates the 10-30 second cold start where agents query
- * SimpleMem, QMD, and state files before responding.
- */
-import fs from 'fs';
-import path from 'path';
-
-import {
-  CONTEXT_PACKET_MAX_SIZE,
-  GROUPS_DIR,
-  TIMEZONE,
-} from './config.js';
-import { getRecentMessages, getAllTasks } from './db.js';
-
-export function assembleContextPacket(
-  groupFolder: string,
-  isMain: boolean,
-): string {
-  const sections: string[] = [];
-
-  // 1. Date and timezone
-  const now = new Date();
-  sections.push(
-    `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
-  );
-  sections.push(`Current time: ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`);
-  sections.push(`Timezone: ${TIMEZONE}`);
-
-  // 2. Group memory.md
-  const memoryPath = path.join(GROUPS_DIR, groupFolder, 'memory.md');
-  if (fs.existsSync(memoryPath)) {
-    const memory = fs.readFileSync(memoryPath, 'utf-8');
-    if (memory.trim()) {
-      sections.push(`\n--- Group Memory ---\n${memory.slice(0, 2000)}`);
-    }
-  }
-
-  // 3. current.md priorities
-  const currentPath = path.join(GROUPS_DIR, 'global', 'state', 'current.md');
-  if (fs.existsSync(currentPath)) {
-    const current = fs.readFileSync(currentPath, 'utf-8');
-    if (current.trim()) {
-      sections.push(`\n--- Current Priorities ---\n${current.slice(0, 1500)}`);
-    }
-  }
-
-  // 4. Recent messages (last 10 in this group's chat)
-  try {
-    // Find the chat JID for this group
-    const messages = getRecentMessages(groupFolder);
-    if (messages.length > 0) {
-      const formatted = messages
-        .slice(-10)
-        .map(
-          (m) =>
-            `[${new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}] ${m.sender}: ${m.content.slice(0, 200)}`,
-        )
-        .join('\n');
-      sections.push(`\n--- Recent messages ---\n${formatted}`);
-    }
-  } catch {
-    // DB query failed, skip
-  }
-
-  // 5. Active scheduled tasks for this group
-  try {
-    const tasks = getAllTasks();
-    const groupTasks = tasks
-      .filter((t) => t.status === 'active')
-      .filter((t) => isMain || t.group_folder === groupFolder);
-    if (groupTasks.length > 0) {
-      const formatted = groupTasks
-        .map(
-          (t) =>
-            `- ${t.prompt.slice(0, 80)}... (${t.schedule_type}: ${t.schedule_value})`,
-        )
-        .join('\n');
-      sections.push(`\n--- Scheduled tasks ---\n${formatted}`);
-    }
-  } catch {
-    // DB query failed, skip
-  }
-
-  // 6. Message bus items pending for this group (if bus exists)
-  const busQueuePath = path.join(
-    process.cwd(),
-    'data',
-    'bus',
-    'agents',
-    groupFolder,
-    'queue.json',
-  );
-  if (fs.existsSync(busQueuePath)) {
-    try {
-      const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
-      if (Array.isArray(queue) && queue.length > 0) {
-        const formatted = queue
-          .slice(0, 5)
-          .map(
-            (item: { from: string; finding: string }) =>
-              `- From ${item.from}: ${(item.finding || '').slice(0, 150)}`,
-          )
-          .join('\n');
-        sections.push(`\n--- Pending items from other agents ---\n${formatted}`);
-      }
-    } catch {
-      // Malformed queue, skip
-    }
-  }
-
-  // Assemble and truncate
-  let packet = sections.join('\n');
-  if (packet.length > CONTEXT_PACKET_MAX_SIZE) {
-    packet = packet.slice(0, CONTEXT_PACKET_MAX_SIZE) + '\n[...truncated]';
-  }
-
-  return packet;
-}
-
-/**
- * Write the context packet to a file in the group's IPC directory
- * so the container can read it at startup.
- */
-export function writeContextPacket(
-  groupFolder: string,
-  isMain: boolean,
-  ipcDir: string,
-): string {
-  const packet = assembleContextPacket(groupFolder, isMain);
-  const packetPath = path.join(ipcDir, 'context-packet.txt');
-  fs.writeFileSync(packetPath, packet);
-  return packetPath;
-}
-```
-
-- [ ] **Run tests:**
-  Run: `npx vitest run src/context-assembler.test.ts`
-  Expected: Tests should pass (may need mock adjustments)
-
-- [ ] **Commit:** `feat: implement context assembler`
-
-### Step 1.4: Add `getRecentMessages` to db.ts if missing
-
-- [ ] **Check if `getRecentMessages` exists with the right signature. If not, add it to `src/db.ts`:**
+- [ ] **Add the function after `getAllTasks()` (line ~440) in `src/db.ts`:**
 
 ```typescript
 export function getRecentMessages(
@@ -338,76 +88,376 @@ export function getRecentMessages(
 }
 ```
 
+- [ ] **Verify it compiles:** `npm run build`
 - [ ] **Commit:** `feat: add getRecentMessages to db`
 
-### Step 1.5: Wire context assembler into container-runner.ts
+### Step 1.2: Add config constants
 
-- [ ] **Modify `src/container-runner.ts` — in `buildVolumeMounts` or `runContainerAgent`, call `writeContextPacket` before spawning the container:**
-
-In `runContainerAgent`, before the `spawn` call, add:
+- [ ] **Add to end of `src/config.ts`:**
 
 ```typescript
-import { writeContextPacket } from './context-assembler.js';
+// Context assembler configuration
+export const CONTEXT_PACKET_MAX_SIZE = parseInt(
+  process.env.CONTEXT_PACKET_MAX_SIZE || '8000',
+  10,
+);
 
-// In runContainerAgent, before spawn:
-const groupIpcDir = resolveGroupIpcPath(group.folder);
-writeContextPacket(group.folder, input.isMain, groupIpcDir);
+// Health monitor thresholds
+export const HEALTH_MONITOR_INTERVAL = 60_000;
+export const MAX_CONTAINER_SPAWNS_PER_HOUR = 30;
+export const MAX_ERRORS_PER_HOUR = 20;
 ```
 
-- [ ] **Modify `container/agent-runner/src/index.ts` — in `runQuery`, read the context packet and prepend to the system prompt:**
-
-In the `runQuery` function, after loading `globalClaudeMd`, add:
-
-```typescript
-// Load precomputed context packet (assembled by host before container start)
-const contextPacketPath = '/workspace/ipc/context-packet.txt';
-let contextPacket = '';
-if (fs.existsSync(contextPacketPath)) {
-  contextPacket = fs.readFileSync(contextPacketPath, 'utf-8');
-  log(`Loaded context packet (${contextPacket.length} chars)`);
-}
-
-// Combine into system prompt
-const systemPromptAppend = [globalClaudeMd, contextPacket]
-  .filter(Boolean)
-  .join('\n\n---\n\n');
-```
-
-Then use `systemPromptAppend` instead of just `globalClaudeMd` in the systemPrompt option.
-
-- [ ] **Build and test:**
-  Run: `npm run build && npm test`
-  Expected: All 333+ tests pass
-
-- [ ] **Commit:** `feat: inject precomputed context into agent containers`
+- [ ] **Commit:** `feat: add context and health monitor config`
 
 ---
 
-## Task 2: System Health Monitor
+## Task 2: Context Assembler
 
-A lightweight deterministic loop (not an LLM) that monitors system health and pauses offending components before they burn tokens.
+Pre-builds a context packet for each agent container so agents never start cold.
+
+**Files:**
+- Create: `src/context-assembler.ts`
+- Create: `src/context-assembler.test.ts`
+- Modify: `src/container-runner.ts` (line ~370, before spawn at line 388)
+- Modify: `container/agent-runner/src/index.ts` (line 370-401, systemPrompt)
+
+### Step 2.1: Write failing tests
+
+- [ ] **Create `src/context-assembler.test.ts`:**
+
+```typescript
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
+import { assembleContextPacket } from './context-assembler.js';
+import { getRecentMessages, getAllTasks } from './db.js';
+
+vi.mock('fs', () => ({
+  default: {
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => ''),
+    mkdirSync: vi.fn(),
+    writeFileSync: vi.fn(),
+  },
+}));
+
+vi.mock('./db.js', () => ({
+  getRecentMessages: vi.fn(() => []),
+  getAllTasks: vi.fn(() => []),
+}));
+
+describe('assembleContextPacket', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('includes current date and timezone', () => {
+    const packet = assembleContextPacket('main', true);
+    expect(packet).toContain('Current date:');
+    expect(packet).toContain('Timezone:');
+  });
+
+  it('includes recent messages when available', () => {
+    vi.mocked(getRecentMessages).mockReturnValue([
+      { sender: 'user1', content: 'hello world', timestamp: '2026-03-20T10:00:00Z' },
+    ]);
+    const packet = assembleContextPacket('main', true);
+    expect(packet).toContain('Recent messages');
+    expect(packet).toContain('hello world');
+  });
+
+  it('includes active scheduled tasks', () => {
+    vi.mocked(getAllTasks).mockReturnValue([
+      {
+        id: 'task-1', prompt: 'Morning briefing', schedule_type: 'cron',
+        schedule_value: '0 7 * * 1-5', status: 'active', group_folder: 'main',
+        chat_jid: 'tg:123', context_mode: 'group', next_run: null,
+        last_run: null, last_result: null, created_at: '2026-03-20',
+      },
+    ]);
+    const packet = assembleContextPacket('main', true);
+    expect(packet).toContain('Scheduled tasks');
+    expect(packet).toContain('Morning briefing');
+  });
+
+  it('reads group memory.md if it exists', () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('memory.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue('# Team Memory\n- Einstein: researcher');
+    const packet = assembleContextPacket('telegram_science-claw', false);
+    expect(packet).toContain('Einstein');
+  });
+
+  it('reads current.md for priorities', () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('current.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue('## Top 3\n1) Grant deadline Friday');
+    const packet = assembleContextPacket('main', true);
+    expect(packet).toContain('Grant deadline');
+  });
+
+  it('truncates to max size', () => {
+    vi.mocked(getRecentMessages).mockReturnValue(
+      Array.from({ length: 200 }, (_, i) => ({
+        sender: 'user', content: 'x'.repeat(100), timestamp: '2026-03-20T10:00:00Z',
+      })),
+    );
+    const packet = assembleContextPacket('main', true);
+    expect(packet.length).toBeLessThanOrEqual(8200);
+  });
+});
+```
+
+- [ ] **Run to verify failure:** `npx vitest run src/context-assembler.test.ts`
+  Expected: FAIL — module `./context-assembler.js` not found
+
+- [ ] **Commit:** `test: add context assembler tests`
+
+### Step 2.2: Implement context assembler
+
+- [ ] **Create `src/context-assembler.ts`:**
+
+```typescript
+/**
+ * Context Assembler for NanoClaw
+ *
+ * Pre-assembles a context packet for each agent container, including:
+ * - Current date/time/timezone
+ * - Group memory.md content
+ * - current.md priorities
+ * - Recent messages in the group
+ * - Active scheduled tasks
+ * - Pending message bus items
+ *
+ * Eliminates the 10-30s cold start where agents query
+ * SimpleMem, QMD, and state files before responding.
+ */
+import fs from 'fs';
+import path from 'path';
+
+import {
+  CONTEXT_PACKET_MAX_SIZE,
+  GROUPS_DIR,
+  TIMEZONE,
+} from './config.js';
+import { getRecentMessages, getAllTasks } from './db.js';
+
+export function assembleContextPacket(
+  groupFolder: string,
+  isMain: boolean,
+): string {
+  const sections: string[] = [];
+
+  // 1. Date and timezone
+  const now = new Date();
+  sections.push(
+    `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
+  );
+  sections.push(
+    `Current time: ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`,
+  );
+  sections.push(`Timezone: ${TIMEZONE}`);
+
+  // 2. Group memory.md
+  const memoryPath = path.join(GROUPS_DIR, groupFolder, 'memory.md');
+  if (fs.existsSync(memoryPath)) {
+    const memory = fs.readFileSync(memoryPath, 'utf-8');
+    if (memory.trim()) {
+      sections.push(`\n--- Group Memory ---\n${memory.slice(0, 2000)}`);
+    }
+  }
+
+  // 3. current.md priorities
+  const currentPath = path.join(GROUPS_DIR, 'global', 'state', 'current.md');
+  if (fs.existsSync(currentPath)) {
+    const current = fs.readFileSync(currentPath, 'utf-8');
+    if (current.trim()) {
+      sections.push(`\n--- Current Priorities ---\n${current.slice(0, 1500)}`);
+    }
+  }
+
+  // 4. Recent messages (last 10)
+  try {
+    const messages = getRecentMessages(groupFolder);
+    if (messages.length > 0) {
+      const formatted = messages
+        .slice(-10)
+        .map(
+          (m) =>
+            `[${new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}] ${m.sender}: ${m.content.slice(0, 200)}`,
+        )
+        .join('\n');
+      sections.push(`\n--- Recent messages ---\n${formatted}`);
+    }
+  } catch {
+    // DB not initialized yet or query failed, skip
+  }
+
+  // 5. Active scheduled tasks
+  try {
+    const tasks = getAllTasks();
+    const groupTasks = tasks
+      .filter((t) => t.status === 'active')
+      .filter((t) => isMain || t.group_folder === groupFolder);
+    if (groupTasks.length > 0) {
+      const formatted = groupTasks
+        .map(
+          (t) =>
+            `- ${t.prompt.slice(0, 80)}... (${t.schedule_type}: ${t.schedule_value})`,
+        )
+        .join('\n');
+      sections.push(`\n--- Scheduled tasks ---\n${formatted}`);
+    }
+  } catch {
+    // DB not initialized, skip
+  }
+
+  // 6. Message bus items pending for this group
+  const busQueuePath = path.join(
+    process.cwd(),
+    'data',
+    'bus',
+    'agents',
+    groupFolder,
+    'queue.json',
+  );
+  if (fs.existsSync(busQueuePath)) {
+    try {
+      const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
+      if (Array.isArray(queue) && queue.length > 0) {
+        const formatted = queue
+          .slice(0, 5)
+          .map(
+            (item: { from: string; finding: string }) =>
+              `- From ${item.from}: ${(item.finding || '').slice(0, 150)}`,
+          )
+          .join('\n');
+        sections.push(
+          `\n--- Pending items from other agents ---\n${formatted}`,
+        );
+      }
+    } catch {
+      // Malformed queue, skip
+    }
+  }
+
+  // Assemble and truncate
+  let packet = sections.join('\n');
+  if (packet.length > CONTEXT_PACKET_MAX_SIZE) {
+    packet = packet.slice(0, CONTEXT_PACKET_MAX_SIZE) + '\n[...truncated]';
+  }
+
+  return packet;
+}
+
+/**
+ * Write the context packet + bus queue to the group's IPC directory
+ * so the container can read them at startup.
+ */
+export function writeContextPacket(
+  groupFolder: string,
+  isMain: boolean,
+  ipcDir: string,
+): void {
+  const packet = assembleContextPacket(groupFolder, isMain);
+  const packetPath = path.join(ipcDir, 'context-packet.txt');
+  fs.writeFileSync(packetPath, packet);
+
+  // Also copy bus queue if it exists, then clear it (agent will process)
+  const busQueueSrc = path.join(
+    process.cwd(),
+    'data',
+    'bus',
+    'agents',
+    groupFolder,
+    'queue.json',
+  );
+  const busQueueDst = path.join(ipcDir, 'bus-queue.json');
+  if (fs.existsSync(busQueueSrc)) {
+    fs.copyFileSync(busQueueSrc, busQueueDst);
+    fs.writeFileSync(busQueueSrc, '[]');
+  }
+}
+```
+
+- [ ] **Run tests:** `npx vitest run src/context-assembler.test.ts`
+  Expected: All pass
+
+- [ ] **Commit:** `feat: implement context assembler`
+
+### Step 2.3: Wire into container-runner.ts
+
+- [ ] **Add import at top of `src/container-runner.ts`:**
+
+```typescript
+import { writeContextPacket } from './context-assembler.js';
+```
+
+- [ ] **Add call in `runContainerAgent` (line ~370, BEFORE the `return new Promise` at line 387). Insert after the container args are built and logs are written:**
+
+```typescript
+  // Pre-assemble context packet for the agent
+  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  writeContextPacket(group.folder, input.isMain, groupIpcDir);
+```
+
+Note: `resolveGroupIpcPath` is already imported at line 19.
+
+- [ ] **Build:** `npm run build`
+- [ ] **Commit:** `feat: inject context packet before container spawn`
+
+### Step 2.4: Read context packet in agent runner
+
+- [ ] **Modify `container/agent-runner/src/index.ts` — after the `globalClaudeMd` loading (line 370-373), add:**
+
+```typescript
+  // Load precomputed context packet (assembled by host before container start)
+  const contextPacketPath = '/workspace/ipc/context-packet.txt';
+  let contextPacket = '';
+  if (fs.existsSync(contextPacketPath)) {
+    contextPacket = fs.readFileSync(contextPacketPath, 'utf-8');
+    log(`Loaded context packet (${contextPacket.length} chars)`);
+  }
+
+  // Combine global instructions + context packet for system prompt
+  const systemPromptAppend = [globalClaudeMd, contextPacket]
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+```
+
+- [ ] **Then update the systemPrompt option (line 399-400) from:**
+
+```typescript
+      systemPrompt: globalClaudeMd
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+        : undefined,
+```
+
+**To:**
+
+```typescript
+      systemPrompt: systemPromptAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
+        : undefined,
+```
+
+- [ ] **Build:** `npm run build`
+- [ ] **Test:** `npm test` — all 333+ tests pass
+- [ ] **Commit:** `feat: agent runner reads precomputed context packet`
+
+---
+
+## Task 3: Health Monitor
+
+Lightweight deterministic loop that watches container spawn rates, error rates, and auto-pauses runaway groups. Sends alerts via Telegram.
 
 **Files:**
 - Create: `src/health-monitor.ts`
 - Create: `src/health-monitor.test.ts`
-- Modify: `src/index.ts` (start monitor in `main()`)
-- Modify: `src/config.ts` (add thresholds)
+- Modify: `src/index.ts` (line 701+ in `main()`)
+- Modify: `src/config.ts` (already done in Task 1)
 
-### Step 2.1: Define health monitor config
-
-- [ ] **Add to `src/config.ts`:**
-
-```typescript
-// Health monitor thresholds
-export const HEALTH_MONITOR_INTERVAL = 60_000; // check every 60 seconds
-export const MAX_CONTAINER_SPAWNS_PER_HOUR = 30; // alert if exceeded
-export const MAX_ERRORS_PER_HOUR = 20; // alert if exceeded
-export const MCP_HEALTH_CHECK_INTERVAL = 5 * 60_000; // probe MCP endpoints every 5 minutes
-```
-
-- [ ] **Commit:** `feat: add health monitor config`
-
-### Step 2.2: Write failing tests
+### Step 3.1: Write failing tests
 
 - [ ] **Create `src/health-monitor.test.ts`:**
 
@@ -421,12 +471,14 @@ vi.mock('./logger.js', () => ({
 
 describe('HealthMonitor', () => {
   let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    alertFn = vi.fn();
     monitor = new HealthMonitor({
       maxSpawnsPerHour: 30,
       maxErrorsPerHour: 20,
-      onAlert: vi.fn(),
+      onAlert: alertFn,
     });
   });
 
@@ -440,9 +492,9 @@ describe('HealthMonitor', () => {
       monitor.recordSpawn('main');
     }
     const alerts = monitor.checkThresholds();
-    expect(alerts).toContainEqual(
-      expect.objectContaining({ type: 'excessive_spawns', group: 'main' }),
-    );
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0]).toMatchObject({ type: 'excessive_spawns', group: 'main' });
+    expect(alertFn).toHaveBeenCalled();
   });
 
   it('tracks errors by group', () => {
@@ -455,24 +507,41 @@ describe('HealthMonitor', () => {
       monitor.recordError('main', 'fail');
     }
     const alerts = monitor.checkThresholds();
-    expect(alerts).toContainEqual(
-      expect.objectContaining({ type: 'excessive_errors', group: 'main' }),
-    );
+    expect(alerts.length).toBeGreaterThan(0);
+    expect(alerts[0]).toMatchObject({ type: 'excessive_errors', group: 'main' });
   });
 
-  it('expires old events from sliding window', () => {
-    // Manually inject old timestamps
+  it('pauses and resumes groups', () => {
+    monitor.pauseGroup('main', 'test');
+    expect(monitor.isGroupPaused('main')).toBe(true);
+    monitor.resumeGroup('main');
+    expect(monitor.isGroupPaused('main')).toBe(false);
+  });
+
+  it('only counts events within the time window', () => {
+    // Inject an old event directly
     monitor['spawnLog'].push({ group: 'main', timestamp: Date.now() - 7200_000 });
     monitor.recordSpawn('main');
-    expect(monitor.getSpawnCount('main', 3600_000)).toBe(1); // only the recent one
+    expect(monitor.getSpawnCount('main', 3600_000)).toBe(1);
+  });
+
+  it('returns status summary', () => {
+    monitor.recordSpawn('main');
+    monitor.recordError('main', 'test');
+    const status = monitor.getStatus();
+    expect(status['main']).toMatchObject({
+      spawns_1h: 1,
+      errors_1h: 1,
+      paused: false,
+    });
   });
 });
 ```
 
-- [ ] **Run tests to verify they fail**
+- [ ] **Run to verify failure:** `npx vitest run src/health-monitor.test.ts`
 - [ ] **Commit:** `test: add health monitor tests`
 
-### Step 2.3: Implement health monitor
+### Step 3.2: Implement health monitor
 
 - [ ] **Create `src/health-monitor.ts`:**
 
@@ -480,12 +549,12 @@ describe('HealthMonitor', () => {
 /**
  * System Health Monitor for NanoClaw
  *
- * Lightweight deterministic monitoring (no LLM calls). Tracks:
- * - Container spawn rates per group
- * - Error rates per group
- * - MCP endpoint reachability
+ * Deterministic monitoring (no LLM calls). Tracks:
+ * - Container spawn rates per group (detects runaway tasks)
+ * - Error rates per group (detects degraded performance)
  *
- * Alerts via callback when thresholds are exceeded.
+ * Alerts via callback. In-memory only (resets on restart — acceptable
+ * since the 2-hour sliding window means most state rebuilds quickly).
  */
 import { logger } from './logger.js';
 
@@ -500,17 +569,17 @@ interface ErrorEvent {
   timestamp: number;
 }
 
-interface Alert {
-  type: 'excessive_spawns' | 'excessive_errors' | 'mcp_unreachable';
-  group?: string;
+export interface HealthAlert {
+  type: 'excessive_spawns' | 'excessive_errors';
+  group: string;
   detail: string;
   timestamp: number;
 }
 
-interface HealthMonitorConfig {
+export interface HealthMonitorConfig {
   maxSpawnsPerHour: number;
   maxErrorsPerHour: number;
-  onAlert: (alert: Alert) => void;
+  onAlert: (alert: HealthAlert) => void;
 }
 
 export class HealthMonitor {
@@ -561,16 +630,15 @@ export class HealthMonitor {
     logger.info({ group }, 'Group resumed');
   }
 
-  checkThresholds(): Alert[] {
-    const alerts: Alert[] = [];
-    const windowMs = 3600_000; // 1 hour
+  checkThresholds(): HealthAlert[] {
+    const alerts: HealthAlert[] = [];
+    const windowMs = 3600_000;
 
-    // Check spawn rates per group
-    const groups = new Set(this.spawnLog.map((e) => e.group));
-    for (const group of groups) {
+    const spawnGroups = new Set(this.spawnLog.map((e) => e.group));
+    for (const group of spawnGroups) {
       const count = this.getSpawnCount(group, windowMs);
       if (count > this.config.maxSpawnsPerHour) {
-        const alert: Alert = {
+        const alert: HealthAlert = {
           type: 'excessive_spawns',
           group,
           detail: `${count} container spawns in the last hour (threshold: ${this.config.maxSpawnsPerHour})`,
@@ -581,12 +649,11 @@ export class HealthMonitor {
       }
     }
 
-    // Check error rates per group
     const errorGroups = new Set(this.errorLog.map((e) => e.group));
     for (const group of errorGroups) {
       const count = this.getErrorCount(group, windowMs);
       if (count > this.config.maxErrorsPerHour) {
-        const alert: Alert = {
+        const alert: HealthAlert = {
           type: 'excessive_errors',
           group,
           detail: `${count} errors in the last hour (threshold: ${this.config.maxErrorsPerHour})`,
@@ -601,7 +668,7 @@ export class HealthMonitor {
   }
 
   private pruneOldEvents(): void {
-    const cutoff = Date.now() - 2 * 3600_000; // keep 2 hours
+    const cutoff = Date.now() - 2 * 3600_000;
     this.spawnLog = this.spawnLog.filter((e) => e.timestamp > cutoff);
     this.errorLog = this.errorLog.filter((e) => e.timestamp > cutoff);
   }
@@ -624,60 +691,77 @@ export class HealthMonitor {
 }
 ```
 
-- [ ] **Run tests:**
-  Run: `npx vitest run src/health-monitor.test.ts`
+- [ ] **Run tests:** `npx vitest run src/health-monitor.test.ts`
   Expected: All pass
 
 - [ ] **Commit:** `feat: implement health monitor`
 
-### Step 2.4: Wire health monitor into index.ts
+### Step 3.3: Wire into index.ts
 
-- [ ] **Modify `src/index.ts` — import and start the monitor in `main()`:**
+- [ ] **Add imports at top of `src/index.ts`:**
 
 ```typescript
 import { HealthMonitor } from './health-monitor.js';
-
-// In main(), after initDatabase():
-const healthMonitor = new HealthMonitor({
-  maxSpawnsPerHour: MAX_CONTAINER_SPAWNS_PER_HOUR,
-  maxErrorsPerHour: MAX_ERRORS_PER_HOUR,
-  onAlert: async (alert) => {
-    logger.error({ alert }, 'Health monitor alert');
-    // Auto-pause the offending group
-    if (alert.group) {
-      healthMonitor.pauseGroup(alert.group, alert.detail);
-    }
-    // Notify via main group's Telegram
-    try {
-      const mainJid = Object.values(registeredGroups).find((g) => g.isMain)?.jid;
-      if (mainJid) {
-        await sendToChat(mainJid, `⚠️ System alert: ${alert.detail}`);
-      }
-    } catch { /* best effort */ }
-  },
-});
+import {
+  MAX_CONTAINER_SPAWNS_PER_HOUR,
+  MAX_ERRORS_PER_HOUR,
+} from './config.js';
 ```
 
-Then in the message processing, call `healthMonitor.recordSpawn` when spawning containers and `healthMonitor.recordError` on container errors. Check `healthMonitor.isGroupPaused(group.folder)` before processing messages.
+(Note: `MAX_CONTAINER_SPAWNS_PER_HOUR` and `MAX_ERRORS_PER_HOUR` need to be added to the existing config import.)
 
-- [ ] **Build and test:**
-  Run: `npm run build && npm test`
+- [ ] **In `main()` (line 701), after `checkMcpEndpoints()` and `loadState()`, add:**
 
+```typescript
+  // Health monitor — tracks spawn/error rates, alerts on anomalies
+  const healthMonitor = new HealthMonitor({
+    maxSpawnsPerHour: MAX_CONTAINER_SPAWNS_PER_HOUR,
+    maxErrorsPerHour: MAX_ERRORS_PER_HOUR,
+    onAlert: (alert) => {
+      logger.error({ alert }, 'Health monitor alert');
+      if (alert.group) {
+        healthMonitor.pauseGroup(alert.group, alert.detail);
+      }
+      // Best-effort Telegram notification to main group
+      const mainJid = Object.keys(registeredGroups).find(
+        (jid) => registeredGroups[jid]?.isMain,
+      );
+      if (mainJid) {
+        const channel = findChannel(channels, mainJid);
+        channel?.sendMessage(mainJid, `System alert: ${alert.detail}`).catch(() => {});
+      }
+    },
+  });
+```
+
+Note: `findChannel` is already imported at line 55. `channels` is at line 85. `registeredGroups` is loaded by `loadState()`. The JID is the *key* of `registeredGroups`, not a field on the value — this is correct in the code above.
+
+The `onAlert` callback is synchronous (matches the `(alert: HealthAlert) => void` signature). The `sendMessage` call returns a Promise but we fire-and-forget with `.catch(() => {})` to avoid unhandled rejections.
+
+- [ ] **Add `healthMonitor.recordSpawn` to the container spawn path and `healthMonitor.isGroupPaused` check to the message processing path.** These integrations will be in the `startMessageLoop` function and the `runContainerAgent` callback. The exact wiring depends on the callback structure — the key points are:
+
+  1. Before spawning a container, check `healthMonitor.isGroupPaused(group.folder)` and skip if paused
+  2. After spawning, call `healthMonitor.recordSpawn(group.folder)`
+  3. On container error, call `healthMonitor.recordError(group.folder, errorMessage)`
+  4. Run `healthMonitor.checkThresholds()` periodically (in the scheduler loop or a dedicated interval)
+
+- [ ] **Build and test:** `npm run build && npm test`
 - [ ] **Commit:** `feat: wire health monitor into main loop`
 
 ---
 
-## Task 3: Inter-Agent Message Bus
+## Task 4: Inter-Agent Message Bus
 
-A filesystem-based pub/sub system that enables agents to coordinate without you as the router.
+Filesystem-based pub/sub for inter-agent coordination.
 
 **Files:**
 - Create: `src/message-bus.ts`
 - Create: `src/message-bus.test.ts`
-- Modify: `src/ipc.ts` (add `bus_publish` handler)
-- Modify: `container/agent-runner/src/ipc-mcp-stdio.ts` (add `bus_publish` and `bus_read` MCP tools)
+- Modify: `src/ipc.ts` (extend `IpcDeps`, add `bus_publish` case)
+- Modify: `src/index.ts` (initialize bus, pass to IPC deps)
+- Modify: `container/agent-runner/src/ipc-mcp-stdio.ts` (add MCP tools)
 
-### Step 3.1: Write failing tests
+### Step 4.1: Write failing tests
 
 - [ ] **Create `src/message-bus.test.ts`:**
 
@@ -686,7 +770,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { MessageBus, BusMessage } from './message-bus.js';
+import { MessageBus } from './message-bus.js';
 
 describe('MessageBus', () => {
   let busDir: string;
@@ -702,11 +786,7 @@ describe('MessageBus', () => {
   });
 
   it('publishes a message to the inbox', () => {
-    bus.publish({
-      from: 'einstein',
-      topic: 'research',
-      finding: 'New paper relevant to SFARI grant',
-    });
+    bus.publish({ from: 'einstein', topic: 'research', finding: 'test' });
     const messages = bus.readInbox();
     expect(messages).toHaveLength(1);
     expect(messages[0].from).toBe('einstein');
@@ -718,7 +798,6 @@ describe('MessageBus', () => {
     const messages = bus.readInbox();
     const claimed = bus.claim(messages[0].id, 'sep');
     expect(claimed).toBe(true);
-    // Inbox should be empty after claim
     expect(bus.readInbox()).toHaveLength(0);
   });
 
@@ -726,8 +805,7 @@ describe('MessageBus', () => {
     bus.publish({ from: 'einstein', topic: 'research', finding: 'test' });
     const messages = bus.readInbox();
     bus.claim(messages[0].id, 'sep');
-    const secondClaim = bus.claim(messages[0].id, 'jennifer');
-    expect(secondClaim).toBe(false);
+    expect(bus.claim(messages[0].id, 'jennifer')).toBe(false);
   });
 
   it('completes a message', () => {
@@ -735,20 +813,16 @@ describe('MessageBus', () => {
     const messages = bus.readInbox();
     bus.claim(messages[0].id, 'sep');
     bus.complete(messages[0].id);
-    // Should be in done dir
-    const doneFiles = fs.readdirSync(path.join(busDir, 'done'));
-    expect(doneFiles.length).toBe(1);
+    expect(fs.readdirSync(path.join(busDir, 'done'))).toHaveLength(1);
   });
 
-  it('reads messages by topic', () => {
+  it('filters messages by topic', () => {
     bus.publish({ from: 'einstein', topic: 'research', finding: 'paper' });
     bus.publish({ from: 'jennifer', topic: 'scheduling', finding: 'meeting' });
-    const research = bus.readByTopic('research');
-    expect(research).toHaveLength(1);
-    expect(research[0].from).toBe('einstein');
+    expect(bus.readByTopic('research')).toHaveLength(1);
   });
 
-  it('reads agent queue', () => {
+  it('routes to agent queue when action_needed is set', () => {
     bus.publish({ from: 'einstein', topic: 'research', action_needed: 'sep', finding: 'test' });
     const queue = bus.readAgentQueue('sep');
     expect(queue).toHaveLength(1);
@@ -759,12 +833,11 @@ describe('MessageBus', () => {
     const messages = bus.readInbox();
     bus.claim(messages[0].id, 'sep');
     bus.complete(messages[0].id);
-    // Manually backdate the done file
     const doneFiles = fs.readdirSync(path.join(busDir, 'done'));
     const donePath = path.join(busDir, 'done', doneFiles[0]);
-    const old = new Date(Date.now() - 4 * 24 * 3600_000); // 4 days ago
+    const old = new Date(Date.now() - 4 * 24 * 3600_000);
     fs.utimesSync(donePath, old, old);
-    bus.pruneOld(3 * 24 * 3600_000); // 72h retention
+    bus.pruneOld(3 * 24 * 3600_000);
     expect(fs.readdirSync(path.join(busDir, 'done'))).toHaveLength(0);
   });
 });
@@ -773,7 +846,7 @@ describe('MessageBus', () => {
 - [ ] **Run to verify failure**
 - [ ] **Commit:** `test: add message bus tests`
 
-### Step 3.2: Implement message bus
+### Step 4.2: Implement message bus
 
 - [ ] **Create `src/message-bus.ts`:**
 
@@ -784,14 +857,18 @@ describe('MessageBus', () => {
  * Filesystem-based pub/sub. No Redis, no RabbitMQ. Debuggable with ls.
  * Survives reboots. Costs zero tokens.
  *
+ * Limitation: single-process (NanoClaw is single-process, so this is fine).
+ * Bus items are injected into containers via context-assembler at spawn time.
+ * Items published during a container's lifetime are only visible on next spawn.
+ *
  * Directory structure:
  *   data/bus/
- *   ├── inbox/           New messages (timestamped JSON)
- *   ├── processing/      Claimed by an agent (moved atomically)
- *   ├── done/            Completed (retained 72h for undo)
+ *   ├── inbox/        New messages
+ *   ├── processing/   Claimed by an agent
+ *   ├── done/         Completed (retained 72h)
  *   └── agents/
  *       └── {group}/
- *           └── queue.json  Items waiting for this agent
+ *           └── queue.json
  */
 import fs from 'fs';
 import path from 'path';
@@ -804,59 +881,42 @@ export interface BusMessage {
   topic: string;
   action_needed?: string;
   priority?: 'low' | 'medium' | 'high';
+  finding?: string;
   timestamp: string;
   [key: string]: unknown;
 }
 
 export class MessageBus {
-  private basePath: string;
   private inboxDir: string;
   private processingDir: string;
   private doneDir: string;
   private agentsDir: string;
 
   constructor(basePath: string) {
-    this.basePath = basePath;
     this.inboxDir = path.join(basePath, 'inbox');
     this.processingDir = path.join(basePath, 'processing');
     this.doneDir = path.join(basePath, 'done');
     this.agentsDir = path.join(basePath, 'agents');
 
-    for (const dir of [
-      this.inboxDir,
-      this.processingDir,
-      this.doneDir,
-      this.agentsDir,
-    ]) {
+    for (const dir of [this.inboxDir, this.processingDir, this.doneDir, this.agentsDir]) {
       fs.mkdirSync(dir, { recursive: true });
     }
   }
 
   publish(data: Omit<BusMessage, 'id' | 'timestamp'>): BusMessage {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const message: BusMessage = {
-      ...data,
-      id,
-      timestamp: new Date().toISOString(),
-    };
+    const message: BusMessage = { ...data, id, timestamp: new Date().toISOString() };
 
-    const filename = `${id}.json`;
-    const tmpPath = path.join(this.inboxDir, `.${filename}.tmp`);
-    const finalPath = path.join(this.inboxDir, filename);
-
+    const tmpPath = path.join(this.inboxDir, `.${id}.json.tmp`);
+    const finalPath = path.join(this.inboxDir, `${id}.json`);
     fs.writeFileSync(tmpPath, JSON.stringify(message, null, 2));
-    fs.renameSync(tmpPath, finalPath); // atomic
+    fs.renameSync(tmpPath, finalPath);
 
-    // Update agent queues if action_needed is specified
     if (message.action_needed) {
       this.appendToAgentQueue(message.action_needed, message);
     }
 
-    logger.debug(
-      { messageId: id, from: data.from, topic: data.topic },
-      'Bus message published',
-    );
-
+    logger.debug({ messageId: id, from: data.from, topic: data.topic }, 'Bus message published');
     return message;
   }
 
@@ -881,32 +941,22 @@ export class MessageBus {
   claim(messageId: string, claimedBy: string): boolean {
     const inboxPath = path.join(this.inboxDir, `${messageId}.json`);
     const processingPath = path.join(this.processingDir, `${messageId}.json`);
-
     if (!fs.existsSync(inboxPath)) return false;
-
     try {
-      // Atomic move = claim
       fs.renameSync(inboxPath, processingPath);
-
-      // Add claimedBy metadata
       const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
       data._claimedBy = claimedBy;
       data._claimedAt = new Date().toISOString();
       fs.writeFileSync(processingPath, JSON.stringify(data, null, 2));
-
       return true;
     } catch {
-      return false; // race condition — someone else claimed it
+      return false;
     }
   }
 
   complete(messageId: string): void {
-    const processingPath = path.join(
-      this.processingDir,
-      `${messageId}.json`,
-    );
+    const processingPath = path.join(this.processingDir, `${messageId}.json`);
     const donePath = path.join(this.doneDir, `${messageId}.json`);
-
     if (fs.existsSync(processingPath)) {
       const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
       data._completedAt = new Date().toISOString();
@@ -931,32 +981,19 @@ export class MessageBus {
     for (const file of fs.readdirSync(dir).sort()) {
       if (!file.endsWith('.json') || file.startsWith('.')) continue;
       try {
-        const data = JSON.parse(
-          fs.readFileSync(path.join(dir, file), 'utf-8'),
-        );
-        messages.push(data);
-      } catch {
-        // Malformed file, skip
-      }
+        messages.push(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')));
+      } catch { /* skip malformed */ }
     }
     return messages;
   }
 
-  private appendToAgentQueue(
-    agentOrGroup: string,
-    message: BusMessage,
-  ): void {
+  private appendToAgentQueue(agentOrGroup: string, message: BusMessage): void {
     const agentDir = path.join(this.agentsDir, agentOrGroup);
     fs.mkdirSync(agentDir, { recursive: true });
     const queuePath = path.join(agentDir, 'queue.json');
-
     let queue: BusMessage[] = [];
     if (fs.existsSync(queuePath)) {
-      try {
-        queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
-      } catch {
-        queue = [];
-      }
+      try { queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8')); } catch { queue = []; }
     }
     queue.push(message);
     fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
@@ -964,27 +1001,79 @@ export class MessageBus {
 }
 ```
 
-- [ ] **Run tests:**
-  Run: `npx vitest run src/message-bus.test.ts`
+- [ ] **Run tests:** `npx vitest run src/message-bus.test.ts`
   Expected: All pass
 
 - [ ] **Commit:** `feat: implement filesystem-based message bus`
 
-### Step 3.3: Add MCP tools for agents to use the bus
+### Step 4.3: Extend IPC to handle bus_publish
 
-- [ ] **Modify `container/agent-runner/src/ipc-mcp-stdio.ts` — add `bus_publish` and `bus_read` tools:**
+- [ ] **Modify `src/ipc.ts` — extend the `IpcDeps` interface (line 20-33):**
 
-Add two new tools that agents can call to publish findings and read items from other agents. These write/read JSON files in the IPC tasks directory, which the host's IPC handler processes.
+Add to the interface:
 
 ```typescript
-// bus_publish — publish a finding/request to the inter-agent message bus
+  messageBus?: import('./message-bus.js').MessageBus;
+```
+
+- [ ] **Add a case BEFORE the `default:` at line 484:**
+
+```typescript
+    case 'bus_publish': {
+      if (deps.messageBus) {
+        deps.messageBus.publish({
+          from: data.from || sourceGroup,
+          topic: data.topic,
+          finding: data.finding,
+          action_needed: data.action_needed,
+          priority: data.priority,
+        });
+        logger.info(
+          { from: data.from, topic: data.topic },
+          'Bus message published via IPC',
+        );
+      }
+      break;
+    }
+```
+
+- [ ] **Commit:** `feat: add bus_publish to IPC handler`
+
+### Step 4.4: Initialize bus in index.ts and pass to IPC deps
+
+- [ ] **Add import in `src/index.ts`:**
+
+```typescript
+import { MessageBus } from './message-bus.js';
+```
+
+- [ ] **In `main()`, after the health monitor initialization, add:**
+
+```typescript
+  // Inter-agent message bus
+  const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
+```
+
+- [ ] **Modify the `startIpcWatcher` call (line 851) to include `messageBus`:**
+
+Add `messageBus,` to the deps object passed to `startIpcWatcher`.
+
+- [ ] **Build and test:** `npm run build && npm test`
+- [ ] **Commit:** `feat: initialize message bus and pass to IPC`
+
+### Step 4.5: Add MCP tools for agents
+
+- [ ] **Modify `container/agent-runner/src/ipc-mcp-stdio.ts` — add two tools after the existing tool registrations:**
+
+```typescript
+// bus_publish — post a finding to the inter-agent message bus
 registerTool(
   'bus_publish',
-  'Publish a finding, request, or status update to the inter-agent message bus. Other agents subscribed to the topic will see it.',
+  'Publish a finding or status update to the inter-agent message bus. Other agents subscribed to the topic will see it on their next invocation.',
   {
-    topic: z.string().describe('Topic tag: research, scheduling, lab-ops, personal, or custom'),
+    topic: z.string().describe('Topic: research, scheduling, lab-ops, personal, or custom'),
     finding: z.string().describe('What you found or want to communicate'),
-    action_needed: z.string().optional().describe('Agent/group that should act on this (e.g., "sep", "jennifer")'),
+    action_needed: z.string().optional().describe('Group folder that should act on this (e.g., "telegram_science-claw")'),
     priority: z.enum(['low', 'medium', 'high']).default('medium'),
   },
   async (args) => {
@@ -999,21 +1088,20 @@ registerTool(
     };
     writeIpcFile(TASKS_DIR, data);
     return {
-      content: [{ type: 'text' as const, text: `Published to bus: topic=${args.topic}, finding=${args.finding.slice(0, 80)}...` }],
+      content: [{ type: 'text' as const, text: `Published to bus: [${args.topic}] ${args.finding.slice(0, 80)}...` }],
     };
   },
 );
 
-// bus_read — read pending items from the message bus for this group
+// bus_read — read pending items from the message bus
 registerTool(
   'bus_read',
-  'Read pending messages from the inter-agent bus for your group. Returns items other agents published that need your attention.',
+  'Read pending messages from other agents. Items are loaded at container start from the bus queue. Note: only includes items published before your current session started.',
   {
     topic: z.string().optional().describe('Filter by topic (optional)'),
   },
   async (args) => {
-    // Read from the context packet (pre-assembled by host) or the queue file
-    const queuePath = `/workspace/ipc/bus-queue.json`;
+    const queuePath = '/workspace/ipc/bus-queue.json';
     if (!fs.existsSync(queuePath)) {
       return { content: [{ type: 'text' as const, text: 'No pending bus messages.' }] };
     }
@@ -1027,7 +1115,7 @@ registerTool(
       }
       const formatted = filtered
         .map((m: { from: string; topic: string; finding: string; priority: string }) =>
-          `[${m.priority || 'medium'}] From ${m.from}: ${m.finding}`)
+          `[${m.priority || 'medium'}] From ${m.from} (${m.topic}): ${m.finding}`)
         .join('\n');
       return { content: [{ type: 'text' as const, text: `Pending bus messages:\n${formatted}` }] };
     } catch {
@@ -1037,58 +1125,22 @@ registerTool(
 );
 ```
 
-- [ ] **Modify `src/ipc.ts` — handle `bus_publish` events:**
+- [ ] **Build:** `npm run build`
+- [ ] **Commit:** `feat: add bus_publish and bus_read MCP tools for agents`
 
-Add a case in the IPC task handler:
+---
 
-```typescript
-case 'bus_publish':
-  if (deps.messageBus) {
-    deps.messageBus.publish({
-      from: data.from || sourceGroup,
-      topic: data.topic,
-      finding: data.finding,
-      action_needed: data.action_needed,
-      priority: data.priority,
-    });
-  }
-  break;
+## Task 5: Integration Validation
+
+### Step 5.1: Build, test, clear cache
+
+- [ ] **Full build and test:**
+
+```bash
+npm run build && npm test
 ```
 
-- [ ] **Modify `src/index.ts` — initialize the message bus and pass to IPC:**
-
-```typescript
-import { MessageBus } from './message-bus.js';
-
-// In main():
-const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
-```
-
-Pass `messageBus` to the IPC handler dependencies.
-
-- [ ] **Wire bus queue into context assembler** — before each container spawn, write the group's bus queue to `/workspace/ipc/bus-queue.json`:
-
-```typescript
-// In context-assembler.ts writeContextPacket, also write bus queue:
-const busQueueSrc = path.join(process.cwd(), 'data', 'bus', 'agents', groupFolder, 'queue.json');
-const busQueueDst = path.join(ipcDir, 'bus-queue.json');
-if (fs.existsSync(busQueueSrc)) {
-  fs.copyFileSync(busQueueSrc, busQueueDst);
-  // Clear the queue after copying (agent will process it)
-  fs.writeFileSync(busQueueSrc, '[]');
-}
-```
-
-- [ ] **Build and test:**
-  Run: `npm run build && npm test`
-
-- [ ] **Commit:** `feat: add message bus MCP tools and IPC handling`
-
-### Step 3.4: Add `mcp__nanoclaw__bus_*` to allowed tools in agent runner
-
-- [ ] **Modify `container/agent-runner/src/index.ts` — the tools are already under `mcp__nanoclaw__*` wildcard, so no change needed if the tools are registered on the nanoclaw MCP server.**
-
-  Verify by checking that `ipc-mcp-stdio.ts` registers the tools (already done in 3.3).
+Expected: All tests pass (333+ existing + new context/health/bus tests).
 
 - [ ] **Clear agent-runner cache and restart:**
 
@@ -1097,59 +1149,76 @@ rm -rf data/sessions/*/agent-runner-src/
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 ```
 
-- [ ] **Commit:** `feat: enable bus tools in agent containers`
+### Step 5.2: Verify context packet loading
 
----
+- [ ] **Send a message to any group and check container logs:**
 
-## Task 4: Integration Test — End-to-End Validation
+```bash
+tail -100 logs/nanoclaw.log | grep "context packet"
+```
 
-### Step 4.1: Manual validation
+Expected: `Loaded context packet (N chars)` in the container stderr.
 
-- [ ] **Send a message to SCIENCE-claw and verify the context packet is loaded:**
+### Step 5.3: Verify health monitor
 
-  Check container logs for `Loaded context packet (N chars)`.
+- [ ] **Check logs for health monitor initialization:**
 
-- [ ] **Verify health monitor is running:**
+```bash
+tail -50 logs/nanoclaw.log | grep -i "health\|monitor\|spawn"
+```
 
-  Check logs for health-related entries. Trigger a test by sending several rapid messages and verifying spawn counts are tracked.
+### Step 5.4: Verify bus
 
-- [ ] **Test bus_publish from an agent:**
+- [ ] **Check bus directory was created:**
 
-  Tell Einstein in SCIENCE-claw: "Post a finding to the bus about the new spatial transcriptomics dataset."
+```bash
+ls -la data/bus/
+```
 
-  Verify a JSON file appears in `data/bus/inbox/`.
+Expected: `inbox/`, `processing/`, `done/`, `agents/` directories.
 
-- [ ] **Verify context assembler includes bus items:**
+### Step 5.5: Final commit and push
 
-  If Einstein published a finding for Sep, verify Sep's next container run includes it in the context packet.
-
-### Step 4.2: Commit and push
-
-- [ ] **Final commit:**
+- [ ] **Commit all remaining changes:**
 
 ```bash
 git add -A
 git commit -m "feat: Phase 1 complete — context assembler, health monitor, message bus
 
 Three infrastructure components for the VISION:
-1. Context assembler: pre-builds context packets so agents never start cold
-2. Health monitor: tracks spawn/error rates, auto-pauses runaway groups
-3. Message bus: filesystem-based pub/sub for inter-agent coordination
+1. Context assembler: pre-builds context packets (date, memory, priorities,
+   recent messages, tasks, bus items) so agents never start cold
+2. Health monitor: tracks spawn/error rates per group, auto-pauses runaway
+   groups, alerts via Telegram
+3. Message bus: filesystem pub/sub (data/bus/) for inter-agent coordination
+   with bus_publish and bus_read MCP tools
 
-These are prerequisites for Phase 2 (Ollama tier, event-driven perception)."
+Prerequisites for Phase 2 (Ollama tier, event-driven perception)."
+
+git push
 ```
 
-- [ ] **Push:** `git push`
+---
+
+## Known Limitations (Acceptable for Phase 1)
+
+1. **Bus items are snapshot-at-spawn**: Items published by other agents after a container starts are only visible on the next container invocation. Acceptable because containers are short-lived (minutes) and the bus is designed for async coordination, not real-time chat.
+
+2. **Health monitor state is in-memory only**: Resets on NanoClaw restart. Acceptable because the 2-hour sliding window rebuilds quickly and restarts are infrequent.
+
+3. **Context packet in system prompt**: The packet is injected once at session start and can't update during a long session. Acceptable because sessions are typically short (one message → response) and the SDK's session resume handles multi-turn context.
+
+4. **Single-process bus**: The `renameSync` claim is atomic only because NanoClaw is single-process. If ever multi-process, need file locking. Not a concern for current architecture.
 
 ---
 
 ## Phase 2 Preview (Next Plan)
 
-Phase 2 builds on this infrastructure to add:
+Phase 2 builds on this infrastructure:
 
-1. **Ollama classification tier** — local model classifies incoming events (email, calendar, Slack) into structured JSON with confidence scores and routing decisions
-2. **Event-driven email perception** — Gmail push notifications + IMAP IDLE replace the 8-hour polling cron
-3. **Event-driven calendar perception** — EventKit change callbacks instead of periodic sync
-4. **Structured agent outputs** — agents write findings to the bus in structured format, enabling Claire to compose briefings from pre-digested data
+1. **Ollama classification tier** — local models classify incoming events into structured JSON
+2. **Event-driven email** — Gmail push notifications replace 8-hour polling cron
+3. **Event-driven calendar** — EventKit callbacks instead of periodic sync
+4. **Structured agent outputs** — agents write to the bus in structured format, enabling Claire to compose briefings from pre-digested data
 
-Each of these uses the message bus (Task 3) for routing, the context assembler (Task 1) for injecting Ollama's structured outputs into Claude sessions, and the health monitor (Task 2) for catching anomalies in the new event-driven pipeline.
+Each uses: the message bus (routing), the context assembler (injecting Ollama outputs into Claude sessions), and the health monitor (catching anomalies in the event pipeline).
