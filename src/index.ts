@@ -631,65 +631,72 @@ function ensureContainerSystemRunning(): void {
 }
 
 function checkMcpEndpoints(): void {
-  const { readEnvFile } = require('./env.js');
-  const endpoints: Array<{ name: string; url: string | undefined }> = [
-    { name: 'QMD', url: 'http://localhost:8181/mcp' },
-    {
-      name: 'SimpleMem',
-      url:
-        process.env.SIMPLEMEM_URL ||
-        readEnvFile(['SIMPLEMEM_URL']).SIMPLEMEM_URL,
-    },
-    {
-      name: 'Apple Notes',
-      url:
-        process.env.APPLE_NOTES_URL ||
-        readEnvFile(['APPLE_NOTES_URL']).APPLE_NOTES_URL,
-    },
-    {
-      name: 'Todoist',
-      url: process.env.TODOIST_URL || readEnvFile(['TODOIST_URL']).TODOIST_URL,
-    },
-  ];
-
-  for (const ep of endpoints) {
-    if (!ep.url) continue;
-    try {
-      const parsed = new URL(ep.url);
-      const http = require('http');
-      const req = http.request(
+  import('http').then((http) => {
+    import('./env.js').then(({ readEnvFile }) => {
+      const endpoints: Array<{ name: string; url: string | undefined }> = [
+        { name: 'QMD', url: 'http://localhost:8181/mcp' },
         {
-          hostname: parsed.hostname,
-          port: parsed.port,
-          path: parsed.pathname,
-          method: 'GET',
-          timeout: 3000,
+          name: 'SimpleMem',
+          url:
+            process.env.SIMPLEMEM_URL ||
+            readEnvFile(['SIMPLEMEM_URL']).SIMPLEMEM_URL,
         },
-        (res: { statusCode: number }) => {
-          logger.info(
-            { name: ep.name, status: res.statusCode },
-            'MCP endpoint reachable',
+        {
+          name: 'Apple Notes',
+          url:
+            process.env.APPLE_NOTES_URL ||
+            readEnvFile(['APPLE_NOTES_URL']).APPLE_NOTES_URL,
+        },
+        {
+          name: 'Todoist',
+          url:
+            process.env.TODOIST_URL ||
+            readEnvFile(['TODOIST_URL']).TODOIST_URL,
+        },
+      ];
+
+      for (const ep of endpoints) {
+        if (!ep.url) continue;
+        try {
+          const parsed = new URL(ep.url);
+          const req = http.request(
+            {
+              hostname: parsed.hostname,
+              port: parsed.port,
+              path: parsed.pathname,
+              method: 'GET',
+              timeout: 3000,
+            },
+            (res) => {
+              logger.info(
+                { name: ep.name, status: res.statusCode },
+                'MCP endpoint reachable',
+              );
+            },
           );
-        },
-      );
-      req.on('error', () => {
-        logger.warn(
-          { name: ep.name, url: ep.url },
-          'MCP endpoint unreachable at startup',
-        );
-      });
-      req.on('timeout', () => {
-        req.destroy();
-        logger.warn(
-          { name: ep.name, url: ep.url },
-          'MCP endpoint timed out at startup',
-        );
-      });
-      req.end();
-    } catch {
-      logger.warn({ name: ep.name, url: ep.url }, 'Invalid MCP endpoint URL');
-    }
-  }
+          req.on('error', () => {
+            logger.warn(
+              { name: ep.name, url: ep.url },
+              'MCP endpoint unreachable at startup',
+            );
+          });
+          req.on('timeout', () => {
+            req.destroy();
+            logger.warn(
+              { name: ep.name, url: ep.url },
+              'MCP endpoint timed out at startup',
+            );
+          });
+          req.end();
+        } catch {
+          logger.warn(
+            { name: ep.name, url: ep.url },
+            'Invalid MCP endpoint URL',
+          );
+        }
+      }
+    });
+  });
 }
 
 async function main(): Promise<void> {
