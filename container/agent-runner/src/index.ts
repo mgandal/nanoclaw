@@ -373,6 +373,19 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
+  // Load precomputed context packet (assembled by host before container start)
+  const contextPacketPath = '/workspace/ipc/context-packet.txt';
+  let contextPacket = '';
+  if (fs.existsSync(contextPacketPath)) {
+    contextPacket = fs.readFileSync(contextPacketPath, 'utf-8');
+    log(`Loaded context packet (${contextPacket.length} chars)`);
+  }
+
+  // Combine global instructions + context packet for system prompt
+  const systemPromptAppend = [globalClaudeMd, contextPacket]
+    .filter(Boolean)
+    .join('\n\n---\n\n');
+
   // Discover additional directories mounted at /workspace/extra/*
   // These are passed to the SDK so their CLAUDE.md files are loaded automatically
   const extraDirs: string[] = [];
@@ -396,8 +409,8 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
-      systemPrompt: globalClaudeMd
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
+      systemPrompt: systemPromptAppend
+        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemPromptAppend }
         : undefined,
       allowedTools: [
         'Bash',

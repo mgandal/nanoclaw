@@ -28,7 +28,11 @@ describe('assembleContextPacket', () => {
 
   it('includes recent messages when available', () => {
     vi.mocked(getRecentMessages).mockReturnValue([
-      { sender: 'user1', content: 'hello world', timestamp: '2026-03-20T10:00:00Z' },
+      {
+        sender: 'user1',
+        content: 'hello world',
+        timestamp: '2026-03-20T10:00:00Z',
+      },
     ]);
     const packet = assembleContextPacket('main', true);
     expect(packet).toContain('Recent messages');
@@ -38,10 +42,18 @@ describe('assembleContextPacket', () => {
   it('includes active scheduled tasks', () => {
     vi.mocked(getAllTasks).mockReturnValue([
       {
-        id: 'task-1', prompt: 'Morning briefing', schedule_type: 'cron',
-        schedule_value: '0 7 * * 1-5', status: 'active', group_folder: 'main',
-        chat_jid: 'tg:123', context_mode: 'group', next_run: null,
-        last_run: null, last_result: null, created_at: '2026-03-20',
+        id: 'task-1',
+        prompt: 'Morning briefing',
+        schedule_type: 'cron',
+        schedule_value: '0 7 * * 1-5',
+        status: 'active',
+        group_folder: 'main',
+        chat_jid: 'tg:123',
+        context_mode: 'group',
+        next_run: null,
+        last_run: null,
+        last_result: null,
+        created_at: '2026-03-20',
       },
     ]);
     const packet = assembleContextPacket('main', true);
@@ -53,7 +65,9 @@ describe('assembleContextPacket', () => {
     vi.mocked(fs.existsSync).mockImplementation(
       (p) => typeof p === 'string' && p.includes('memory.md'),
     );
-    vi.mocked(fs.readFileSync).mockReturnValue('# Team Memory\n- Einstein: researcher');
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '# Team Memory\n- Einstein: researcher',
+    );
     const packet = assembleContextPacket('telegram_science-claw', false);
     expect(packet).toContain('Einstein');
   });
@@ -62,7 +76,9 @@ describe('assembleContextPacket', () => {
     vi.mocked(fs.existsSync).mockImplementation(
       (p) => typeof p === 'string' && p.includes('current.md'),
     );
-    vi.mocked(fs.readFileSync).mockReturnValue('## Top 3\n1) Grant deadline Friday');
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      '## Top 3\n1) Grant deadline Friday',
+    );
     const packet = assembleContextPacket('main', true);
     expect(packet).toContain('Grant deadline');
   });
@@ -70,7 +86,9 @@ describe('assembleContextPacket', () => {
   it('truncates to max size', () => {
     vi.mocked(getRecentMessages).mockReturnValue(
       Array.from({ length: 200 }, (_, i) => ({
-        sender: 'user', content: 'x'.repeat(100), timestamp: '2026-03-20T10:00:00Z',
+        sender: 'user',
+        content: 'x'.repeat(100),
+        timestamp: '2026-03-20T10:00:00Z',
       })),
     );
     const packet = assembleContextPacket('main', true);
