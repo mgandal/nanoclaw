@@ -410,7 +410,8 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__qmd__*',
         'mcp__simplemem__*',
-        'mcp__apple_notes__*'
+        'mcp__apple_notes__*',
+        'mcp__ollama__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -452,6 +453,10 @@ async function runQuery(
             headers: { Accept: 'application/json, text/event-stream' },
           },
         } : {}),
+        ollama: {
+          command: 'node',
+          args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
+        },
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
