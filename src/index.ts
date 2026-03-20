@@ -650,8 +650,7 @@ function checkMcpEndpoints(): void {
         {
           name: 'Todoist',
           url:
-            process.env.TODOIST_URL ||
-            readEnvFile(['TODOIST_URL']).TODOIST_URL,
+            process.env.TODOIST_URL || readEnvFile(['TODOIST_URL']).TODOIST_URL,
         },
       ];
 
