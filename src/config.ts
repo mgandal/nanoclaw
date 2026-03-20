@@ -96,3 +96,14 @@ export const TELEGRAM_BOT_POOL = (
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
+
+// Context assembler configuration
+export const CONTEXT_PACKET_MAX_SIZE = parseInt(
+  process.env.CONTEXT_PACKET_MAX_SIZE || '8000',
+  10,
+);
+
+// Health monitor thresholds
+export const HEALTH_MONITOR_INTERVAL = 60_000;
+export const MAX_CONTAINER_SPAWNS_PER_HOUR = 30;
+export const MAX_ERRORS_PER_HOUR = 20;
