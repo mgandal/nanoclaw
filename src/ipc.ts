@@ -30,6 +30,7 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  messageBus?: import('./message-bus.js').MessageBus;
 }
 
 let ipcWatcherRunning = false;
@@ -480,6 +481,24 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'bus_publish': {
+      if (deps.messageBus) {
+        const d = data as Record<string, unknown>;
+        deps.messageBus.publish({
+          from: (d.from as string) || sourceGroup,
+          topic: d.topic as string,
+          finding: d.finding as string,
+          action_needed: d.action_needed as string | undefined,
+          priority: d.priority as 'low' | 'medium' | 'high' | undefined,
+        });
+        logger.info(
+          { from: d.from, topic: d.topic },
+          'Bus message published via IPC',
+        );
+      }
+      break;
+    }
 
     default: {
       let handled = false;
