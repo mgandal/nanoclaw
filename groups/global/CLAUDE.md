@@ -42,6 +42,19 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 You have two memory systems. Use both proactively.
 
+### IMPORTANT: Proactive context loading
+
+At the *start of each session* (first message), before responding:
+1. Check `memory.md` in your group workspace for team structure, active tasks, and key context
+2. Query SimpleMem: `memory_query("What are the most recent and important things I should know?")` to recall cross-session context
+3. Check `/workspace/project/groups/global/state/current.md` for top priorities and deadlines
+
+When the user asks about something and you don't immediately know the answer:
+1. Search QMD first (it indexes 800+ Apple Notes, the Obsidian vault, research docs, and state files)
+2. Search SimpleMem for past conversation context
+3. Search Apple Notes for personal/work notes
+4. Only then ask the user if you truly can't find it
+
 ### QMD (semantic search over your knowledge base)
 
 You have access to QMD via `mcp__qmd__*` tools. QMD indexes your Obsidian vault, group memory files, conversation archives, and research notes.
