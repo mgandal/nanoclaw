@@ -11,7 +11,13 @@ import {
 } from './config.js';
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask, validateTaskSchedule } from './db.js';
+import {
+  createTask,
+  deleteTask,
+  getTaskById,
+  updateTask,
+  validateTaskSchedule,
+} from './db.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -327,10 +333,14 @@ export async function processTaskIpc(
         const task = getTaskById(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
           // Recompute next_run when resuming
-          const updates: Parameters<typeof updateTask>[1] = { status: 'active' };
+          const updates: Parameters<typeof updateTask>[1] = {
+            status: 'active',
+          };
           if (task.schedule_type === 'cron') {
             try {
-              const interval = CronExpressionParser.parse(task.schedule_value, { tz: TIMEZONE });
+              const interval = CronExpressionParser.parse(task.schedule_value, {
+                tz: TIMEZONE,
+              });
               updates.next_run = interval.next().toISOString();
             } catch {
               // Keep existing next_run if cron is invalid
@@ -411,7 +421,8 @@ export async function processTaskIpc(
         // Validate new schedule if provided
         if (data.schedule_type || data.schedule_value) {
           const newType = (data.schedule_type || task.schedule_type) as string;
-          const newValue = (data.schedule_value || task.schedule_value) as string;
+          const newValue = (data.schedule_value ||
+            task.schedule_value) as string;
           try {
             validateTaskSchedule(newType, newValue);
           } catch (err) {

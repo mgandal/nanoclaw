@@ -55,11 +55,7 @@ describe('storeMessage', () => {
       timestamp: '2024-01-01T00:00:01.000Z',
     });
 
-    const messages = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-    );
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
     expect(messages).toHaveLength(1);
     expect(messages[0].id).toBe('msg-1');
     expect(messages[0].sender).toBe('123@s.whatsapp.net');
@@ -80,11 +76,7 @@ describe('storeMessage', () => {
       timestamp: '2024-01-01T00:00:04.000Z',
     });
 
-    const messages = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-    );
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
     expect(messages).toHaveLength(0);
   });
 
@@ -102,11 +94,7 @@ describe('storeMessage', () => {
     });
 
     // Message is stored (we can retrieve it — is_from_me doesn't affect retrieval)
-    const messages = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-    );
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
     expect(messages).toHaveLength(1);
   });
 
@@ -131,11 +119,7 @@ describe('storeMessage', () => {
       timestamp: '2024-01-01T00:00:01.000Z',
     });
 
-    const messages = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-    );
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe('updated');
   });
@@ -186,22 +170,14 @@ describe('getMessagesSince', () => {
     // Get seq of m2 to use as cursor
     const allMsgs = getMessagesSince('group@g.us', 0, 'Andy');
     const m2 = allMsgs.find((m) => m.content === 'second')!;
-    const msgs = getMessagesSince(
-      'group@g.us',
-      m2.seq,
-      'Andy',
-    );
+    const msgs = getMessagesSince('group@g.us', m2.seq, 'Andy');
     // Should exclude m1, m2 (at/before seq), m3 (bot message)
     expect(msgs).toHaveLength(1);
     expect(msgs[0].content).toBe('third');
   });
 
   it('excludes bot messages via is_bot_message flag', () => {
-    const msgs = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-    );
+    const msgs = getMessagesSince('group@g.us', 0, 'Andy');
     const botMsgs = msgs.filter((m) => m.content === 'bot reply');
     expect(botMsgs).toHaveLength(0);
   });
@@ -225,11 +201,7 @@ describe('getMessagesSince', () => {
     // Get seq of m4 to use as cursor
     const allMsgs = getMessagesSince('group@g.us', 0, 'Andy');
     const m4 = allMsgs.find((m) => m.content === 'third')!;
-    const msgs = getMessagesSince(
-      'group@g.us',
-      m4.seq,
-      'Andy',
-    );
+    const msgs = getMessagesSince('group@g.us', m4.seq, 'Andy');
     expect(msgs).toHaveLength(0);
   });
 });
@@ -428,12 +400,7 @@ describe('message query LIMIT', () => {
   });
 
   it('getNewMessages caps to limit and returns most recent in chronological order', () => {
-    const { messages, newSeq } = getNewMessages(
-      ['group@g.us'],
-      0,
-      'Andy',
-      3,
-    );
+    const { messages, newSeq } = getNewMessages(['group@g.us'], 0, 'Andy', 3);
     expect(messages).toHaveLength(3);
     expect(messages[0].content).toBe('message 8');
     expect(messages[2].content).toBe('message 10');
@@ -444,12 +411,7 @@ describe('message query LIMIT', () => {
   });
 
   it('getMessagesSince caps to limit and returns most recent in chronological order', () => {
-    const messages = getMessagesSince(
-      'group@g.us',
-      0,
-      'Andy',
-      3,
-    );
+    const messages = getMessagesSince('group@g.us', 0, 'Andy', 3);
     expect(messages).toHaveLength(3);
     expect(messages[0].content).toBe('message 8');
     expect(messages[2].content).toBe('message 10');
@@ -457,12 +419,7 @@ describe('message query LIMIT', () => {
   });
 
   it('returns all messages when count is under the limit', () => {
-    const { messages } = getNewMessages(
-      ['group@g.us'],
-      0,
-      'Andy',
-      50,
-    );
+    const { messages } = getNewMessages(['group@g.us'], 0, 'Andy', 50);
     expect(messages).toHaveLength(10);
   });
 });

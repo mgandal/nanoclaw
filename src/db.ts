@@ -328,7 +328,9 @@ export function getNewMessages(
 
   const rows = db
     .prepare(sql)
-    .all(lastSeq, ...jids, `${botPrefix}:%`, limit) as (NewMessage & { seq: number })[];
+    .all(lastSeq, ...jids, `${botPrefix}:%`, limit) as (NewMessage & {
+    seq: number;
+  })[];
 
   let newSeq = lastSeq;
   for (const row of rows) {
@@ -361,7 +363,9 @@ export function getMessagesSince(
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceSeq, `${botPrefix}:%`, limit) as (NewMessage & { seq: number })[];
+    .all(chatJid, sinceSeq, `${botPrefix}:%`, limit) as (NewMessage & {
+    seq: number;
+  })[];
 }
 
 /**
@@ -389,7 +393,10 @@ function validateCronSchedule(cronExpr: string): void {
  * Validate a task schedule. Throws on invalid or too-frequent schedules.
  * Minimum interval: 30 minutes.
  */
-export function validateTaskSchedule(scheduleType: string, scheduleValue: string): void {
+export function validateTaskSchedule(
+  scheduleType: string,
+  scheduleValue: string,
+): void {
   if (scheduleType === 'cron') {
     validateCronSchedule(scheduleValue);
   }

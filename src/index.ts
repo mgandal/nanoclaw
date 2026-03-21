@@ -194,11 +194,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const isMainGroup = group.isMain === true;
 
   const sinceSeq = lastAgentSeq[chatJid] || 0;
-  const missedMessages = getMessagesSince(
-    chatJid,
-    sinceSeq,
-    ASSISTANT_NAME,
-  );
+  const missedMessages = getMessagesSince(chatJid, sinceSeq, ASSISTANT_NAME);
 
   if (missedMessages.length === 0) return true;
 
@@ -273,8 +269,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentSeq[chatJid] || 0;
-  lastAgentSeq[chatJid] =
-    missedMessages[missedMessages.length - 1].seq;
+  lastAgentSeq[chatJid] = missedMessages[missedMessages.length - 1].seq;
   saveState();
 
   logger.info(
