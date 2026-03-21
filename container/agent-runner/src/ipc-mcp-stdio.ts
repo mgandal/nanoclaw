@@ -14,6 +14,7 @@ import { CronExpressionParser } from 'cron-parser';
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+const BUS_QUEUE_PATH = path.join(IPC_DIR, 'bus-queue.json');
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -32,6 +33,28 @@ function writeIpcFile(dir: string, data: object): string {
   fs.renameSync(tempPath, filepath);
 
   return filename;
+}
+
+function appendBusQueueMessage(data: object): void {
+  fs.mkdirSync(IPC_DIR, { recursive: true });
+
+  let queue: unknown[] = [];
+  if (fs.existsSync(BUS_QUEUE_PATH)) {
+    try {
+      const existing = JSON.parse(fs.readFileSync(BUS_QUEUE_PATH, 'utf-8'));
+      if (Array.isArray(existing)) {
+        queue = existing;
+      }
+    } catch {
+      queue = [];
+    }
+  }
+
+  queue.push(data);
+
+  const tempPath = `${BUS_QUEUE_PATH}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(queue, null, 2));
+  fs.renameSync(tempPath, BUS_QUEUE_PATH);
 }
 
 const server = new McpServer({
@@ -748,7 +771,7 @@ server.tool(
       priority: args.priority,
       timestamp: new Date().toISOString(),
     };
-    writeIpcFile(TASKS_DIR, data);
+    appendBusQueueMessage(data);
     return {
       content: [{ type: 'text' as const, text: `Published to bus: [${args.topic}] ${args.finding.slice(0, 80)}...` }],
     };
@@ -763,12 +786,11 @@ server.tool(
     topic: z.string().optional().describe('Filter by topic (optional)'),
   },
   async (args) => {
-    const queuePath = '/workspace/ipc/bus-queue.json';
-    if (!fs.existsSync(queuePath)) {
+    if (!fs.existsSync(BUS_QUEUE_PATH)) {
       return { content: [{ type: 'text' as const, text: 'No pending bus messages.' }] };
     }
     try {
-      const queue = JSON.parse(fs.readFileSync(queuePath, 'utf-8'));
+      const queue = JSON.parse(fs.readFileSync(BUS_QUEUE_PATH, 'utf-8'));
       const filtered = args.topic
         ? queue.filter((m: { topic: string }) => m.topic === args.topic)
         : queue;

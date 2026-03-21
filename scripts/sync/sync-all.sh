@@ -5,7 +5,7 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/sync.log"
-PYTHON3="/usr/bin/python3"
+PYTHON3="/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3"
 
 # Redirect all output to log (and stdout for launchd)
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -17,6 +17,7 @@ echo "=========================================="
 
 # Ensure pip packages are available
 export PATH="/Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export GMAIL_MIGRATE_USER="mikejg1838@gmail.com"
 
 ERRORS=0
 
