@@ -29,8 +29,8 @@ export async function handlePageindexIpc(
   }
 
   const requestId = data.requestId as string | undefined;
-  if (!requestId) {
-    logger.warn({ type, sourceGroup }, 'pageindex IPC missing requestId');
+  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
+    logger.warn({ type, sourceGroup, requestId }, 'pageindex IPC invalid requestId');
     return true;
   }
 

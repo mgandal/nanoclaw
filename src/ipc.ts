@@ -11,9 +11,10 @@ import {
 } from './config.js';
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
-import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { createTask, deleteTask, getTaskById, updateTask, validateTaskSchedule } from './db.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { validateAdditionalMounts } from './mount-security.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { RegisteredGroup } from './types.js';
 
@@ -325,7 +326,27 @@ export async function processTaskIpc(
       if (data.taskId) {
         const task = getTaskById(data.taskId);
         if (task && (isMain || task.group_folder === sourceGroup)) {
-          updateTask(data.taskId, { status: 'active' });
+          // Recompute next_run when resuming
+          const updates: Parameters<typeof updateTask>[1] = { status: 'active' };
+          if (task.schedule_type === 'cron') {
+            try {
+              const interval = CronExpressionParser.parse(task.schedule_value, { tz: TIMEZONE });
+              updates.next_run = interval.next().toISOString();
+            } catch {
+              // Keep existing next_run if cron is invalid
+            }
+          } else if (task.schedule_type === 'interval') {
+            const ms = parseInt(task.schedule_value, 10);
+            if (!isNaN(ms) && ms > 0) {
+              updates.next_run = new Date(Date.now() + ms).toISOString();
+            }
+          } else if (task.schedule_type === 'once' && task.next_run) {
+            // For 'once' tasks, if next_run is in the past, set to now + 1 min
+            if (new Date(task.next_run).getTime() < Date.now()) {
+              updates.next_run = new Date(Date.now() + 60000).toISOString();
+            }
+          }
+          updateTask(data.taskId, updates);
           logger.info(
             { taskId: data.taskId, sourceGroup },
             'Task resumed via IPC',
@@ -386,6 +407,21 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
+
+        // Validate new schedule if provided
+        if (data.schedule_type || data.schedule_value) {
+          const newType = (data.schedule_type || task.schedule_type) as string;
+          const newValue = (data.schedule_value || task.schedule_value) as string;
+          try {
+            validateTaskSchedule(newType, newValue);
+          } catch (err) {
+            logger.warn(
+              { taskId: data.taskId, err },
+              'Task update rejected: invalid schedule',
+            );
+            break;
+          }
+        }
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {
@@ -513,14 +549,12 @@ export async function processTaskIpc(
           readonly: boolean;
         }> = [];
         if (groupEntry?.containerConfig?.additionalMounts) {
-          for (const m of groupEntry.containerConfig.additionalMounts) {
-            const containerPath = `/workspace/extra/${m.containerPath || path.basename(m.hostPath)}`;
-            mounts.push({
-              hostPath: m.hostPath,
-              containerPath,
-              readonly: m.readonly !== false,
-            });
-          }
+          const validated = validateAdditionalMounts(
+            groupEntry.containerConfig.additionalMounts,
+            groupEntry.name || sourceGroup,
+            isMain,
+          );
+          mounts.push(...validated);
         }
         // Add group folder mount
         mounts.push({
@@ -613,8 +647,8 @@ async function handleImessageIpc(
   }
 
   const requestId = data.requestId as string | undefined;
-  if (!requestId) {
-    logger.warn({ data }, 'iMessage IPC missing requestId');
+  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
+    logger.warn({ data }, 'iMessage IPC invalid requestId');
     return true;
   }
 

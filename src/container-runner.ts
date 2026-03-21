@@ -26,7 +26,7 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
@@ -34,6 +34,18 @@ import { RegisteredGroup } from './types.js';
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+
+function redactContainerArgs(args: string[]): string[] {
+  const sensitiveKeys =
+    /^(SIMPLEMEM_TOKEN|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN)=/i;
+  return args.map((arg, i) => {
+    if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
+      const eqIdx = arg.indexOf('=');
+      return arg.slice(0, eqIdx + 1) + '***';
+    }
+    return arg;
+  });
+}
 
 export interface ContainerInput {
   prompt: string;
@@ -221,7 +233,7 @@ function buildContainerArgs(
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
     '-e',
-    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
+    `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}/${proxyToken}`,
   );
 
   // Mirror the host's auth method with a placeholder value.
@@ -367,7 +379,7 @@ export async function runContainerAgent(
         (m) =>
           `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
       ),
-      containerArgs: containerArgs.join(' '),
+      containerArgs: redactContainerArgs(containerArgs).join(' '),
     },
     'Container mount configuration',
   );
@@ -450,7 +462,9 @@ export async function runContainerAgent(
             resetTimeout();
             // Call onOutput for all markers (including null results)
             // so idle timers start even for "silent" query completions.
-            outputChain = outputChain.then(() => onOutput(parsed));
+            outputChain = outputChain.then(() => onOutput(parsed)).catch(err => {
+              logger.error({ err, group: group.name }, 'onOutput callback failed');
+            });
           } catch (err) {
             logger.warn(
               { group: group.name, error: err },
@@ -554,6 +568,13 @@ export async function runContainerAgent(
               result: null,
               newSessionId,
             });
+          }).catch(err => {
+            logger.error({ err, group: group.name }, 'Output chain failed during close');
+            resolve({
+              status: 'error',
+              result: null,
+              error: `Output chain error: ${err instanceof Error ? err.message : String(err)}`,
+            });
           });
           return;
         }
@@ -606,7 +627,7 @@ export async function runContainerAgent(
         }
         logLines.push(
           `=== Container Args ===`,
-          containerArgs.join(' '),
+          redactContainerArgs(containerArgs).join(' '),
           ``,
           `=== Mounts ===`,
           mounts
@@ -671,6 +692,13 @@ export async function runContainerAgent(
             status: 'success',
             result: null,
             newSessionId,
+          });
+        }).catch(err => {
+          logger.error({ err, group: group.name }, 'Output chain failed during close');
+          resolve({
+            status: 'error',
+            result: null,
+            error: `Output chain error: ${err instanceof Error ? err.message : String(err)}`,
           });
         });
         return;

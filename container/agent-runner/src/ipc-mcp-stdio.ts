@@ -35,27 +35,6 @@ function writeIpcFile(dir: string, data: object): string {
   return filename;
 }
 
-function appendBusQueueMessage(data: object): void {
-  fs.mkdirSync(IPC_DIR, { recursive: true });
-
-  let queue: unknown[] = [];
-  if (fs.existsSync(BUS_QUEUE_PATH)) {
-    try {
-      const existing = JSON.parse(fs.readFileSync(BUS_QUEUE_PATH, 'utf-8'));
-      if (Array.isArray(existing)) {
-        queue = existing;
-      }
-    } catch {
-      queue = [];
-    }
-  }
-
-  queue.push(data);
-
-  const tempPath = `${BUS_QUEUE_PATH}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(queue, null, 2));
-  fs.renameSync(tempPath, BUS_QUEUE_PATH);
-}
 
 const server = new McpServer({
   name: 'nanoclaw',
@@ -771,7 +750,7 @@ server.tool(
       priority: args.priority,
       timestamp: new Date().toISOString(),
     };
-    appendBusQueueMessage(data);
+    writeIpcFile(TASKS_DIR, data);
     return {
       content: [{ type: 'text' as const, text: `Published to bus: [${args.topic}] ${args.finding.slice(0, 80)}...` }],
     };

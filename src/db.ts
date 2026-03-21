@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 import path from 'path';
 
@@ -302,63 +303,65 @@ export function storeMessageDirect(msg: {
 
 export function getNewMessages(
   jids: string[],
-  lastTimestamp: string,
+  lastSeq: number,
   botPrefix: string,
   limit: number = 200,
-): { messages: NewMessage[]; newTimestamp: string } {
-  if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
+): { messages: (NewMessage & { seq: number })[]; newSeq: number } {
+  if (jids.length === 0) return { messages: [], newSeq: lastSeq };
 
   const placeholders = jids.map(() => '?').join(',');
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
+  // Uses rowid as a monotonic sequence to avoid skipping messages with equal timestamps.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT rowid as seq, id, chat_jid, sender, sender_name, content, timestamp, is_from_me
       FROM messages
-      WHERE timestamp > ? AND chat_jid IN (${placeholders})
+      WHERE rowid > ? AND chat_jid IN (${placeholders})
         AND is_bot_message = 0 AND content NOT LIKE ?
         AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
+      ORDER BY rowid DESC
       LIMIT ?
-    ) ORDER BY timestamp
+    ) ORDER BY rowid
   `;
 
   const rows = db
     .prepare(sql)
-    .all(lastTimestamp, ...jids, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(lastSeq, ...jids, `${botPrefix}:%`, limit) as (NewMessage & { seq: number })[];
 
-  let newTimestamp = lastTimestamp;
+  let newSeq = lastSeq;
   for (const row of rows) {
-    if (row.timestamp > newTimestamp) newTimestamp = row.timestamp;
+    if (row.seq > newSeq) newSeq = row.seq;
   }
 
-  return { messages: rows, newTimestamp };
+  return { messages: rows, newSeq };
 }
 
 export function getMessagesSince(
   chatJid: string,
-  sinceTimestamp: string,
+  sinceSeq: number,
   botPrefix: string,
   limit: number = 200,
-): NewMessage[] {
+): (NewMessage & { seq: number })[] {
   // Filter bot messages using both the is_bot_message flag AND the content
   // prefix as a backstop for messages written before the migration ran.
+  // Uses rowid as a monotonic sequence to avoid skipping messages with equal timestamps.
   // Subquery takes the N most recent, outer query re-sorts chronologically.
   const sql = `
     SELECT * FROM (
-      SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
+      SELECT rowid as seq, id, chat_jid, sender, sender_name, content, timestamp, is_from_me
       FROM messages
-      WHERE chat_jid = ? AND timestamp > ?
+      WHERE chat_jid = ? AND rowid > ?
         AND is_bot_message = 0 AND content NOT LIKE ?
         AND content != '' AND content IS NOT NULL
-      ORDER BY timestamp DESC
+      ORDER BY rowid DESC
       LIMIT ?
-    ) ORDER BY timestamp
+    ) ORDER BY rowid
   `;
   return db
     .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
+    .all(chatJid, sinceSeq, `${botPrefix}:%`, limit) as (NewMessage & { seq: number })[];
 }
 
 /**
@@ -366,7 +369,6 @@ export function getMessagesSince(
  * Minimum interval: 30 minutes. Rejects expressions that would burn tokens.
  */
 function validateCronSchedule(cronExpr: string): void {
-  const { CronExpressionParser } = require('cron-parser');
   const interval = CronExpressionParser.parse(cronExpr);
   const first = interval.next().getTime();
   const second = interval.next().getTime();
@@ -383,20 +385,28 @@ function validateCronSchedule(cronExpr: string): void {
   }
 }
 
+/**
+ * Validate a task schedule. Throws on invalid or too-frequent schedules.
+ * Minimum interval: 30 minutes.
+ */
+export function validateTaskSchedule(scheduleType: string, scheduleValue: string): void {
+  if (scheduleType === 'cron') {
+    validateCronSchedule(scheduleValue);
+  }
+  if (scheduleType === 'interval') {
+    const ms = parseInt(scheduleValue, 10);
+    if (isNaN(ms) || ms < 30 * 60 * 1000) {
+      throw new Error(
+        `Interval ${scheduleValue}ms is too frequent. Minimum: 30 minutes (1800000ms).`,
+      );
+    }
+  }
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {
-  if (task.schedule_type === 'cron') {
-    validateCronSchedule(task.schedule_value);
-  }
-  if (
-    task.schedule_type === 'interval' &&
-    parseInt(task.schedule_value, 10) < 30 * 60 * 1000
-  ) {
-    throw new Error(
-      `Interval ${task.schedule_value}ms is too frequent. Minimum: 30 minutes (1800000ms).`,
-    );
-  }
+  validateTaskSchedule(task.schedule_type, task.schedule_value);
 
   db.prepare(
     `

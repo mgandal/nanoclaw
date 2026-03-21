@@ -9,15 +9,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import pino from 'pino';
-
 import { MOUNT_ALLOWLIST_PATH } from './config.js';
+import { logger } from './logger.js';
 import { AdditionalMount, AllowedRoot, MountAllowlist } from './types.js';
-
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport: { target: 'pino-pretty', options: { colorize: true } },
-});
 
 // Cache the allowlist with 5-minute TTL so edits are picked up without restart
 const CACHE_TTL_MS = 5 * 60 * 1000;

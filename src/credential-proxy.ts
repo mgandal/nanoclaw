@@ -10,12 +10,19 @@
  *             Proxy injects real OAuth token on that exchange request;
  *             subsequent requests carry the temp key which is valid as-is.
  */
+import { randomUUID } from 'crypto';
 import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+/** Random token for proxy authentication (validated via URL path prefix). */
+export const proxyToken = randomUUID();
+
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
+const UPSTREAM_TIMEOUT = 120_000; // 120 seconds
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -46,9 +53,33 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Validate proxy token (first path segment)
+      const tokenPrefix = `/${proxyToken}/`;
+      if (!req.url?.startsWith(tokenPrefix)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+      // Strip the token prefix before forwarding
+      const upstreamPath = req.url.slice(tokenPrefix.length - 1); // keep leading /
+
       const chunks: Buffer[] = [];
-      req.on('data', (c) => chunks.push(c));
+      let bodySize = 0;
+      let aborted = false;
+
+      req.on('data', (c: Buffer) => {
+        bodySize += c.length;
+        if (bodySize > MAX_BODY_SIZE) {
+          aborted = true;
+          res.writeHead(413);
+          res.end('Request body too large');
+          req.destroy();
+          return;
+        }
+        chunks.push(c);
+      });
       req.on('end', () => {
+        if (aborted) return;
         const body = Buffer.concat(chunks);
         const headers: Record<string, string | number | string[] | undefined> =
           {
@@ -83,9 +114,10 @@ export function startCredentialProxy(
           {
             hostname: upstreamUrl.hostname,
             port: upstreamUrl.port || (isHttps ? 443 : 80),
-            path: req.url,
+            path: upstreamPath,
             method: req.method,
             headers,
+            timeout: UPSTREAM_TIMEOUT,
           } as RequestOptions,
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
@@ -93,9 +125,17 @@ export function startCredentialProxy(
           },
         );
 
+        upstream.on('timeout', () => {
+          upstream.destroy();
+          if (!res.headersSent) {
+            res.writeHead(504);
+            res.end('Gateway Timeout');
+          }
+        });
+
         upstream.on('error', (err) => {
           logger.error(
-            { err, url: req.url },
+            { err, url: upstreamPath },
             'Credential proxy upstream error',
           );
           if (!res.headersSent) {
