@@ -25,6 +25,12 @@ groups/global/*
 # Worktrees
 .worktrees/
 
+# Runtime and generated sync artifacts
+scripts/sync/__pycache__/
+scripts/sync/*.pyc
+scripts/sync/*.log
+scripts/sync/gmail-sync-state.json
+
 # Temp files
 .tmp-*
 

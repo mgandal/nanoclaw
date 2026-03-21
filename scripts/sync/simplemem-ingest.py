@@ -159,7 +159,7 @@ def ingest_emails(summaries_file, base_url, token, source_label):
                     result = call_tool(
                         base_url, headers, session_id,
                         "memory_add",
-                        {"content": msg_text},
+                        {"speaker": "email-sync", "content": msg_text},
                         call_id=100 + ingested,
                     )
                     if result and not result.get("error"):
