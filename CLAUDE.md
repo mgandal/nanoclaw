@@ -22,10 +22,17 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 | `src/db.ts` | SQLite operations and schema migrations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/agent-runner/src/index.ts` | Agent runner inside container (MCP servers, SDK query loop) |
-| `container/skills/agent-browser.md` | Browser automation tool (available to all agents via Bash) |
+| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 | `scripts/sync/sync-all.sh` | Email + calendar sync (every 8h via launchd) |
 
 ## Skills
+
+Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
+
+- **Feature skills** — merge a `skill/*` branch to add capabilities (e.g. `/add-telegram`, `/add-slack`)
+- **Utility skills** — ship code files alongside SKILL.md (e.g. `/claw`)
+- **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
+- **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
 
 | Skill | When to Use |
 |-------|-------------|
@@ -35,6 +42,10 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 | `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+
+## Contributing
+
+Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
 
 ## Development
 
@@ -61,7 +72,7 @@ systemctl --user restart nanoclaw
 
 ## Troubleshooting
 
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && (git merge whatsapp/main || { git checkout --theirs package-lock.json && git add package-lock.json && git merge --continue; }) && npm run build`) to install it. Existing auth credentials and groups are preserved.
+**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `npx tsx scripts/apply-skill.ts .claude/skills/add-whatsapp && npm run build`) to install it. Existing auth credentials and groups are preserved.
 
 ## Container Build Cache
 

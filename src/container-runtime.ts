@@ -88,14 +88,33 @@ export function ensureContainerRuntimeRunning(): void {
       logger.info('Container runtime started');
     } catch (err) {
       logger.error({ err }, 'Failed to start container runtime');
-      logger.error(
-        'FATAL: Container runtime failed to start. ' +
-          'Agents cannot run without a container runtime. ' +
-          'Fix: 1) Ensure Apple Container is installed, ' +
-          '2) Run: container system start, ' +
-          '3) Restart NanoClaw',
+      console.error(
+        '\n╔════════════════════════════════════════════════════════════════╗',
       );
-      throw new Error('Container runtime is required but failed to start');
+      console.error(
+        '║  FATAL: Container runtime failed to start                      ║',
+      );
+      console.error(
+        '║                                                                ║',
+      );
+      console.error(
+        '║  Agents cannot run without a container runtime. To fix:        ║',
+      );
+      console.error(
+        '║  1. Ensure Apple Container is installed                        ║',
+      );
+      console.error(
+        '║  2. Run: container system start                                ║',
+      );
+      console.error(
+        '║  3. Restart NanoClaw                                           ║',
+      );
+      console.error(
+        '╚════════════════════════════════════════════════════════════════╝\n',
+      );
+      throw new Error('Container runtime is required but failed to start', {
+        cause: err,
+      });
     }
   }
 }
