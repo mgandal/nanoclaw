@@ -12,7 +12,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import { CONTEXT_PACKET_MAX_SIZE, GROUPS_DIR, TIMEZONE } from './config.js';
+import {
+  CONTEXT_PACKET_MAX_SIZE,
+  DATA_DIR,
+  GROUPS_DIR,
+  TIMEZONE,
+} from './config.js';
 import { getRecentMessages, getAllTasks } from './db.js';
 
 export function assembleContextPacket(
@@ -87,8 +92,7 @@ export function assembleContextPacket(
 
   // 6. Message bus items pending for this group
   const busQueuePath = path.join(
-    process.cwd(),
-    'data',
+    DATA_DIR,
     'bus',
     'agents',
     groupFolder,
@@ -138,8 +142,7 @@ export function writeContextPacket(
 
   // Also copy bus queue if it exists, then clear it (agent will process)
   const busQueueSrc = path.join(
-    process.cwd(),
-    'data',
+    DATA_DIR,
     'bus',
     'agents',
     groupFolder,

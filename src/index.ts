@@ -458,7 +458,10 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
-      healthMonitor?.recordError(group.folder, output.error || 'container error');
+      healthMonitor?.recordError(
+        group.folder,
+        output.error || 'container error',
+      );
       return 'error';
     }
 
@@ -731,9 +734,6 @@ async function main(): Promise<void> {
     maxErrorsPerHour: MAX_ERRORS_PER_HOUR,
     onAlert: (alert) => {
       logger.error({ alert }, 'Health monitor alert');
-      if (alert.group) {
-        healthMonitor.pauseGroup(alert.group, alert.detail);
-      }
       // Best-effort Telegram notification to main group
       const mainJid = Object.keys(registeredGroups).find(
         (jid) => registeredGroups[jid]?.isMain,
