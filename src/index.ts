@@ -508,7 +508,7 @@ async function startMessageLoop(): Promise<void> {
         saveState();
 
         // Deduplicate by group
-        const messagesByGroup = new Map<string, NewMessage[]>();
+        const messagesByGroup = new Map<string, (NewMessage & { seq: number })[]>();
         for (const msg of messages) {
           const existing = messagesByGroup.get(msg.chat_jid);
           if (existing) {
