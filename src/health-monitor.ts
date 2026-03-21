@@ -39,6 +39,7 @@ export class HealthMonitor {
   private errorLog: ErrorEvent[] = [];
   private config: HealthMonitorConfig;
   private pausedGroups: Set<string> = new Set();
+  private recentAlerts: Map<string, number> = new Map(); // dedup: key → timestamp
 
   constructor(config: HealthMonitorConfig) {
     this.config = config;
@@ -85,19 +86,27 @@ export class HealthMonitor {
   checkThresholds(): HealthAlert[] {
     const alerts: HealthAlert[] = [];
     const windowMs = 3600_000;
+    const alertCooldownMs = 10 * 60_000; // suppress duplicate alerts for 10 min
+    const now = Date.now();
 
     const spawnGroups = new Set(this.spawnLog.map((e) => e.group));
     for (const group of spawnGroups) {
       const count = this.getSpawnCount(group, windowMs);
       if (count > this.config.maxSpawnsPerHour) {
+        const alertKey = `excessive_spawns:${group}`;
+        const lastAlerted = this.recentAlerts.get(alertKey) ?? 0;
         const alert: HealthAlert = {
           type: 'excessive_spawns',
           group,
           detail: `${count} container spawns in the last hour (threshold: ${this.config.maxSpawnsPerHour})`,
-          timestamp: Date.now(),
+          timestamp: now,
         };
         alerts.push(alert);
-        this.config.onAlert(alert);
+        this.pauseGroup(group, alert.detail);
+        if (now - lastAlerted > alertCooldownMs) {
+          this.recentAlerts.set(alertKey, now);
+          this.config.onAlert(alert);
+        }
       }
     }
 
@@ -105,14 +114,20 @@ export class HealthMonitor {
     for (const group of errorGroups) {
       const count = this.getErrorCount(group, windowMs);
       if (count > this.config.maxErrorsPerHour) {
+        const alertKey = `excessive_errors:${group}`;
+        const lastAlerted = this.recentAlerts.get(alertKey) ?? 0;
         const alert: HealthAlert = {
           type: 'excessive_errors',
           group,
           detail: `${count} errors in the last hour (threshold: ${this.config.maxErrorsPerHour})`,
-          timestamp: Date.now(),
+          timestamp: now,
         };
         alerts.push(alert);
-        this.config.onAlert(alert);
+        this.pauseGroup(group, alert.detail);
+        if (now - lastAlerted > alertCooldownMs) {
+          this.recentAlerts.set(alertKey, now);
+          this.config.onAlert(alert);
+        }
       }
     }
 

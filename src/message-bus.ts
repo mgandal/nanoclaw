@@ -58,9 +58,9 @@ export class MessageBus {
   publish(data: Omit<BusMessage, 'id' | 'timestamp'>): BusMessage {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const message = {
+      ...data,
       id,
       timestamp: new Date().toISOString(),
-      ...data,
     } as BusMessage;
 
     const tmpPath = path.join(this.inboxDir, `.${id}.json.tmp`);
