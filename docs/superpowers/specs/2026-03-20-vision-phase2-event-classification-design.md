@@ -319,17 +319,27 @@ Agents are not required to use the `payload` field — plain `finding` strings c
 
 ### 7. Context Assembler Extensions
 
-Extend `assembleContextPacket()` to include classified events from the router's output:
+Extend `assembleContextPacket()` to include classified events from the router's output.
+
+**Storage:** Classified events with routing `notify` or `escalate` are published to the message bus with `topic: 'classified_event'` and the full `ClassifiedEvent` as the payload. The context assembler already reads pending bus items (Section 6 of Phase 1). No separate event store is needed — the bus IS the store.
+
+To surface classified events more prominently, add a dedicated section that filters bus items by topic:
 
 ```typescript
 // New section in assembleContextPacket():
-// 7. Classified events (last 24h)
-const classifiedEvents = readClassifiedEvents(groupFolder); // from bus or dedicated store
-if (classifiedEvents.length > 0) {
-  const formatted = classifiedEvents
-    .map(e => `[${e.classification.urgency}] ${e.classification.summary} (from: ${e.source})`)
-    .join('\n');
-  sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
+// 7. Classified events (from message bus, topic: 'classified_event')
+const busQueuePath = path.join(DATA_DIR, 'bus', 'agents', groupFolder, 'queue.json');
+if (fs.existsSync(busQueuePath)) {
+  try {
+    const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
+    const classified = queue.filter((m: BusMessage) => m.topic === 'classified_event');
+    if (classified.length > 0) {
+      const formatted = classified
+        .map((e: any) => `[${e.payload?.classification?.urgency || 'medium'}] ${e.payload?.classification?.summary || e.finding} (from: ${e.from})`)
+        .join('\n');
+      sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
+    }
+  } catch { /* skip */ }
 }
 ```
 
@@ -345,6 +355,8 @@ recordOllamaLatency(latencyMs: number): void;
 getOllamaP95Latency(windowMs: number): number;
 isOllamaDegraded(): boolean; // true if p95 > 10s
 ```
+
+The 10-second degradation threshold is hardcoded in `isOllamaDegraded()` (not configurable via `HealthMonitorConfig`). This is a simple heuristic — if Ollama is taking >10s per classification, something is wrong (model not loaded, resource contention). No config change needed.
 
 When `isOllamaDegraded()` returns true, the event router skips Ollama classification and routes everything as 'notify' (fallback to Claude batch processing). This prevents slow Ollama from blocking the event pipeline.
 
@@ -363,6 +375,8 @@ When `isOllamaDegraded()` returns true, the event router skips Ollama classifica
 | `src/watchers/calendar-watcher.ts` | Calendar icalbuddy polling watcher |
 | `src/watchers/calendar-watcher.test.ts` | Tests for calendar watcher |
 | `data/trust.yaml` | Trust matrix configuration |
+| `data/watchers/gmail-state.json` | Gmail watcher state (last-seen message ID, created at runtime) |
+| `data/watchers/calendar-snapshot.json` | Calendar watcher snapshot (created at runtime) |
 
 ### Modified Files
 
