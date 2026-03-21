@@ -9,24 +9,28 @@ Make the event router learn from user feedback. Currently, trust rules are stati
 ```
 Event Router (Phase 2) classifies event → applies trust rules → routing decision
     ↓
-    ├── autonomous → execute, log decision to trust_decisions table
-    ├── notify → publish to bus, log decision
-    ├── draft → create draft action, send approval request via Telegram, wait for response
-    └── escalate → trigger Claude session, log decision
+    ├── autonomous → log decision, publish to bus
+    ├── notify → log decision, publish to bus
+    ├── draft → log decision, send approval request via Telegram, DO NOT publish yet
+    └── escalate → log decision, trigger Claude session
          ↓
-User responds (approve / reject / edit) via Telegram reply
+User replies to [Draft #N] or [Promotion #N] message in Telegram
          ↓
 Approval response recorded in trust_decisions table
+    ├── approved → publish event to bus
+    ├── rejected → discard, record feedback
+    └── expired (24h timeout) → discard, excluded from rate calculations
          ↓
-Weekly promotion analyzer scans approval patterns
+Weekly promotion analyzer scans approval patterns (draft decisions only)
     ├── >95% approval over 30+ instances → propose promotion
-    ├── <80% approval → propose demotion
-    └── safety floor prevents certain actions from promoting past 'draft'
+    └── safety floor prevents certain actions from promoting past a ceiling
          ↓
-Promotion proposal sent to main group → user confirms → trust.yaml updated
+Promotion proposal sent as [Promotion #N] → user confirms → trust.yaml updated → router reloaded
 ```
 
 All components run within the existing NanoClaw process. No new services.
+
+**Scope decision:** Demotion logic is deferred. Autonomous events have no user approval signal, so there's no data to detect poor autonomous decisions. A `/flag-last` command for retroactive flagging can be added in a future phase.
 
 ## Components
 
@@ -42,19 +46,22 @@ CREATE TABLE IF NOT EXISTS trust_decisions (
   event_type TEXT NOT NULL,          -- 'email' | 'calendar'
   event_source TEXT NOT NULL,        -- 'gmail:mgandal@gmail.com'
   routing TEXT NOT NULL,             -- 'autonomous' | 'notify' | 'draft' | 'escalate'
-  trust_rule TEXT,                   -- which YAML rule matched (stringified conditions)
+  trust_rule_id TEXT,                -- stable rule ID from YAML (e.g., 'lab-member-email')
   classification_summary TEXT,       -- from Ollama classification
   classification_importance REAL,    -- 0-1
-  classification_urgency TEXT,       -- string label mapped from Classification.urgency (number → 'low'/'medium'/'high'/'critical')
-  user_response TEXT,                -- 'approved' | 'rejected' | 'edited' | NULL (no response needed)
+  classification_urgency TEXT,       -- urgency label as string
+  user_response TEXT,                -- 'approved' | 'rejected' | 'edited' | 'expired' | NULL
   user_feedback TEXT,                -- free-text reason for rejection/edit
-  responded_at TEXT                  -- when user responded
+  responded_at TEXT,                 -- when user responded
+  telegram_msg_id TEXT               -- outbound Telegram message ID (for reply matching)
 );
 ```
 
-**Note:** The Phase 2 `Classification.urgency` may be a string enum (`'low'|'medium'|'high'|'critical'`) or a number depending on Ollama's response parsing. The approval tracker stores it as TEXT — if it's a number, convert via thresholds (0-0.25: 'low', 0.25-0.5: 'medium', 0.5-0.75: 'high', 0.75+: 'critical'). Check the actual type in `event-router.ts` at implementation time.
-
-Events with routing `autonomous` are logged with `user_response: NULL` (no approval needed). Events with routing `draft` are logged with `user_response` filled in after the user responds.
+**Key design decisions:**
+- `trust_rule_id` stores the rule's stable `id` field from YAML (not a stringified condition or array index). See Section 4.
+- `telegram_msg_id` stores the Telegram message ID of the outbound `[Draft #N]` notification, enabling reply-based response detection.
+- `user_response: 'expired'` is explicitly excluded from approval rate calculations (denominator is only 'approved' + 'rejected' + 'edited').
+- `classification_urgency` is stored as the string label from `Classification.urgency`. The Phase 2 event router parses Ollama's response into a string enum; if it changes to a number, convert via thresholds.
 
 **Interface:**
 ```typescript
@@ -62,71 +69,173 @@ class ApprovalTracker {
   constructor(db: Database);
 
   recordDecision(decision: TrustDecision): number; // returns decision ID
-  recordResponse(decisionId: number, response: 'approved' | 'rejected' | 'edited', feedback?: string): void;
-  getApprovalRate(eventType: string, conditions: Record<string, unknown>, windowDays: number): { total: number; approved: number; rate: number };
+  recordResponse(decisionId: number, response: 'approved' | 'rejected' | 'edited' | 'expired', feedback?: string): void;
+  getApprovalStats(windowDays: number): ApprovalStat[]; // aggregate by trust_rule_id
   getRecentDecisions(limit: number): TrustDecision[];
-  getPendingApprovals(): TrustDecision[]; // routing='draft', user_response=NULL
+  getPendingApprovals(): TrustDecision[]; // routing='draft', user_response=NULL, age < 24h
+  expireStaleApprovals(): number; // set expired for pending > 24h, return count
+  setTelegramMsgId(decisionId: number, telegramMsgId: string): void;
+}
+
+interface ApprovalStat {
+  trustRuleId: string;
+  eventType: string;
+  total: number;       // count of 'approved' + 'rejected' + 'edited' (excludes expired/null)
+  approved: number;
+  rate: number;        // approved / total
 }
 ```
 
-### 2. Extended Routing Tiers in Event Router
-
-Add `draft` routing to the existing event router. When a rule routes to `draft`:
-
-1. Log the decision to `trust_decisions` with `user_response: NULL`
-2. Format an approval message with the classified event summary
-3. Send to Telegram main group with the decision ID embedded
-4. The event is NOT published to the message bus yet — it waits for approval
-
-When the user responds (approve/reject):
-- `approved`: publish the event to the message bus, record response
-- `rejected`: record response with feedback, do NOT publish
-- `edited`: user provides modified text, publish modified version, record response
-
-**Approval message format (Telegram):**
-```
-[Draft #42] Email from alice@nih.gov
-Topic: R01 resubmission timeline
-Summary: NIH program officer responds about deadline...
-Importance: 0.85 | Urgency: medium
-
-Reply with:
-  ✓ (or "approve") — publish to agents
-  ✗ (or "reject") — discard
-  Or reply with modified text to edit
+`getApprovalStats` runs a single SQL aggregate:
+```sql
+SELECT trust_rule_id, event_type,
+  COUNT(*) as total,
+  SUM(CASE WHEN user_response = 'approved' THEN 1 ELSE 0 END) as approved
+FROM trust_decisions
+WHERE timestamp > ? AND user_response IN ('approved', 'rejected', 'edited')
+GROUP BY trust_rule_id, event_type
 ```
 
-**Response detection:** Two mechanisms, in priority order:
+### 2. Extended Routing in Event Router
 
-1. **Telegram reply detection (primary):** When a user replies to a specific message in Telegram, the reply includes the original message ID. If the original message contains `[Draft #N]`, extract `N` and treat the reply as an approval response.
+**Conditional bus publish:** The `route()` method must NOT unconditionally publish to the message bus. Currently (Phase 2) it publishes for every routing outcome. Phase 3a restructures this:
 
-2. **Text prefix with pending check (fallback):** If a message matches `/^\[Draft #(\d+)\]\s*(approve|reject)/i` or `/^(approve|reject)\s+#?(\d+)/i`, AND the referenced decision ID exists in `getPendingApprovals()`, treat it as a response. The pending-approvals check prevents false positives from unrelated messages.
+```typescript
+async route(event: RawEvent): Promise<ClassifiedEvent> {
+  // ... classify via Ollama ...
+  // ... apply trust rules → { routing, ruleId } ...
 
-Bare "approve" or "reject" without a decision ID is NOT intercepted — this avoids capturing unrelated conversation.
+  // Log ALL decisions to approval tracker
+  const decisionId = this.approvalTracker.recordDecision({ ... });
 
-### 3. Promotion Analyzer (`src/promotion-analyzer.ts`)
+  // Conditional publish based on routing
+  if (routing === 'draft') {
+    // DO NOT publish — send approval request instead
+    await this.sendApprovalRequest(classified, decisionId);
+  } else if (routing === 'escalate') {
+    await this.config.onEscalate(classified);
+    this.config.messageBus.publish({ ... });
+  } else {
+    // autonomous and notify both publish
+    this.config.messageBus.publish({ ... });
+  }
 
-Periodic analysis of approval patterns to propose trust rule changes.
+  return classified;
+}
+```
+
+**`applyTrustRules` returns matched rule:** Changed from returning just the routing string to returning `{ routing: RoutingLevel; ruleId: string | null }` so the approval tracker can record which rule matched.
+
+**Approval request sending:** The router needs a `sendToMainGroup` callback (injected via config) that returns the Telegram message ID. This is different from the existing `onEscalate` which returns void.
+
+```typescript
+interface EventRouterConfig {
+  // ... existing fields ...
+  approvalTracker: ApprovalTracker;
+  sendToMainGroup: (text: string) => Promise<string | undefined>; // returns telegram msg ID
+}
+```
+
+`channel.sendMessage()` currently returns `Promise<void>`. For the Telegram channel specifically, we need to return the sent message ID. This requires modifying the `Channel.sendMessage` return type to `Promise<string | undefined>` (message ID if available) or adding a `sendMessageWithId` method to avoid breaking the existing interface.
+
+### 3. Telegram Reply Detection
+
+**Required plumbing changes:**
+
+1. **`NewMessage` type** (`src/types.ts`): Add `replyToMessageId?: string` field
+2. **Telegram channel** (`src/channels/telegram.ts`): Extract `ctx.message.reply_to_message?.message_id.toString()` in the Grammy handler, include in `NewMessage`
+3. **`Channel.sendMessage` return type**: Change from `Promise<void>` to `Promise<string | undefined>` to return the sent Telegram message ID
+
+**Response detection flow** in `src/index.ts` message handler:
+
+```
+1. Message arrives in main group
+2. Check: does it have replyToMessageId?
+   YES → look up replyToMessageId in trust_decisions.telegram_msg_id
+     FOUND → extract decision ID, parse response (approve/reject/text-edit)
+     NOT FOUND → proceed to normal pipeline
+   NO → check text for /^(approve|reject)\s+#(\d+)/i pattern
+     MATCH → verify decision ID exists in getPendingApprovals()
+       EXISTS → handle approval response
+       NOT EXISTS → proceed to normal pipeline
+     NO MATCH → proceed to normal pipeline
+3. Normal pipeline: store message, check triggers, invoke agent
+```
+
+This runs BEFORE the normal agent invocation in the message processing flow. It's a short-circuit: if the message is an approval response, handle it and return without invoking the agent.
+
+### 4. Trust Matrix Extensions
+
+**Stable rule IDs:** Every rule in `trust.yaml` must have an `id` field. This is the primary key for approval tracking and promotion proposals. Rules without IDs are functional but cannot participate in approval tracking or promotion.
+
+```yaml
+default_routing: notify
+
+rules:
+  - id: institutional-email
+    event_type: email
+    conditions:
+      sender_domain: [ucla.edu, nih.gov, sfari.org]
+      importance_gte: 0.7
+    routing: notify
+    max_promotion: notify  # safety floor
+
+  - id: low-importance-email
+    event_type: email
+    conditions:
+      importance_lt: 0.3
+    routing: autonomous
+
+  - id: calendar-conflict
+    event_type: calendar
+    conditions:
+      change_type: conflict
+    routing: escalate
+    max_promotion: escalate  # conflicts always need human judgment
+
+  - id: medium-importance-email
+    event_type: email
+    conditions:
+      importance_gte: 0.3
+      importance_lt: 0.7
+    routing: draft  # approval required; can be promoted to 'notify' over time
+
+  - id: new-calendar-event
+    event_type: calendar
+    conditions:
+      change_type: new_event
+    routing: notify
+```
+
+**Type changes in `src/event-router.ts`:**
+
+```typescript
+type RoutingLevel = 'autonomous' | 'notify' | 'draft' | 'escalate';
+
+interface TrustRule {
+  id?: string;                    // stable identifier for tracking
+  event_type?: string;
+  conditions?: TrustRuleConditions;
+  routing: RoutingLevel;
+  max_promotion?: RoutingLevel;   // safety ceiling
+  action?: string;
+}
+```
+
+### 5. Promotion Analyzer (`src/promotion-analyzer.ts`)
+
+Periodic analysis of approval patterns to propose trust rule changes. **Only analyzes `draft` routing decisions** (the only ones with user approval signals).
 
 **Logic:**
-1. Query `trust_decisions` for the past 30 days, grouped by `(event_type, trust_rule)`
-2. For each group with 30+ decisions:
-   - If approval rate > 95%: propose promotion (e.g., `draft` → `notify`, `notify` → `autonomous`)
-   - If approval rate < 80%: propose demotion (e.g., `autonomous` → `notify`)
-3. Check safety floors before proposing (some rules can never promote past a ceiling)
-4. Send proposals to main group via Telegram
-5. User responds with "yes" or "no" per proposal
-6. If "yes": update `data/trust.yaml` programmatically and reload
+1. Call `tracker.getApprovalStats(30)` — returns approval rates grouped by `trust_rule_id`
+2. For each rule with 30+ responded decisions:
+   - If approval rate > 95%: propose promotion (e.g., `draft` → `notify`)
+3. Check `max_promotion` before proposing — if current routing is already at the ceiling, skip
+4. Send proposal to main group as `[Promotion #N]` message
+5. Store pending proposal in memory (Map<decisionId, PromotionProposal>)
+6. When user responds "yes": call `applyPromotion()` → update trust.yaml → call `eventRouter.reloadFromPath()`
 
-**Safety floors** are defined in the trust matrix:
-```yaml
-rules:
-  - event_type: email
-    conditions:
-      sender_domain: [nih.gov, nsf.gov]
-    routing: notify
-    max_promotion: notify  # <-- safety floor: never promote past notify
-```
+**Promotion proposals are tracked using the same trust_decisions table** with `event_type: 'promotion'` and `routing: 'draft'`. This reuses the existing approval response handler — the handler checks both `[Draft #N]` and `[Promotion #N]` prefixes against `getPendingApprovals()`.
 
 **Interface:**
 ```typescript
@@ -134,94 +243,45 @@ class PromotionAnalyzer {
   constructor(config: {
     tracker: ApprovalTracker;
     trustMatrixPath: string;
-    minDecisions: number;      // default 30
-    promotionThreshold: number; // default 0.95
-    demotionThreshold: number;  // default 0.80
+    eventRouter: EventRouter;        // for reloadFromPath()
+    sendToMainGroup: (text: string) => Promise<string | undefined>;
+    minDecisions: number;            // default 30
+    promotionThreshold: number;      // default 0.95
   });
 
-  analyze(): PromotionProposal[];
-  applyPromotion(proposal: PromotionProposal): void; // updates trust.yaml
+  analyze(): Promise<PromotionProposal[]>;
+  applyPromotion(proposal: PromotionProposal): void;
 }
 
 interface PromotionProposal {
-  ruleIndex: number;
-  currentRouting: string;
-  proposedRouting: string;
+  ruleId: string;             // stable ID from YAML
+  currentRouting: RoutingLevel;
+  proposedRouting: RoutingLevel;
   evidence: { total: number; approved: number; rate: number };
-  safetyFloor?: string;
-  blocked: boolean; // true if safety floor prevents promotion
+  maxPromotion?: RoutingLevel;
+  blocked: boolean;
 }
 ```
 
-**Schedule:** Runs weekly via `setInterval` in `main()` (not the task scheduler, which requires a `group_folder` and `chat_jid` that don't apply to system-level tasks). The interval is `7 * 24 * 60 * 60 * 1000` ms. On startup, also runs once after a 60-second delay to catch up if the system was down during the scheduled window.
+**Schedule:** Store `last_promotion_analysis` in `router_state` (existing key-value table). On startup and then daily via `setInterval(checkIfWeekElapsed, 24 * 60 * 60 * 1000)`, check if a week has elapsed since last analysis. This survives restarts correctly.
 
-After applying a promotion, the analyzer calls a `reloadTrustRules` callback to update the event router's in-memory rules without restarting.
+**Trust.yaml rewriting:** `applyPromotion()` reads the YAML, updates the matching rule's `routing` field (preserving all other fields including `max_promotion`, `conditions`, etc.), writes to a temp file, renames atomically, then calls `eventRouter.reloadFromPath()`. The `reloadFromPath` method re-parses the YAML and synchronously replaces the in-memory rules array.
 
-### 4. Trust Matrix Extensions
+### 6. EventRouter.reloadFromPath
 
-Extend the YAML format to support:
-
-**`max_promotion` field** — safety ceiling per rule:
-```yaml
-rules:
-  - event_type: email
-    conditions:
-      sender_domain: [nih.gov]
-      importance_gte: 0.7
-    routing: notify
-    max_promotion: notify  # can never be auto-promoted past this
-```
-
-**`draft` routing** — new routing tier:
-```yaml
-  - event_type: email
-    conditions:
-      importance_gte: 0.5
-      importance_lt: 0.7
-    routing: draft  # creates approval request
-```
-
-The following type changes are needed in `src/event-router.ts`:
+New method on `EventRouter`:
 
 ```typescript
-// 1. Update routing union type (used by TrustRule, ClassifiedEvent, and applyTrustRules return)
-type RoutingLevel = 'autonomous' | 'notify' | 'draft' | 'escalate';
-
-// 2. TrustRule gains max_promotion
-interface TrustRule {
-  // existing fields...
-  routing: RoutingLevel;
-  max_promotion?: RoutingLevel;
+reloadFromPath(yamlPath: string): void {
+  const raw = fs.readFileSync(yamlPath, 'utf-8');
+  const parsed = YAML.parse(raw) as TrustConfig;
+  // Synchronous assignment — no race with in-flight route() calls
+  // in single-threaded Node.js
+  this.trustRules = parsed.rules;
+  this.defaultRouting = parsed.default_routing;
+  logger.info({ ruleCount: parsed.rules.length }, 'Trust rules reloaded');
 }
-
-// 3. ClassifiedEvent.routing must use the same union
-interface ClassifiedEvent extends RawEvent {
-  classification: Classification;
-  routing: RoutingLevel;  // was 'autonomous' | 'notify' | 'escalate'
-  trustRule?: string;
-}
-
-// 4. applyTrustRules return type must include 'draft'
-private applyTrustRules(...): RoutingLevel { ... }
-
-// 5. route() must also return the matched rule index for approval tracking
 ```
-
-Additionally, `applyTrustRules` must be modified to return BOTH the routing AND the matched rule identifier (index or stringified conditions) so the approval tracker can record which rule matched. This can be done by returning `{ routing: RoutingLevel; ruleKey: string | null }` instead of just the routing string.
-
-### 5. Approval Response Handler
-
-Intercepts Telegram messages that are responses to approval requests.
-
-**Detection:** When a message in the main group starts with a reply to a `[Draft #N]` message, or the text itself matches `/^(approve|reject|✓|✗)/i`:
-
-1. Extract the decision ID from the original message
-2. Parse user intent (approve/reject/edit)
-3. Call `approvalTracker.recordResponse()`
-4. If approved: publish the original classified event to the message bus
-5. Send confirmation: "Draft #42 approved" or "Draft #42 rejected"
-
-This handler runs in the existing message processing pipeline in `src/index.ts`, before the normal agent invocation path.
 
 ## File Structure
 
@@ -239,62 +299,42 @@ This handler runs in the existing message processing pipeline in `src/index.ts`,
 | File | Changes |
 |------|---------|
 | `src/db.ts` | Add trust_decisions table migration |
-| `src/event-router.ts` | Add RoutingLevel type, 'draft' routing, return matched rule from applyTrustRules, integrate approval tracker, add reloadTrustRules method |
+| `src/types.ts` | Add `replyToMessageId?: string` to `NewMessage` |
+| `src/channels/telegram.ts` | Extract reply_to_message ID; return sent message ID from sendMessage |
+| `src/event-router.ts` | Add RoutingLevel type, 'draft' routing, conditional publish, applyTrustRules returns ruleId, integrate approval tracker, add reloadFromPath method |
 | `src/event-router.test.ts` | Add draft routing tests |
-| `src/index.ts` | Initialize approval tracker, add response handler, schedule weekly analysis |
+| `src/index.ts` | Initialize approval tracker, add approval response handler before agent pipeline, schedule weekly promotion analysis |
 | `src/config.ts` | Add promotion thresholds config |
-| `config-examples/trust.yaml.example` | Add draft rules and max_promotion examples |
-
-## Data Flow
-
-### Draft Approval Flow
-```
-1. Event arrives → Router classifies → trust rule matches → routing: 'draft'
-2. Router calls approvalTracker.recordDecision() → returns decisionId: 42
-3. Router sends Telegram: "[Draft #42] Email from alice@nih.gov..."
-4. User replies: "approve" (or ✓)
-5. Message handler detects approval response → calls approvalTracker.recordResponse(42, 'approved')
-6. Handler publishes original event to message bus
-7. Handler sends: "Draft #42 approved"
-```
-
-### Promotion Flow
-```
-1. Weekly scheduled task runs promotionAnalyzer.analyze()
-2. Analyzer queries: "For rule X, 32 decisions in 30 days, 31 approved (96.9%)"
-3. Check safety floor: rule has max_promotion: 'notify' → blocked if currently 'notify'
-4. Not blocked → propose: "Promote from 'draft' to 'notify'?"
-5. Send Telegram: "Promotion proposal: Low-importance emails (importance < 0.3) ..."
-6. User responds "yes" → analyzer.applyPromotion() → updates trust.yaml → reloads rules
-```
+| `config-examples/trust.yaml.example` | Add rule IDs, draft rules, max_promotion examples |
 
 ## Error Handling
 
-- **User never responds to draft:** Pending approvals older than 24h are auto-expired with `user_response: 'expired'`. The event is NOT published (conservative default).
-- **Trust.yaml write failure:** Log error, keep existing rules. Never leave trust.yaml in a corrupted state (write to temp file, then rename).
-- **DB migration failure:** `addColumn` pattern already handles "column already exists" gracefully.
-- **Multiple pending approvals:** Each has a unique decision ID. User can respond to any in any order.
+- **User never responds to draft:** `expireStaleApprovals()` runs periodically (every hour), sets `user_response: 'expired'` for pending approvals older than 24h. Expired decisions are excluded from approval rate denominators.
+- **Trust.yaml write failure:** Log error, keep existing rules. Write to temp file then rename — never leave YAML in corrupted state.
+- **DB migration failure:** `CREATE TABLE IF NOT EXISTS` and `addColumn` patterns handle idempotency.
+- **Multiple pending approvals:** Each has a unique decision ID. User can respond in any order.
+- **Telegram sendMessage fails:** Log error, set `telegram_msg_id: null`. Reply detection falls back to text-prefix matching.
+- **Rule has no `id`:** Decision is logged with `trust_rule_id: null`. It cannot participate in promotion analysis.
 
 ## Testing Strategy
 
-- **Approval tracker:** SQLite in-memory DB, test CRUD operations, approval rate calculations, pending query.
-- **Promotion analyzer:** Mock approval tracker with known approval rates, verify proposal generation respects thresholds and safety floors, verify YAML update.
-- **Draft routing:** Mock Telegram send, verify approval message format, verify response handling.
-- **Integration:** End-to-end from event → draft → approve → bus publish.
+- **Approval tracker:** SQLite in-memory DB. Test CRUD, approval stats aggregate, pending query, expiry logic.
+- **Promotion analyzer:** Mock approval tracker with known rates. Verify promotion respects thresholds and max_promotion floors. Verify YAML update preserves all fields. Verify reloadFromPath is called.
+- **Draft routing:** Mock sendToMainGroup. Verify draft events are NOT published to bus. Verify approval response publishes to bus.
+- **Reply detection:** Verify Telegram reply-to matching. Verify text-prefix fallback with pending check. Verify false-positive rejection.
+- **Integration:** Event → draft → Telegram notification → reply → approve → bus publish.
 
 ## Known Limitations (Acceptable for Phase 3a)
 
-1. **No inline approval buttons.** Telegram Bot API supports inline keyboards, but implementing them requires Grammy API changes. Text-based approve/reject is simpler and sufficient. Inline buttons can be added later.
-
-2. **Weekly promotion analysis.** Not real-time. A rule could be promoted faster if patterns are obvious, but weekly cadence prevents over-fitting to short-term patterns.
-
-3. **Single-user approval.** Only the main group user can approve/reject. No multi-user consensus. Appropriate for a personal assistant.
-
-4. **No automatic demotion enforcement.** Demotions are proposed but not auto-applied — user must confirm. A safety measure to prevent the system from becoming more restrictive without consent.
+1. **No inline Telegram buttons.** Text-based approve/reject via replies. Inline keyboards can be added later.
+2. **No demotion.** Autonomous events have no approval signal. A `/flag-last` command for retroactive flagging is a future enhancement.
+3. **Weekly promotion cadence.** Prevents over-fitting to short-term patterns. Stored in router_state, survives restarts.
+4. **Single-user approval.** Appropriate for a personal assistant.
+5. **Channel.sendMessage return type change.** Breaking interface change — all channel implementations must update. Telegram returns message ID, others return undefined.
 
 ## Phase 3b Preview
 
 Phase 3b (Knowledge Graph) builds on approval tracking:
 - Classified events with approval history feed entity extraction
-- Trust decisions inform relationship strength (approved interactions → stronger connections)
-- Knowledge graph enables proactive scheduling (Phase 3c) by understanding who, what, and when
+- Trust decisions inform relationship strength
+- Knowledge graph enables proactive scheduling (Phase 3c)
