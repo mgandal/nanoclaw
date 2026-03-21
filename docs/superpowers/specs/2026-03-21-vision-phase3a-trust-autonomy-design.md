@@ -45,12 +45,14 @@ CREATE TABLE IF NOT EXISTS trust_decisions (
   trust_rule TEXT,                   -- which YAML rule matched (stringified conditions)
   classification_summary TEXT,       -- from Ollama classification
   classification_importance REAL,    -- 0-1
-  classification_urgency TEXT,       -- 'low' | 'medium' | 'high' | 'critical'
+  classification_urgency TEXT,       -- string label mapped from Classification.urgency (number → 'low'/'medium'/'high'/'critical')
   user_response TEXT,                -- 'approved' | 'rejected' | 'edited' | NULL (no response needed)
   user_feedback TEXT,                -- free-text reason for rejection/edit
   responded_at TEXT                  -- when user responded
 );
 ```
+
+**Note:** The Phase 2 `Classification.urgency` may be a string enum (`'low'|'medium'|'high'|'critical'`) or a number depending on Ollama's response parsing. The approval tracker stores it as TEXT — if it's a number, convert via thresholds (0-0.25: 'low', 0.25-0.5: 'medium', 0.5-0.75: 'high', 0.75+: 'critical'). Check the actual type in `event-router.ts` at implementation time.
 
 Events with routing `autonomous` are logged with `user_response: NULL` (no approval needed). Events with routing `draft` are logged with `user_response` filled in after the user responds.
 
@@ -94,7 +96,13 @@ Reply with:
   Or reply with modified text to edit
 ```
 
-**Response detection:** The approval message includes `[Draft #42]` prefix. When a user replies to a message containing this prefix, it's intercepted in the message loop and routed to the approval tracker instead of the normal agent pipeline. This uses the existing message processing flow — no new IPC mechanism needed.
+**Response detection:** Two mechanisms, in priority order:
+
+1. **Telegram reply detection (primary):** When a user replies to a specific message in Telegram, the reply includes the original message ID. If the original message contains `[Draft #N]`, extract `N` and treat the reply as an approval response.
+
+2. **Text prefix with pending check (fallback):** If a message matches `/^\[Draft #(\d+)\]\s*(approve|reject)/i` or `/^(approve|reject)\s+#?(\d+)/i`, AND the referenced decision ID exists in `getPendingApprovals()`, treat it as a response. The pending-approvals check prevents false positives from unrelated messages.
+
+Bare "approve" or "reject" without a decision ID is NOT intercepted — this avoids capturing unrelated conversation.
 
 ### 3. Promotion Analyzer (`src/promotion-analyzer.ts`)
 
@@ -145,7 +153,9 @@ interface PromotionProposal {
 }
 ```
 
-**Schedule:** Runs weekly via the existing task scheduler (a new scheduled task, not a separate cron).
+**Schedule:** Runs weekly via `setInterval` in `main()` (not the task scheduler, which requires a `group_folder` and `chat_jid` that don't apply to system-level tasks). The interval is `7 * 24 * 60 * 60 * 1000` ms. On startup, also runs once after a 60-second delay to catch up if the system was down during the scheduled window.
+
+After applying a promotion, the analyzer calls a `reloadTrustRules` callback to update the event router's in-memory rules without restarting.
 
 ### 4. Trust Matrix Extensions
 
@@ -171,14 +181,33 @@ rules:
     routing: draft  # creates approval request
 ```
 
-The existing `TrustRule` interface gains:
+The following type changes are needed in `src/event-router.ts`:
+
 ```typescript
+// 1. Update routing union type (used by TrustRule, ClassifiedEvent, and applyTrustRules return)
+type RoutingLevel = 'autonomous' | 'notify' | 'draft' | 'escalate';
+
+// 2. TrustRule gains max_promotion
 interface TrustRule {
   // existing fields...
-  routing: 'notify' | 'autonomous' | 'draft' | 'escalate';
-  max_promotion?: 'notify' | 'autonomous' | 'draft' | 'escalate';
+  routing: RoutingLevel;
+  max_promotion?: RoutingLevel;
 }
+
+// 3. ClassifiedEvent.routing must use the same union
+interface ClassifiedEvent extends RawEvent {
+  classification: Classification;
+  routing: RoutingLevel;  // was 'autonomous' | 'notify' | 'escalate'
+  trustRule?: string;
+}
+
+// 4. applyTrustRules return type must include 'draft'
+private applyTrustRules(...): RoutingLevel { ... }
+
+// 5. route() must also return the matched rule index for approval tracking
 ```
+
+Additionally, `applyTrustRules` must be modified to return BOTH the routing AND the matched rule identifier (index or stringified conditions) so the approval tracker can record which rule matched. This can be done by returning `{ routing: RoutingLevel; ruleKey: string | null }` instead of just the routing string.
 
 ### 5. Approval Response Handler
 
@@ -210,7 +239,7 @@ This handler runs in the existing message processing pipeline in `src/index.ts`,
 | File | Changes |
 |------|---------|
 | `src/db.ts` | Add trust_decisions table migration |
-| `src/event-router.ts` | Add 'draft' routing, integrate approval tracker |
+| `src/event-router.ts` | Add RoutingLevel type, 'draft' routing, return matched rule from applyTrustRules, integrate approval tracker, add reloadTrustRules method |
 | `src/event-router.test.ts` | Add draft routing tests |
 | `src/index.ts` | Initialize approval tracker, add response handler, schedule weekly analysis |
 | `src/config.ts` | Add promotion thresholds config |
