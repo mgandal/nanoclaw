@@ -203,16 +203,18 @@ async function sendTelegramMessage(
   chatId: string | number,
   text: string,
   options: { message_thread_id?: number } = {},
-): Promise<void> {
+): Promise<number | undefined> {
   try {
-    await api.sendMessage(chatId, text, {
+    const result = await api.sendMessage(chatId, text, {
       ...options,
       parse_mode: 'Markdown',
     });
+    return result.message_id;
   } catch (err) {
     // Fallback: send as plain text if Markdown parsing fails
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
-    await api.sendMessage(chatId, text, options);
+    const result = await api.sendMessage(chatId, text, options);
+    return result.message_id;
   }
 }
 
@@ -617,22 +619,27 @@ export class TelegramChannel implements Channel {
     });
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
+  async sendMessage(jid: string, text: string): Promise<string | undefined> {
     if (!this.bot) {
       logger.warn('Telegram bot not initialized');
-      return;
+      return undefined;
     }
 
     try {
       const numericId = jid.replace(/^tg:/, '');
+      let lastMessageId: number | undefined;
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text);
+        lastMessageId = await sendTelegramMessage(
+          this.bot.api,
+          numericId,
+          text,
+        );
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await sendTelegramMessage(
+          lastMessageId = await sendTelegramMessage(
             this.bot.api,
             numericId,
             text.slice(i, i + MAX_LENGTH),
@@ -640,8 +647,10 @@ export class TelegramChannel implements Channel {
         }
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
+      return lastMessageId?.toString();
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+      return undefined;
     }
   }
 

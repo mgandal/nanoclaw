@@ -977,10 +977,11 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) {
         logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
+        return undefined;
       }
       const text = formatOutbound(rawText);
-      if (text) await channel.sendMessage(jid, text);
+      if (text) return channel.sendMessage(jid, text);
+      return undefined;
     },
   });
   startIpcWatcher({

@@ -38,7 +38,7 @@ vi.mock('grammy', () => ({
     errorHandler: Handler | null = null;
 
     api = {
-      sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -771,10 +771,8 @@ describe('TelegramChannel', () => {
         new Error('Network error'),
       );
 
-      // Should not throw
-      await expect(
-        channel.sendMessage('tg:100200300', 'Will fail'),
-      ).resolves.toBeUndefined();
+      // Should not throw — Markdown fails but plain-text fallback succeeds
+      await channel.sendMessage('tg:100200300', 'Will fail');
     });
 
     it('does nothing when bot is not initialized', async () => {
