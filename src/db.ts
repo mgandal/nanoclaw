@@ -86,6 +86,24 @@ function createSchema(database: Database.Database): void {
     );
   `);
 
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS trust_decisions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      event_source TEXT NOT NULL,
+      routing TEXT NOT NULL,
+      trust_rule_id TEXT,
+      classification_summary TEXT,
+      classification_importance REAL,
+      classification_urgency TEXT,
+      user_response TEXT,
+      user_feedback TEXT,
+      responded_at TEXT,
+      telegram_msg_id TEXT
+    );
+  `);
+
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
   const addColumn = (sql: string): boolean => {
     try {
