@@ -96,10 +96,10 @@ import YAML from 'yaml';
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
 
-let lastTimestamp = '';
+let lastSeq = 0;
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
-let lastAgentTimestamp: Record<string, string> = {};
+let lastAgentSeq: Record<string, number> = {};
 let messageLoopRunning = false;
 let healthMonitor: HealthMonitor;
 
@@ -107,13 +107,13 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 
 function loadState(): void {
-  lastTimestamp = getRouterState('last_timestamp') || '';
-  const agentTs = getRouterState('last_agent_timestamp');
+  lastSeq = parseInt(getRouterState('last_seq') || '0', 10);
+  const agentSeqStr = getRouterState('last_agent_seq');
   try {
-    lastAgentTimestamp = agentTs ? JSON.parse(agentTs) : {};
+    lastAgentSeq = agentSeqStr ? JSON.parse(agentSeqStr) : {};
   } catch {
-    logger.warn('Corrupted last_agent_timestamp in DB, resetting');
-    lastAgentTimestamp = {};
+    logger.warn('Corrupted last_agent_seq in DB, resetting');
+    lastAgentSeq = {};
   }
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
@@ -124,8 +124,8 @@ function loadState(): void {
 }
 
 function saveState(): void {
-  setRouterState('last_timestamp', lastTimestamp);
-  setRouterState('last_agent_timestamp', JSON.stringify(lastAgentTimestamp));
+  setRouterState('last_seq', String(lastSeq));
+  setRouterState('last_agent_seq', JSON.stringify(lastAgentSeq));
 }
 
 function registerGroup(jid: string, group: RegisteredGroup): void {
@@ -193,10 +193,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const isMainGroup = group.isMain === true;
 
-  const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
+  const sinceSeq = lastAgentSeq[chatJid] || 0;
   const missedMessages = getMessagesSince(
     chatJid,
-    sinceTimestamp,
+    sinceSeq,
     ASSISTANT_NAME,
   );
 
@@ -212,7 +212,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (isAllowed) {
       delete sessions[group.folder];
       deleteSession(group.folder);
-      lastAgentTimestamp[chatJid] = newCmdMsg.timestamp;
+      lastAgentSeq[chatJid] = newCmdMsg.seq;
       saveState();
       await channel.sendMessage(chatJid, 'Session cleared. Starting fresh.');
       logger.info({ group: group.name }, 'Session reset via /new');
@@ -234,8 +234,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       runAgent: (prompt, onOutput) =>
         runAgent(group, prompt, chatJid, onOutput),
       closeStdin: () => queue.closeStdin(chatJid),
-      advanceCursor: (ts) => {
-        lastAgentTimestamp[chatJid] = ts;
+      advanceCursor: (seq) => {
+        lastAgentSeq[chatJid] = seq;
         saveState();
       },
       formatMessages,
@@ -272,9 +272,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
-  const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
+  const previousCursor = lastAgentSeq[chatJid] || 0;
+  lastAgentSeq[chatJid] =
+    missedMessages[missedMessages.length - 1].seq;
   saveState();
 
   logger.info(
@@ -341,7 +341,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       return true;
     }
     // Roll back cursor so retries can re-process these messages
-    lastAgentTimestamp[chatJid] = previousCursor;
+    lastAgentSeq[chatJid] = previousCursor;
     saveState();
     logger.warn(
       { group: group.name },
@@ -500,9 +500,9 @@ async function startMessageLoop(): Promise<void> {
   while (true) {
     try {
       const jids = Object.keys(registeredGroups);
-      const { messages, newTimestamp } = getNewMessages(
+      const { messages, newSeq } = getNewMessages(
         jids,
-        lastTimestamp,
+        lastSeq,
         ASSISTANT_NAME,
       );
 
@@ -510,7 +510,7 @@ async function startMessageLoop(): Promise<void> {
         logger.info({ count: messages.length }, 'New messages');
 
         // Advance the "seen" cursor for all messages immediately
-        lastTimestamp = newTimestamp;
+        lastSeq = newSeq;
         saveState();
 
         // Deduplicate by group
@@ -578,11 +578,11 @@ async function startMessageLoop(): Promise<void> {
             if (!hasTrigger) continue;
           }
 
-          // Pull all messages since lastAgentTimestamp so non-trigger
+          // Pull all messages since lastAgentSeq so non-trigger
           // context that accumulated between triggers is included.
           const allPending = getMessagesSince(
             chatJid,
-            lastAgentTimestamp[chatJid] || '',
+            lastAgentSeq[chatJid] || 0,
             ASSISTANT_NAME,
           );
           const messagesToSend =
@@ -617,8 +617,8 @@ async function startMessageLoop(): Promise<void> {
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
+            lastAgentSeq[chatJid] =
+              messagesToSend[messagesToSend.length - 1].seq;
             saveState();
             // Update session last_used so expiry timer resets on active use
             const grp = registeredGroups[chatJid];
@@ -646,12 +646,12 @@ async function startMessageLoop(): Promise<void> {
 
 /**
  * Startup recovery: check for unprocessed messages in registered groups.
- * Handles crash between advancing lastTimestamp and processing messages.
+ * Handles crash between advancing lastSeq and processing messages.
  */
 function recoverPendingMessages(): void {
   for (const [chatJid, group] of Object.entries(registeredGroups)) {
-    const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
-    const pending = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
+    const sinceSeq = lastAgentSeq[chatJid] || 0;
+    const pending = getMessagesSince(chatJid, sinceSeq, ASSISTANT_NAME);
     if (pending.length > 0) {
       logger.info(
         { group: group.name, pendingCount: pending.length },
@@ -850,8 +850,10 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    // 1. Stop accepting new work (signals containers to wind down)
+    await queue.shutdown(15000);
+    // 2. Now close proxy and channels (containers are done)
     proxyServer.close();
-    await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
   };

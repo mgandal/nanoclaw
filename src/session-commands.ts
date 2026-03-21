@@ -42,7 +42,7 @@ export interface SessionCommandDeps {
     onOutput: (result: AgentResult) => Promise<void>,
   ) => Promise<'success' | 'error'>;
   closeStdin: () => void;
-  advanceCursor: (timestamp: string) => void;
+  advanceCursor: (seq: number) => void;
   formatMessages: (msgs: NewMessage[], timezone: string) => string;
   /** Whether the denied sender would normally be allowed to interact (for denial messages). */
   canSenderInteract: (msg: NewMessage) => boolean;
@@ -61,7 +61,7 @@ function resultToText(result: string | object | null | undefined): string {
  * success=false means the caller should retry (cursor was not advanced).
  */
 export async function handleSessionCommand(opts: {
-  missedMessages: NewMessage[];
+  missedMessages: (NewMessage & { seq: number })[];
   isMainGroup: boolean;
   groupName: string;
   triggerPattern: RegExp;
@@ -94,7 +94,7 @@ export async function handleSessionCommand(opts: {
     if (deps.canSenderInteract(cmdMsg)) {
       await deps.sendMessage('Session commands require admin access.');
     }
-    deps.advanceCursor(cmdMsg.timestamp);
+    deps.advanceCursor(cmdMsg.seq);
     return { handled: true, success: true };
   }
 
@@ -135,7 +135,7 @@ export async function handleSessionCommand(opts: {
       if (preOutputSent) {
         // Output was already sent — don't retry or it will duplicate.
         // Advance cursor past pre-compact messages, leave command pending.
-        deps.advanceCursor(preCompactMsgs[preCompactMsgs.length - 1].timestamp);
+        deps.advanceCursor(preCompactMsgs[preCompactMsgs.length - 1].seq);
         return { handled: true, success: true };
       }
       return { handled: true, success: false };
@@ -153,7 +153,7 @@ export async function handleSessionCommand(opts: {
   });
 
   // Advance cursor to the command — messages AFTER it remain pending for next poll.
-  deps.advanceCursor(cmdMsg.timestamp);
+  deps.advanceCursor(cmdMsg.seq);
   await deps.setTyping(false);
 
   if (cmdOutput === 'error' || hadCmdError) {

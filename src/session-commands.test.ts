@@ -61,8 +61,8 @@ describe('isSessionCommandAllowed', () => {
 
 function makeMsg(
   content: string,
-  overrides: Partial<NewMessage> = {},
-): NewMessage {
+  overrides: Partial<NewMessage & { seq: number }> = {},
+): NewMessage & { seq: number } {
   return {
     id: 'msg-1',
     chat_jid: 'group@test',
@@ -70,6 +70,7 @@ function makeMsg(
     sender_name: 'User',
     content,
     timestamp: '100',
+    seq: 1,
     ...overrides,
   };
 }
@@ -120,7 +121,7 @@ describe('handleSessionCommand', () => {
       '/compact',
       expect.any(Function),
     );
-    expect(deps.advanceCursor).toHaveBeenCalledWith('100');
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
   });
 
   it('sends denial to interactable sender in non-main group', async () => {
@@ -138,7 +139,7 @@ describe('handleSessionCommand', () => {
       'Session commands require admin access.',
     );
     expect(deps.runAgent).not.toHaveBeenCalled();
-    expect(deps.advanceCursor).toHaveBeenCalledWith('100');
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
   });
 
   it('silently consumes denied command when sender cannot interact', async () => {
@@ -155,14 +156,14 @@ describe('handleSessionCommand', () => {
     });
     expect(result).toEqual({ handled: true, success: true });
     expect(deps.sendMessage).not.toHaveBeenCalled();
-    expect(deps.advanceCursor).toHaveBeenCalledWith('100');
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
   });
 
   it('processes pre-compact messages before /compact', async () => {
     const deps = makeDeps();
     const msgs = [
-      makeMsg('summarize this', { timestamp: '99' }),
-      makeMsg('/compact', { timestamp: '100' }),
+      makeMsg('summarize this', { timestamp: '99', seq: 1 }),
+      makeMsg('/compact', { timestamp: '100', seq: 2 }),
     ];
     const result = await handleSessionCommand({
       missedMessages: msgs,
@@ -228,8 +229,8 @@ describe('handleSessionCommand', () => {
   it('returns success:false on pre-compact failure with no output', async () => {
     const deps = makeDeps({ runAgent: vi.fn().mockResolvedValue('error') });
     const msgs = [
-      makeMsg('summarize this', { timestamp: '99' }),
-      makeMsg('/compact', { timestamp: '100' }),
+      makeMsg('summarize this', { timestamp: '99', seq: 1 }),
+      makeMsg('/compact', { timestamp: '100', seq: 2 }),
     ];
     const result = await handleSessionCommand({
       missedMessages: msgs,
