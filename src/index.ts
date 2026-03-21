@@ -25,6 +25,9 @@ import {
   TIMEZONE,
   TRIGGER_PATTERN,
   TRUST_MATRIX_PATH,
+  PROMOTION_MIN_DECISIONS,
+  PROMOTION_THRESHOLD,
+  APPROVAL_EXPIRY_HOURS,
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
@@ -48,6 +51,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getDb,
   getMessagesSince,
   getNewMessages,
   getRegisteredGroup,
@@ -86,9 +90,11 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { ApprovalTracker } from './approval-tracker.js';
 import { HealthMonitor } from './health-monitor.js';
 import { MessageBus } from './message-bus.js';
 import { EventRouter, TrustConfig } from './event-router.js';
+import { PromotionAnalyzer } from './promotion-analyzer.js';
 import { GmailWatcher } from './watchers/gmail-watcher.js';
 import { CalendarWatcher } from './watchers/calendar-watcher.js';
 import YAML from 'yaml';
@@ -768,6 +774,10 @@ async function main(): Promise<void> {
   // Inter-agent message bus
   const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
 
+  // Phase 3a: approval tracker and promotion analyzer (hoisted for onMessage access)
+  let approvalTracker: ApprovalTracker | undefined;
+  let promotionAnalyzer: PromotionAnalyzer | undefined;
+
   // Event router and watchers (Phase 2)
   if (EVENT_ROUTER_ENABLED) {
     // Load trust matrix
@@ -785,6 +795,22 @@ async function main(): Promise<void> {
       logger.info('No trust matrix found, using default routing (notify)');
     }
 
+    // Approval tracker (Phase 3a) — uses main DB
+    const tracker = new ApprovalTracker(getDb());
+    approvalTracker = tracker;
+
+    // Helper: send a message to the main Telegram group
+    const sendToMainGroup = async (
+      text: string,
+    ): Promise<string | undefined> => {
+      const mainJid = Object.keys(registeredGroups).find(
+        (jid) => registeredGroups[jid]?.isMain,
+      );
+      if (!mainJid) return undefined;
+      const channel = findChannel(channels, mainJid);
+      return channel?.sendMessage(mainJid, text);
+    };
+
     const eventRouter = new EventRouter({
       ollamaHost: OLLAMA_HOST,
       ollamaModel: OLLAMA_MODEL,
@@ -792,6 +818,35 @@ async function main(): Promise<void> {
       defaultRouting: trustRules.default_routing,
       messageBus,
       healthMonitor,
+      approvalTracker: {
+        recordDecision: (classified) => {
+          // Adapter: map ClassifiedEvent shape to TrustDecision shape
+          return tracker.recordDecision({
+            eventType:
+              classified.event?.type ?? classified.eventType ?? 'unknown',
+            eventSource:
+              classified.event?.id ?? classified.eventSource ?? 'unknown',
+            routing: classified.routing ?? 'notify',
+            trustRuleId: classified.trustRuleId ?? null,
+            classificationSummary:
+              classified.classification?.summary ??
+              classified.classificationSummary ??
+              '',
+            classificationImportance:
+              classified.classification?.importance ??
+              classified.classificationImportance ??
+              0,
+            classificationUrgency: String(
+              classified.classification?.urgency ??
+                classified.classificationUrgency ??
+                '',
+            ),
+          });
+        },
+        setTelegramMsgId: (id: number, msgId: string) =>
+          tracker.setTelegramMsgId(id, msgId),
+      },
+      sendToMainGroup,
       onEscalate: async (event) => {
         const mainJid = Object.keys(registeredGroups).find(
           (jid) => registeredGroups[jid]?.isMain,
@@ -805,6 +860,47 @@ async function main(): Promise<void> {
         }
       },
     });
+
+    // Promotion analyzer (Phase 3a)
+    const analyzer = new PromotionAnalyzer(
+      tracker,
+      TRUST_MATRIX_PATH,
+      eventRouter,
+      sendToMainGroup,
+      PROMOTION_MIN_DECISIONS,
+      PROMOTION_THRESHOLD,
+    );
+    promotionAnalyzer = analyzer;
+
+    // Expire stale draft approvals hourly
+    setInterval(
+      () => tracker.expireStaleApprovals(APPROVAL_EXPIRY_HOURS),
+      60 * 60 * 1000,
+    );
+
+    // Check daily if weekly promotion analysis is due
+    const checkPromotionAnalysis = async () => {
+      const lastRun = getRouterState('last_promotion_analysis');
+      const weekMs = 7 * 24 * 60 * 60 * 1000;
+      if (!lastRun || Date.now() - new Date(lastRun).getTime() > weekMs) {
+        await analyzer.analyze();
+        setRouterState('last_promotion_analysis', new Date().toISOString());
+      }
+    };
+    setTimeout(
+      () =>
+        checkPromotionAnalysis().catch((err) =>
+          logger.error({ err }, 'Promotion analysis failed'),
+        ),
+      60_000,
+    );
+    setInterval(
+      () =>
+        checkPromotionAnalysis().catch((err) =>
+          logger.error({ err }, 'Promotion analysis failed'),
+        ),
+      24 * 60 * 60 * 1000,
+    );
 
     const watcherStateDir = path.join(DATA_DIR, 'watchers');
 
@@ -928,6 +1024,53 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Approval response detection (Phase 3a)
+      if (
+        approvalTracker &&
+        registeredGroups[chatJid]?.isMain &&
+        msg.replyToMessageId
+      ) {
+        const decision = approvalTracker.findByTelegramMsgId(
+          msg.replyToMessageId,
+        );
+        if (decision && !decision.user_response) {
+          const text = msg.content.trim().toLowerCase();
+          const decisionId = decision.id as number;
+          if (['approve', 'yes', 'y', '\u2713'].includes(text)) {
+            approvalTracker.recordResponse(decisionId, 'approved');
+            if (decision.event_type === 'promotion' && promotionAnalyzer) {
+              // Apply the promotion
+              promotionAnalyzer.applyPromotion({
+                ruleId: decision.trust_rule_id as string,
+                currentRouting: 'draft' as any,
+                proposedRouting: 'notify' as any,
+                evidence: { total: 0, approved: 0, rate: 0 },
+                blocked: false,
+              });
+            }
+            // Publish held event to bus if not a promotion
+            if (
+              decision.event_type !== 'promotion' &&
+              decision.classification_summary
+            ) {
+              messageBus.publish({
+                from: decision.event_source as string,
+                topic: 'classified_event',
+                finding: decision.classification_summary as string,
+                priority: 'medium',
+              });
+            }
+            const ch = findChannel(channels, chatJid);
+            ch?.sendMessage(chatJid, `Draft #${decisionId} approved`);
+          } else if (['reject', 'no', 'n', '\u2717'].includes(text)) {
+            approvalTracker.recordResponse(decisionId, 'rejected', msg.content);
+            const ch = findChannel(channels, chatJid);
+            ch?.sendMessage(chatJid, `Draft #${decisionId} rejected`);
+          }
+          return; // Don't process as normal message
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (

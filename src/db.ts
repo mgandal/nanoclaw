@@ -157,6 +157,13 @@ function createSchema(database: Database.Database): void {
   }
 }
 
+/** Return the module-level database handle. Must call initDatabase() first. */
+export function getDb(): Database.Database {
+  if (!db)
+    throw new Error('Database not initialized — call initDatabase() first');
+  return db;
+}
+
 export function initDatabase(): void {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
