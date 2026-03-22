@@ -11,7 +11,7 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-import { startCredentialProxy } from './credential-proxy.js';
+import { startCredentialProxy, proxyToken } from './credential-proxy.js';
 
 function makeRequest(
   port: number,
@@ -85,7 +85,7 @@ describe('credential-proxy', () => {
       proxyPort,
       {
         method: 'POST',
-        path: '/v1/messages',
+        path: `/${proxyToken}/v1/messages`,
         headers: {
           'content-type': 'application/json',
           'x-api-key': 'placeholder',
@@ -106,7 +106,7 @@ describe('credential-proxy', () => {
       proxyPort,
       {
         method: 'POST',
-        path: '/api/oauth/claude_cli/create_api_key',
+        path: `/${proxyToken}/api/oauth/claude_cli/create_api_key`,
         headers: {
           'content-type': 'application/json',
           authorization: 'Bearer placeholder',
@@ -130,7 +130,7 @@ describe('credential-proxy', () => {
       proxyPort,
       {
         method: 'POST',
-        path: '/v1/messages',
+        path: `/${proxyToken}/v1/messages`,
         headers: {
           'content-type': 'application/json',
           'x-api-key': 'temp-key-from-exchange',
@@ -150,7 +150,7 @@ describe('credential-proxy', () => {
       proxyPort,
       {
         method: 'POST',
-        path: '/v1/messages',
+        path: `/${proxyToken}/v1/messages`,
         headers: {
           'content-type': 'application/json',
           connection: 'keep-alive',
@@ -180,7 +180,7 @@ describe('credential-proxy', () => {
       proxyPort,
       {
         method: 'POST',
-        path: '/v1/messages',
+        path: `/${proxyToken}/v1/messages`,
         headers: { 'content-type': 'application/json' },
       },
       '{}',

@@ -323,7 +323,7 @@ export function getNewMessages(
         AND content != '' AND content IS NOT NULL
       ORDER BY rowid DESC
       LIMIT ?
-    ) ORDER BY rowid
+    ) ORDER BY seq
   `;
 
   const rows = db
@@ -359,7 +359,7 @@ export function getMessagesSince(
         AND content != '' AND content IS NOT NULL
       ORDER BY rowid DESC
       LIMIT ?
-    ) ORDER BY rowid
+    ) ORDER BY seq
   `;
   return db
     .prepare(sql)
