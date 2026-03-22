@@ -448,18 +448,25 @@ async function runQuery(
             headers: { Accept: 'application/json, text/event-stream' },
           },
         } : {}),
-        ...(process.env.SIMPLEMEM_URL ? {
-          simplemem: {
-            type: 'http' as const,
-            url: process.env.SIMPLEMEM_URL,
-            headers: {
-              Accept: 'application/json, text/event-stream',
-              ...(process.env.SIMPLEMEM_TOKEN ? {
-                Authorization: `Bearer ${process.env.SIMPLEMEM_TOKEN}`,
-              } : {}),
-            },
-          },
-        } : {}),
+        ...(process.env.SIMPLEMEM_URL ? (() => {
+          try {
+            const smUrl = new URL(process.env.SIMPLEMEM_URL);
+            const smToken = smUrl.searchParams.get('token');
+            smUrl.searchParams.delete('token');
+            return {
+              simplemem: {
+                type: 'http' as const,
+                url: smUrl.toString(),
+                headers: {
+                  Accept: 'application/json, text/event-stream',
+                  ...(smToken ? { Authorization: `Bearer ${smToken}` } : {}),
+                },
+              },
+            };
+          } catch {
+            return {};
+          }
+        })() : {}),
         ...(process.env.APPLE_NOTES_URL ? {
           apple_notes: {
             type: 'http' as const,

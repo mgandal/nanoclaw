@@ -740,61 +740,73 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
 // --- JSON migration ---
 
 function migrateJsonState(): void {
-  const migrateFile = (filename: string) => {
+  const filesToRename: { from: string; to: string }[] = [];
+
+  const readJsonFile = (filename: string) => {
     const filePath = path.join(DATA_DIR, filename);
     if (!fs.existsSync(filePath)) return null;
     try {
       const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      fs.renameSync(filePath, `${filePath}.migrated`);
+      filesToRename.push({ from: filePath, to: `${filePath}.migrated` });
       return data;
     } catch {
       return null;
     }
   };
 
-  // Migrate router_state.json
-  const routerState = migrateFile('router_state.json') as {
+  const routerState = readJsonFile('router_state.json') as {
     last_timestamp?: string;
     last_agent_timestamp?: Record<string, string>;
   } | null;
-  if (routerState) {
-    if (routerState.last_timestamp) {
-      setRouterState('last_timestamp', routerState.last_timestamp);
-    }
-    if (routerState.last_agent_timestamp) {
-      setRouterState(
-        'last_agent_timestamp',
-        JSON.stringify(routerState.last_agent_timestamp),
-      );
-    }
-  }
-
-  // Migrate sessions.json
-  const sessions = migrateFile('sessions.json') as Record<
+  const sessions = readJsonFile('sessions.json') as Record<
     string,
     string
   > | null;
-  if (sessions) {
-    for (const [folder, sessionId] of Object.entries(sessions)) {
-      setSession(folder, sessionId);
-    }
-  }
-
-  // Migrate registered_groups.json
-  const groups = migrateFile('registered_groups.json') as Record<
+  const groups = readJsonFile('registered_groups.json') as Record<
     string,
     RegisteredGroup
   > | null;
-  if (groups) {
-    for (const [jid, group] of Object.entries(groups)) {
-      try {
-        setRegisteredGroup(jid, group);
-      } catch (err) {
-        logger.warn(
-          { jid, folder: group.folder, err },
-          'Skipping migrated registered group with invalid folder',
+
+  if (!routerState && !sessions && !groups) return;
+
+  // All DB writes in a single transaction — files only renamed after commit
+  const migrate = db.transaction(() => {
+    if (routerState) {
+      if (routerState.last_timestamp) {
+        setRouterState('last_timestamp', routerState.last_timestamp);
+      }
+      if (routerState.last_agent_timestamp) {
+        setRouterState(
+          'last_agent_timestamp',
+          JSON.stringify(routerState.last_agent_timestamp),
         );
       }
     }
+
+    if (sessions) {
+      for (const [folder, sessionId] of Object.entries(sessions)) {
+        setSession(folder, sessionId);
+      }
+    }
+
+    if (groups) {
+      for (const [jid, group] of Object.entries(groups)) {
+        try {
+          setRegisteredGroup(jid, group);
+        } catch (err) {
+          logger.warn(
+            { jid, folder: group.folder, err },
+            'Skipping migrated registered group with invalid folder',
+          );
+        }
+      }
+    }
+  });
+
+  migrate();
+
+  // Only rename source files after DB commit succeeded
+  for (const { from, to } of filesToRename) {
+    fs.renameSync(from, to);
   }
 }

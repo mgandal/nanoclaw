@@ -139,9 +139,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
               continue; // another poll cycle already claimed it
             }
             try {
-              const data = JSON.parse(
-                fs.readFileSync(processingPath, 'utf-8'),
-              );
+              const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
@@ -221,9 +219,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
               continue;
             }
             try {
-              const data = JSON.parse(
-                fs.readFileSync(processingPath, 'utf-8'),
-              );
+              const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
               // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain, deps);
               fs.unlinkSync(processingPath);
