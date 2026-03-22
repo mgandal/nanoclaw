@@ -140,6 +140,70 @@ function getSessionSummary(sessionId: string, transcriptPath: string): string | 
 }
 
 /**
+ * Build the mcpServers config imperatively to avoid TS union-type issues
+ * with conditional spread patterns.
+ */
+function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput): Record<string, any> {
+  const servers: Record<string, any> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    ollama: {
+      command: 'node',
+      args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
+    },
+  };
+
+  if (process.env.QMD_URL) {
+    servers.qmd = {
+      type: 'http',
+      url: process.env.QMD_URL,
+      headers: { Accept: 'application/json, text/event-stream' },
+    };
+  }
+
+  if (process.env.SIMPLEMEM_URL) {
+    try {
+      const smUrl = new URL(process.env.SIMPLEMEM_URL);
+      const smToken = smUrl.searchParams.get('token');
+      smUrl.searchParams.delete('token');
+      servers.simplemem = {
+        type: 'http',
+        url: smUrl.toString(),
+        headers: {
+          Accept: 'application/json, text/event-stream',
+          ...(smToken ? { Authorization: `Bearer ${smToken}` } : {}),
+        },
+      };
+    } catch { /* invalid URL, skip */ }
+  }
+
+  if (process.env.APPLE_NOTES_URL) {
+    servers.apple_notes = {
+      type: 'http',
+      url: process.env.APPLE_NOTES_URL,
+      headers: { Accept: 'application/json, text/event-stream' },
+    };
+  }
+
+  if (process.env.TODOIST_URL) {
+    servers.todoist = {
+      type: 'http',
+      url: process.env.TODOIST_URL,
+      headers: { Accept: 'application/json, text/event-stream' },
+    };
+  }
+
+  return servers;
+}
+
+/**
  * Archive the full transcript to conversations/ before compaction.
  */
 function createPreCompactHook(assistantName?: string): HookCallback {
@@ -431,62 +495,7 @@ async function runQuery(
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-        ...(process.env.QMD_URL ? {
-          qmd: {
-            type: 'http' as const,
-            url: process.env.QMD_URL,
-            headers: { Accept: 'application/json, text/event-stream' },
-          },
-        } : {}),
-        ...((() => {
-          if (!process.env.SIMPLEMEM_URL) return {};
-          try {
-            const smUrl = new URL(process.env.SIMPLEMEM_URL);
-            const smToken = smUrl.searchParams.get('token');
-            smUrl.searchParams.delete('token');
-            return {
-              simplemem: {
-                type: 'http' as const,
-                url: smUrl.toString(),
-                headers: {
-                  Accept: 'application/json, text/event-stream',
-                  ...(smToken ? { Authorization: `Bearer ${smToken}` } : {}),
-                },
-              },
-            };
-          } catch {
-            return {};
-          }
-        })()),
-        ...(process.env.APPLE_NOTES_URL ? {
-          apple_notes: {
-            type: 'http' as const,
-            url: process.env.APPLE_NOTES_URL,
-            headers: { Accept: 'application/json, text/event-stream' },
-          },
-        } : {}),
-        ollama: {
-          command: 'node',
-          args: [path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js')],
-        },
-        ...(process.env.TODOIST_URL ? {
-          todoist: {
-            type: 'http' as const,
-            url: process.env.TODOIST_URL,
-            headers: { Accept: 'application/json, text/event-stream' },
-          },
-        } : {}),
-      },
+      mcpServers: buildMcpServers(mcpServerPath, containerInput),
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
       },
