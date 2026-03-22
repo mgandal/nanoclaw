@@ -47,15 +47,9 @@ if [ $EC -ne 0 ]; then
     ERRORS=$((ERRORS + 1))
 fi
 
-# --- Step 3: Calendar sync (Outlook → MJG-outlook + MJG-sync) ---
+# --- Step 3: Calendar sync (DISABLED — clear-and-rewrite triggers repeated attendee notifications) ---
 echo ""
-echo "[3/4] Calendar sync..."
-bash "$SCRIPT_DIR/calendar-sync.sh" 2>&1
-EC=$?
-if [ $EC -ne 0 ]; then
-    echo "[3/4] WARNING: Calendar sync had errors (exit $EC)"
-    ERRORS=$((ERRORS + 1))
-fi
+echo "[3/4] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
 
 # --- Step 4: SimpleMem email ingest ---
 echo ""

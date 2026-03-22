@@ -37,7 +37,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
-    /^(SIMPLEMEM_TOKEN|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN)=/i;
+    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|SIMPLEMEM_URL)=/i;
   return args.map((arg, i) => {
     if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
       const eqIdx = arg.indexOf('=');
@@ -252,23 +252,22 @@ function buildContainerArgs(
   args.push('-e', `QMD_URL=${qmdUrl}`);
 
   // Pass SimpleMem memory URL if configured (read from .env since launchd doesn't set it)
-  // Parse the URL to extract token and rewrite to Streamable HTTP endpoint (/mcp)
+  // Rewrite host to gateway IP; keep token in URL query param (not a separate env var)
   const simpleMemEnv = readEnvFile(['SIMPLEMEM_URL']);
   const simpleMemUrl = process.env.SIMPLEMEM_URL || simpleMemEnv.SIMPLEMEM_URL;
   if (simpleMemUrl) {
     try {
       const parsed = new URL(simpleMemUrl);
-      const token = parsed.searchParams.get('token') || '';
-      // Rewrite to Streamable HTTP endpoint: http://host:port/mcp
       const hostname =
         parsed.hostname === 'localhost'
           ? CONTAINER_HOST_GATEWAY
           : parsed.hostname;
-      const baseUrl = `${parsed.protocol}//${hostname}:${parsed.port}/mcp`;
-      args.push('-e', `SIMPLEMEM_URL=${baseUrl}`);
-      if (token) {
-        args.push('-e', `SIMPLEMEM_TOKEN=${token}`);
+      // Rebuild URL with /mcp path, preserving query params (includes auth token)
+      const containerUrl = new URL(`${parsed.protocol}//${hostname}:${parsed.port}/mcp`);
+      for (const [k, v] of parsed.searchParams) {
+        containerUrl.searchParams.set(k, v);
       }
+      args.push('-e', `SIMPLEMEM_URL=${containerUrl.toString()}`);
     } catch {
       logger.warn(
         { simpleMemUrl },
