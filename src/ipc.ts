@@ -42,6 +42,43 @@ export interface IpcDeps {
 
 let ipcWatcherRunning = false;
 
+function cleanupStaleProcessing(ipcBaseDir: string): void {
+  try {
+    const errorDir = path.join(ipcBaseDir, 'errors');
+    for (const groupDir of fs.readdirSync(ipcBaseDir)) {
+      const groupPath = path.join(ipcBaseDir, groupDir);
+      if (!fs.statSync(groupPath).isDirectory() || groupDir === 'errors')
+        continue;
+      for (const subDir of ['messages', 'tasks']) {
+        const dirPath = path.join(groupPath, subDir);
+        if (!fs.existsSync(dirPath)) continue;
+        const stale = fs
+          .readdirSync(dirPath)
+          .filter((f) => f.endsWith('.processing'));
+        for (const file of stale) {
+          fs.mkdirSync(errorDir, { recursive: true });
+          try {
+            fs.renameSync(
+              path.join(dirPath, file),
+              path.join(errorDir, `${groupDir}-stale-${file}`),
+            );
+          } catch {
+            // already moved or gone
+          }
+        }
+        if (stale.length > 0) {
+          logger.warn(
+            { group: groupDir, subDir, count: stale.length },
+            'Moved stale .processing IPC files to errors/',
+          );
+        }
+      }
+    }
+  } catch {
+    // Non-fatal: best-effort cleanup
+  }
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');
@@ -51,6 +88,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
 
   const ipcBaseDir = path.join(DATA_DIR, 'ipc');
   fs.mkdirSync(ipcBaseDir, { recursive: true });
+
+  // Clean up stale .processing files from previous crashes.
+  // These represent IPC that may or may not have been executed,
+  // so we move them to errors/ for manual inspection rather than replaying.
+  cleanupStaleProcessing(ipcBaseDir);
 
   const processIpcFiles = async () => {
     // Scan all group IPC directories (identity determined by directory)
@@ -87,8 +129,19 @@ export function startIpcWatcher(deps: IpcDeps): void {
             .filter((f) => f.endsWith('.json'));
           for (const file of messageFiles) {
             const filePath = path.join(messagesDir, file);
+            // Claim the file by renaming to .processing before executing
+            // side effects. If we crash after send but before cleanup,
+            // the .processing file won't be re-read on next poll.
+            const processingPath = `${filePath}.processing`;
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.renameSync(filePath, processingPath);
+            } catch {
+              continue; // another poll cycle already claimed it
+            }
+            try {
+              const data = JSON.parse(
+                fs.readFileSync(processingPath, 'utf-8'),
+              );
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
@@ -127,7 +180,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   );
                 }
               }
-              fs.unlinkSync(filePath);
+              fs.unlinkSync(processingPath);
             } catch (err) {
               logger.error(
                 { file, sourceGroup, err },
@@ -135,10 +188,14 @@ export function startIpcWatcher(deps: IpcDeps): void {
               );
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(
-                filePath,
-                path.join(errorDir, `${sourceGroup}-${file}`),
-              );
+              try {
+                fs.renameSync(
+                  processingPath,
+                  path.join(errorDir, `${sourceGroup}-${file}`),
+                );
+              } catch {
+                // processingPath may already be gone
+              }
             }
           }
         }
@@ -157,11 +214,19 @@ export function startIpcWatcher(deps: IpcDeps): void {
             .filter((f) => f.endsWith('.json'));
           for (const file of taskFiles) {
             const filePath = path.join(tasksDir, file);
+            const processingPath = `${filePath}.processing`;
             try {
-              const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              fs.renameSync(filePath, processingPath);
+            } catch {
+              continue;
+            }
+            try {
+              const data = JSON.parse(
+                fs.readFileSync(processingPath, 'utf-8'),
+              );
               // Pass source group identity to processTaskIpc for authorization
               await processTaskIpc(data, sourceGroup, isMain, deps);
-              fs.unlinkSync(filePath);
+              fs.unlinkSync(processingPath);
             } catch (err) {
               logger.error(
                 { file, sourceGroup, err },
@@ -169,10 +234,14 @@ export function startIpcWatcher(deps: IpcDeps): void {
               );
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(
-                filePath,
-                path.join(errorDir, `${sourceGroup}-${file}`),
-              );
+              try {
+                fs.renameSync(
+                  processingPath,
+                  path.join(errorDir, `${sourceGroup}-${file}`),
+                );
+              } catch {
+                // processingPath may already be gone
+              }
             }
           }
         }

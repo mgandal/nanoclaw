@@ -872,6 +872,15 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Only the owner (is_from_me) can start/stop remote control
+    if (!msg.is_from_me) {
+      logger.warn(
+        { chatJid, sender: msg.sender },
+        'Remote control rejected: not owner',
+      );
+      return;
+    }
+
     const channel = findChannel(channels, chatJid);
     if (!channel) return;
 
