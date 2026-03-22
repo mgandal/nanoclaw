@@ -448,7 +448,8 @@ async function runQuery(
             headers: { Accept: 'application/json, text/event-stream' },
           },
         } : {}),
-        ...(process.env.SIMPLEMEM_URL ? (() => {
+        ...((() => {
+          if (!process.env.SIMPLEMEM_URL) return {};
           try {
             const smUrl = new URL(process.env.SIMPLEMEM_URL);
             const smToken = smUrl.searchParams.get('token');
@@ -466,7 +467,7 @@ async function runQuery(
           } catch {
             return {};
           }
-        })() : {}),
+        })()),
         ...(process.env.APPLE_NOTES_URL ? {
           apple_notes: {
             type: 'http' as const,
