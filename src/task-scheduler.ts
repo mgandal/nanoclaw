@@ -10,7 +10,9 @@ import {
 } from './container-runner.js';
 import {
   getAllTasks,
+  getConsecutiveFailures,
   getDueTasks,
+  getLastSuccessTime,
   getTaskById,
   logTaskRun,
   setSession,
@@ -272,6 +274,8 @@ async function runTask(
     error,
   });
 
+  checkAlerts(task, error, deps);
+
   const nextRun = computeNextRun(task);
   const resultSummary = error
     ? `Error: ${error}`
@@ -309,6 +313,10 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
           runTask(currentTask, deps),
         );
       }
+
+      // Check for stale tasks (next_run far in the past)
+      const allTasks = getAllTasks();
+      checkStaleTasks(allTasks, deps);
     } catch (err) {
       logger.error({ err }, 'Error in scheduler loop');
     }
@@ -322,4 +330,144 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 /** @internal - for tests only. */
 export function _resetSchedulerLoopForTests(): void {
   schedulerRunning = false;
+}
+
+// --- Real-time failure alerts ---
+
+const alertedTaskIds = new Set<string>();
+let pendingAlerts: Array<{
+  taskId: string;
+  group: string;
+  error: string;
+  lastSuccess: string | null;
+}> = [];
+let alertFlushTimer: ReturnType<typeof setTimeout> | null = null;
+const ALERT_BATCH_WINDOW_MS = 60000;
+
+/**
+ * Check for failure alerts after a task run completes.
+ * Also checks for stale tasks (next_run far in the past).
+ */
+export function checkAlerts(
+  task: ScheduledTask,
+  error: string | null,
+  deps: SchedulerDependencies,
+): void {
+  // Clear dedup on success
+  if (!error) {
+    alertedTaskIds.delete(task.id);
+    return;
+  }
+
+  // Already alerted for this task
+  if (alertedTaskIds.has(task.id)) return;
+
+  const failures = getConsecutiveFailures(task.id);
+  if (failures < 2) return;
+
+  alertedTaskIds.add(task.id);
+
+  const lastSuccess = getLastSuccessTime(task.id);
+
+  pendingAlerts.push({
+    taskId: task.id,
+    group: task.group_folder,
+    error: error.slice(0, 200),
+    lastSuccess,
+  });
+
+  // Batch alerts within a window
+  if (!alertFlushTimer) {
+    alertFlushTimer = setTimeout(() => {
+      flushAlerts(deps);
+    }, ALERT_BATCH_WINDOW_MS);
+  }
+}
+
+/**
+ * Check for stale tasks — tasks whose next_run is far in the past.
+ * Called from the scheduler loop, not after individual task runs.
+ * - interval tasks: stale if next_run > 2x interval behind
+ * - cron tasks: stale if next_run > 24h behind
+ * - once tasks: excluded
+ */
+export function checkStaleTasks(
+  tasks: ScheduledTask[],
+  deps: SchedulerDependencies,
+): void {
+  const now = Date.now();
+  for (const task of tasks) {
+    if (task.status !== 'active' || !task.next_run) continue;
+    if (task.schedule_type === 'once') continue;
+    if (alertedTaskIds.has(`stale:${task.id}`)) continue;
+
+    const nextRunMs = new Date(task.next_run).getTime();
+    const lagMs = now - nextRunMs;
+    if (lagMs <= 0) continue;
+
+    let isStale = false;
+    if (task.schedule_type === 'interval') {
+      const intervalMs = parseInt(task.schedule_value, 10);
+      isStale = intervalMs > 0 && lagMs > intervalMs * 2;
+    } else if (task.schedule_type === 'cron') {
+      isStale = lagMs > 24 * 3600000;
+    }
+
+    if (isStale) {
+      alertedTaskIds.add(`stale:${task.id}`);
+      pendingAlerts.push({
+        taskId: task.id,
+        group: task.group_folder,
+        error: `Task is stale — next_run was ${task.next_run}, ${Math.round(lagMs / 3600000)}h ago`,
+        lastSuccess: getLastSuccessTime(task.id),
+      });
+
+      if (!alertFlushTimer) {
+        alertFlushTimer = setTimeout(() => {
+          flushAlerts(deps);
+        }, ALERT_BATCH_WINDOW_MS);
+      }
+    }
+  }
+}
+
+function flushAlerts(deps: SchedulerDependencies): void {
+  alertFlushTimer = null;
+  if (pendingAlerts.length === 0) return;
+
+  // Find main group JID
+  const groups = deps.registeredGroups();
+  const mainEntry = Object.entries(groups).find(([, g]) => g.isMain);
+  if (!mainEntry) {
+    logger.warn('No main group found for alert delivery');
+    pendingAlerts = [];
+    return;
+  }
+  const mainJid = mainEntry[0];
+
+  let text = '\u26a0 *Task Alert*\n';
+  for (const alert of pendingAlerts) {
+    const shortGroup = alert.group.replace('telegram_', '').toUpperCase();
+    const failCount = getConsecutiveFailures(alert.taskId);
+    const successLine = alert.lastSuccess
+      ? `\nLast success: ${alert.lastSuccess}`
+      : '';
+    text += `\n*${alert.taskId}* (${shortGroup})${failCount > 0 ? ` failed ${failCount}x in a row` : ' is stale'}.\nLast error: ${alert.error}${successLine}\n`;
+  }
+
+  deps
+    .sendMessage(mainJid, text)
+    .catch((err) => logger.error({ err }, 'Failed to send task alert'));
+
+  pendingAlerts = [];
+}
+
+/** @internal - for tests only. */
+export function _resetAlertsForTests(): void {
+  alertedTaskIds.clear();
+  pendingAlerts = [];
+  if (alertFlushTimer) {
+    clearTimeout(alertFlushTimer);
+    alertFlushTimer = null;
+  }
 }
