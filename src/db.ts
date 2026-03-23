@@ -565,6 +565,55 @@ export function logTaskRun(log: TaskRunLog): void {
   );
 }
 
+/** Get task run logs since a given ISO timestamp, ordered by run_at ascending. */
+export function getTaskRunLogs(since: string): TaskRunLog[] {
+  return db
+    .prepare('SELECT * FROM task_run_logs WHERE run_at >= ? ORDER BY run_at ASC')
+    .all(since) as TaskRunLog[];
+}
+
+/** Get success rate for a task over the last N days. */
+export function getTaskSuccessRate(
+  taskId: string,
+  days: number,
+): { total: number; passed: number } {
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = db
+    .prepare(
+      'SELECT status FROM task_run_logs WHERE task_id = ? AND run_at >= ? ORDER BY run_at DESC',
+    )
+    .all(taskId, since) as { status: string }[];
+  return {
+    total: rows.length,
+    passed: rows.filter((r) => r.status === 'success').length,
+  };
+}
+
+/** Count consecutive failures from the most recent run backwards. Stops at first success or LIMIT 20. */
+export function getConsecutiveFailures(taskId: string): number {
+  const rows = db
+    .prepare(
+      'SELECT status FROM task_run_logs WHERE task_id = ? ORDER BY run_at DESC LIMIT 20',
+    )
+    .all(taskId) as { status: string }[];
+  let count = 0;
+  for (const row of rows) {
+    if (row.status !== 'error') break;
+    count++;
+  }
+  return count;
+}
+
+/** Get the ISO timestamp of the most recent successful run for a task, or null if none. */
+export function getLastSuccessTime(taskId: string): string | null {
+  const row = db
+    .prepare(
+      "SELECT run_at FROM task_run_logs WHERE task_id = ? AND status = 'success' ORDER BY run_at DESC LIMIT 1",
+    )
+    .get(taskId) as { run_at: string } | undefined;
+  return row?.run_at ?? null;
+}
+
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {
