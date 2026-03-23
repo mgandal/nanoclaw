@@ -373,9 +373,14 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 // Uses same IPC pattern: write task file, poll for result.
 
 const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
+const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
 
-async function waitForBrowserResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string; data?: unknown }> {
-  const resultFile = path.join(BROWSER_RESULTS_DIR, `${requestId}.json`);
+async function waitForIpcResult(
+  resultsDir: string,
+  requestId: string,
+  maxWait = 120000,
+): Promise<Record<string, unknown>> {
+  const resultFile = path.join(resultsDir, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
   while (elapsed < maxWait) {
@@ -393,6 +398,49 @@ async function waitForBrowserResult(requestId: string, maxWait = 120000): Promis
   }
   return { success: false, message: 'Request timed out' };
 }
+
+async function waitForBrowserResult(
+  requestId: string,
+  maxWait = 120000,
+): Promise<{ success: boolean; message: string; data?: unknown }> {
+  return waitForIpcResult(BROWSER_RESULTS_DIR, requestId, maxWait) as Promise<{
+    success: boolean;
+    message: string;
+    data?: unknown;
+  }>;
+}
+
+server.tool(
+  'query_dashboard',
+  'Query NanoClaw system status. Returns task summaries, run logs, group info, skill counts, or state file freshness from the host.',
+  {
+    queryType: z
+      .enum([
+        'task_summary',
+        'run_logs_24h',
+        'run_logs_7d',
+        'group_summary',
+        'skill_inventory',
+        'state_freshness',
+      ])
+      .describe('The type of dashboard data to query'),
+  },
+  async (args) => {
+    const requestId = `dash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'dashboard_query',
+      requestId,
+      queryType: args.queryType,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(DASHBOARD_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
 
 if (isMain) {
   server.tool(
