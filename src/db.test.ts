@@ -6,9 +6,13 @@ import {
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getConsecutiveFailures,
   getMessagesSince,
   getNewMessages,
   getTaskById,
+  getTaskRunLogs,
+  getTaskSuccessRate,
+  logTaskRun,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
@@ -455,5 +459,81 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- Dashboard DB queries ---
+
+describe('dashboard DB queries', () => {
+  // Helper: create a minimal parent task so FK constraints are satisfied
+  function ensureTask(id: string) {
+    createTask({
+      id,
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+  }
+
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  describe('getTaskRunLogs', () => {
+    it('returns logs since a given timestamp', () => {
+      ensureTask('t1');
+      ensureTask('t2');
+      logTaskRun({ task_id: 't1', run_at: '2026-03-22T10:00:00Z', duration_ms: 1000, status: 'success', result: 'ok', error: null });
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 2000, status: 'error', result: null, error: 'fail' });
+      logTaskRun({ task_id: 't2', run_at: '2026-03-23T12:00:00Z', duration_ms: 500, status: 'success', result: 'done', error: null });
+
+      const logs = getTaskRunLogs('2026-03-23T00:00:00Z');
+      expect(logs).toHaveLength(2);
+      expect(logs[0].task_id).toBe('t1');
+      expect(logs[1].task_id).toBe('t2');
+    });
+  });
+
+  describe('getTaskSuccessRate', () => {
+    it('returns pass/total for a task in the given window', () => {
+      ensureTask('t1');
+      const now = new Date();
+      const recent = new Date(now.getTime() - 3600000).toISOString();
+      logTaskRun({ task_id: 't1', run_at: recent, duration_ms: 100, status: 'success', result: 'ok', error: null });
+      logTaskRun({ task_id: 't1', run_at: now.toISOString(), duration_ms: 100, status: 'error', result: null, error: 'fail' });
+
+      const rate = getTaskSuccessRate('t1', 1);
+      expect(rate).toEqual({ total: 2, passed: 1 });
+    });
+  });
+
+  describe('getConsecutiveFailures', () => {
+    it('returns 0 when last run was success', () => {
+      ensureTask('t1');
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail' });
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'success', result: 'ok', error: null });
+
+      expect(getConsecutiveFailures('t1')).toBe(0);
+    });
+
+    it('returns count of trailing consecutive failures', () => {
+      ensureTask('t1');
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'success', result: 'ok', error: null });
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail1' });
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T12:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail2' });
+      logTaskRun({ task_id: 't1', run_at: '2026-03-23T13:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail3' });
+
+      expect(getConsecutiveFailures('t1')).toBe(3);
+    });
+
+    it('returns 0 when no runs exist', () => {
+      expect(getConsecutiveFailures('nonexistent')).toBe(0);
+    });
   });
 });
