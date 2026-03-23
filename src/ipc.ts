@@ -21,6 +21,7 @@ import {
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { handleDashboardIpc } from './dashboard-ipc.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { RegisteredGroup } from './types.js';
 
@@ -614,6 +615,14 @@ export async function processTaskIpc(
 
     default: {
       let handled = false;
+      if (typeof data.type === 'string' && data.type === 'dashboard_query') {
+        handled = await handleDashboardIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+          DATA_DIR,
+        );
+      }
       if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
         // Build mount mappings from registered group config
         const groupEntry = Object.values(registeredGroups).find(
