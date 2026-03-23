@@ -147,6 +147,16 @@ export function getConsecutiveFailures(taskId: string): number {
   }
   return count;
 }
+
+/** Get the ISO timestamp of the most recent successful run for a task, or null if none. */
+export function getLastSuccessTime(taskId: string): string | null {
+  const row = db
+    .prepare(
+      "SELECT run_at FROM task_run_logs WHERE task_id = ? AND status = 'success' ORDER BY run_at DESC LIMIT 1",
+    )
+    .get(taskId) as { run_at: string } | undefined;
+  return row?.run_at ?? null;
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -212,6 +222,10 @@ describe('handleDashboardIpc', () => {
       prompt: 'test prompt',
       schedule_type: 'cron',
       schedule_value: '0 7 * * 1-5',
+      status: 'active',
+      next_run: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      context_mode: 'isolated',
     });
 
     const result = await handleDashboardIpc(
@@ -252,8 +266,8 @@ describe('handleDashboardIpc', () => {
     setRegisteredGroup('tg:123', {
       name: 'CLAIRE',
       folder: 'telegram_claire',
-      triggerPattern: '@Claire',
-      addedAt: new Date().toISOString(),
+      trigger: '@Claire',
+      added_at: new Date().toISOString(),
       isMain: true,
       requiresTrigger: false,
     });
@@ -606,7 +620,7 @@ git commit -m "feat(dashboard): add query_dashboard MCP tool + generic waitForIp
 Add imports at top of `src/task-scheduler.ts`:
 
 ```typescript
-import { getConsecutiveFailures } from './db.js';
+import { getConsecutiveFailures, getLastSuccessTime } from './db.js';
 ```
 
 Add after the `_resetSchedulerLoopForTests` function at the bottom of the file:
@@ -619,6 +633,10 @@ let pendingAlerts: Array<{ taskId: string; group: string; error: string; lastSuc
 let alertFlushTimer: ReturnType<typeof setTimeout> | null = null;
 const ALERT_BATCH_WINDOW_MS = 60000;
 
+/**
+ * Check for failure alerts after a task run completes.
+ * Also checks for stale tasks (next_run far in the past).
+ */
 export function checkAlerts(
   task: ScheduledTask,
   error: string | null,
@@ -638,8 +656,7 @@ export function checkAlerts(
 
   alertedTaskIds.add(task.id);
 
-  // Find last success time
-  const lastSuccess = null; // Will be populated from run logs in the alert text
+  const lastSuccess = getLastSuccessTime(task.id);
 
   pendingAlerts.push({
     taskId: task.id,
@@ -653,6 +670,53 @@ export function checkAlerts(
     alertFlushTimer = setTimeout(() => {
       flushAlerts(deps);
     }, ALERT_BATCH_WINDOW_MS);
+  }
+}
+
+/**
+ * Check for stale tasks — tasks whose next_run is far in the past.
+ * Called from the scheduler loop, not after individual task runs.
+ * - interval tasks: stale if next_run > 2x interval behind
+ * - cron tasks: stale if next_run > 24h behind
+ * - once tasks: excluded
+ */
+export function checkStaleTasks(
+  tasks: ScheduledTask[],
+  deps: SchedulerDependencies,
+): void {
+  const now = Date.now();
+  for (const task of tasks) {
+    if (task.status !== 'active' || !task.next_run) continue;
+    if (task.schedule_type === 'once') continue;
+    if (alertedTaskIds.has(`stale:${task.id}`)) continue;
+
+    const nextRunMs = new Date(task.next_run).getTime();
+    const lagMs = now - nextRunMs;
+    if (lagMs <= 0) continue;
+
+    let isStale = false;
+    if (task.schedule_type === 'interval') {
+      const intervalMs = parseInt(task.schedule_value, 10);
+      isStale = intervalMs > 0 && lagMs > intervalMs * 2;
+    } else if (task.schedule_type === 'cron') {
+      isStale = lagMs > 24 * 3600000;
+    }
+
+    if (isStale) {
+      alertedTaskIds.add(`stale:${task.id}`);
+      pendingAlerts.push({
+        taskId: task.id,
+        group: task.group_folder,
+        error: `Task is stale — next_run was ${task.next_run}, ${Math.round(lagMs / 3600000)}h ago`,
+        lastSuccess: getLastSuccessTime(task.id),
+      });
+
+      if (!alertFlushTimer) {
+        alertFlushTimer = setTimeout(() => {
+          flushAlerts(deps);
+        }, ALERT_BATCH_WINDOW_MS);
+      }
+    }
   }
 }
 
@@ -673,7 +737,9 @@ function flushAlerts(deps: SchedulerDependencies): void {
   let text = '⚠ *Task Alert*\n';
   for (const alert of pendingAlerts) {
     const shortGroup = alert.group.replace('telegram_', '').toUpperCase();
-    text += `\n*${alert.taskId}* (${shortGroup}) failed ${getConsecutiveFailures(alert.taskId)}x in a row.\nLast error: ${alert.error}\n`;
+    const failCount = getConsecutiveFailures(alert.taskId);
+    const successLine = alert.lastSuccess ? `\nLast success: ${alert.lastSuccess}` : '';
+    text += `\n*${alert.taskId}* (${shortGroup})${failCount > 0 ? ` failed ${failCount}x in a row` : ' is stale'}.\nLast error: ${alert.error}${successLine}\n`;
   }
 
   deps.sendMessage(mainJid, text).catch((err) =>
@@ -702,6 +768,14 @@ In `src/task-scheduler.ts`, in the `runTask` function, right after the `logTaskR
   checkAlerts(task, error, deps);
 ```
 
+Also in the `loop` function inside `startSchedulerLoop`, after the `for` loop over `dueTasks` (around line 311), add staleness check:
+
+```typescript
+      // Check for stale tasks (next_run far in the past)
+      const allTasks = getAllTasks();
+      checkStaleTasks(allTasks, deps);
+```
+
 - [ ] **Step 3: Build and verify**
 
 Run: `npm run build 2>&1 | tail -5`
@@ -712,8 +786,8 @@ Expected: Clean build
 Add to `src/task-scheduler.test.ts` (or create a new describe block):
 
 ```typescript
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { checkAlerts, _resetAlertsForTests } from './task-scheduler.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { checkAlerts, checkStaleTasks, _resetAlertsForTests } from './task-scheduler.js';
 import { _initTestDatabase, logTaskRun } from './db.js';
 import type { SchedulerDependencies } from './task-scheduler.js';
 import type { ScheduledTask } from './types.js';
@@ -724,8 +798,8 @@ function makeMockDeps(overrides: Partial<SchedulerDependencies> = {}): Scheduler
       'tg:123': {
         name: 'CLAIRE',
         folder: 'telegram_claire',
-        triggerPattern: '@Claire',
-        addedAt: new Date().toISOString(),
+        trigger: '@Claire',
+        added_at: new Date().toISOString(),
         isMain: true,
         requiresTrigger: false,
       },
@@ -760,11 +834,17 @@ describe('checkAlerts', () => {
   beforeEach(() => {
     _initTestDatabase();
     _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('does not alert on success', () => {
     const deps = makeMockDeps();
     checkAlerts(makeTask(), null, deps);
+    vi.advanceTimersByTime(70000);
     expect(deps.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -772,29 +852,96 @@ describe('checkAlerts', () => {
     logTaskRun({ task_id: 'test-task', run_at: new Date().toISOString(), duration_ms: 100, status: 'error', result: null, error: 'fail' });
     const deps = makeMockDeps();
     checkAlerts(makeTask(), 'fail', deps);
-    // Alert is batched but won't fire until timer (60s) — just verify it was queued
+    vi.advanceTimersByTime(70000);
     expect(deps.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('queues alert on 2+ consecutive failures', () => {
+  it('sends alert after 2+ consecutive failures and flush timer', () => {
     logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail1' });
     logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail2' });
     const deps = makeMockDeps();
     checkAlerts(makeTask(), 'fail2', deps);
-    // Force flush by calling internal reset — in real code, timer would flush
-    // We just verify the alert was not deduplicated
-    checkAlerts(makeTask(), 'fail3', deps);
-    // Second call should be deduped
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('Task Alert');
+    expect(msg).toContain('test-task');
   });
 
-  it('clears dedup state on success', () => {
-    const deps = makeMockDeps();
+  it('deduplicates — does not re-alert for same task', () => {
     logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail1' });
     logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail2' });
+    const deps = makeMockDeps();
     checkAlerts(makeTask(), 'fail2', deps);
-    // Now succeed
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    checkAlerts(makeTask(), 'fail3', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('clears dedup state on success, allowing re-alert', () => {
+    logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail1' });
+    logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail2' });
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
     checkAlerts(makeTask(), null, deps);
-    // Fail again — should be eligible for alert again (after 2 failures)
+    logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T12:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail3' });
+    logTaskRun({ task_id: 'test-task', run_at: '2026-03-23T13:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail4' });
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    checkAlerts(makeTask(), 'fail4', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+});
+
+describe('checkStaleTasks', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('alerts for cron task with next_run > 24h in the past', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: staleNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('stale');
+  });
+
+  it('does not alert for cron task with recent next_run', () => {
+    const deps = makeMockDeps();
+    const recentNextRun = new Date(Date.now() - 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: recentNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('excludes once-type tasks', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 48 * 3600000).toISOString();
+    checkStaleTasks([makeTask({ schedule_type: 'once', next_run: staleNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('alerts for interval task with next_run > 2x interval behind', () => {
+    const deps = makeMockDeps();
+    const intervalMs = 3600000;
+    const staleNextRun = new Date(Date.now() - intervalMs * 3).toISOString();
+    checkStaleTasks([makeTask({ schedule_type: 'interval', schedule_value: String(intervalMs), next_run: staleNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
   });
 });
 ```
