@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, createTask, getTaskById } from './db.js';
+import { _initTestDatabase, createTask, getTaskById, logTaskRun } from './db.js';
 import {
+  _resetAlertsForTests,
   _resetSchedulerLoopForTests,
+  checkAlerts,
+  checkStaleTasks,
   computeNextRun,
   startSchedulerLoop,
 } from './task-scheduler.js';
+import type { SchedulerDependencies } from './task-scheduler.js';
+import type { ScheduledTask } from './types.js';
 
 describe('task scheduler', () => {
   beforeEach(() => {
@@ -125,5 +130,256 @@ describe('task scheduler', () => {
     const offset =
       (new Date(nextRun!).getTime() - new Date(scheduledTime).getTime()) % ms;
     expect(offset).toBe(0);
+  });
+});
+
+function makeMockDeps(
+  overrides: Partial<SchedulerDependencies> = {},
+): SchedulerDependencies {
+  return {
+    registeredGroups: () => ({
+      'tg:123': {
+        name: 'CLAIRE',
+        folder: 'telegram_claire',
+        trigger: '@Claire',
+        added_at: new Date().toISOString(),
+        isMain: true,
+        requiresTrigger: false,
+      },
+    }),
+    getSessions: () => ({}),
+    queue: {} as any,
+    onProcess: vi.fn(),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
+  return {
+    id: 'test-task',
+    group_folder: 'telegram_claire',
+    chat_jid: 'tg:123',
+    prompt: 'test',
+    schedule_type: 'cron',
+    schedule_value: '0 7 * * 1-5',
+    status: 'active',
+    next_run: new Date().toISOString(),
+    last_run: null,
+    last_result: null,
+    created_at: new Date().toISOString(),
+    context_mode: 'isolated',
+    ...overrides,
+  };
+}
+
+function createTestTask(id = 'test-task') {
+  createTask({
+    id,
+    group_folder: 'telegram_claire',
+    chat_jid: 'tg:123',
+    prompt: 'test',
+    schedule_type: 'cron',
+    schedule_value: '0 7 * * 1-5',
+    status: 'active',
+    next_run: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    context_mode: 'isolated',
+  });
+}
+
+describe('checkAlerts', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not alert on success', () => {
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), null, deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not alert on single failure', () => {
+    createTestTask();
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: new Date().toISOString(),
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail',
+    });
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), 'fail', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends alert after 2+ consecutive failures and flush timer', () => {
+    createTestTask();
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('Task Alert');
+    expect(msg).toContain('test-task');
+  });
+
+  it('deduplicates — does not re-alert for same task', () => {
+    createTestTask();
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    checkAlerts(makeTask(), 'fail3', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('clears dedup state on success, allowing re-alert', () => {
+    createTestTask();
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+    const deps = makeMockDeps();
+    checkAlerts(makeTask(), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    checkAlerts(makeTask(), null, deps);
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T12:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail3',
+    });
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T13:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail4',
+    });
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    checkAlerts(makeTask(), 'fail4', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+});
+
+describe('checkStaleTasks', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('alerts for cron task with next_run > 24h in the past', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: staleNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('stale');
+  });
+
+  it('does not alert for cron task with recent next_run', () => {
+    const deps = makeMockDeps();
+    const recentNextRun = new Date(Date.now() - 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: recentNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('excludes once-type tasks', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 48 * 3600000).toISOString();
+    checkStaleTasks(
+      [makeTask({ schedule_type: 'once', next_run: staleNextRun })],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('alerts for interval task with next_run > 2x interval behind', () => {
+    const deps = makeMockDeps();
+    const intervalMs = 3600000;
+    const staleNextRun = new Date(
+      Date.now() - intervalMs * 3,
+    ).toISOString();
+    checkStaleTasks(
+      [
+        makeTask({
+          schedule_type: 'interval',
+          schedule_value: String(intervalMs),
+          next_run: staleNextRun,
+        }),
+      ],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
   });
 });
