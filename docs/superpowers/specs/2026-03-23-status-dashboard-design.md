@@ -17,7 +17,9 @@ Three components delivered as Telegram messages to CLAIRE:
 
 ## Component 1: Daily Compact Summary
 
-**Schedule:** Weekdays 7:15am ET (`15 11 * * 1-5` UTC) — runs after the priorities update task (7am ET) so `current.md` is fresh.
+**Schedule:** Weekdays 7:15am ET (cron: `15 7 * * 1-5`, interpreted in local time via `TIMEZONE` config).
+
+Runs after the priorities update task (7am ET) so `current.md` is fresh.
 
 **Group:** `telegram_claire`, `context_mode: group`
 
@@ -52,24 +54,21 @@ Next: Morning Briefing (tomorrow 6:00am)
 ```
 
 **How it reads data:**
-The task runs inside a CLAIRE container with `context_mode: group`. It reads `current.md` from `/workspace/global/state/current.md`. For DB data (task counts, run logs, sessions), it uses IPC task requests:
-- Write a JSON task file to `/workspace/ipc/tasks/` with `type: "dashboard_query"`
-- The host-side IPC handler queries SQLite and writes results to `/workspace/ipc/dashboard_results/`
-- The agent polls for results
-
-**New IPC handler required:** `dashboard_query` — accepts a query type (`task_summary`, `group_summary`, `run_logs_24h`) and returns JSON results. This keeps all DB access on the host side (containers have no direct SQLite access).
+The task runs inside a CLAIRE container with `context_mode: group`. It reads `current.md` directly from `/workspace/global/state/current.md` (filesystem mount). For DB data (task counts, run logs, sessions), it uses the `query_dashboard` MCP tool (see Container-Side MCP Tool below), which issues IPC requests to the host.
 
 ## Component 2: Weekly Deep Dive
 
-**Schedule:** Mondays 9:30am ET (`30 13 * * 1` UTC) — after the Monday batch (bookmarks, ARIA watch, skills check all run at 9am).
+**Schedule:** Mondays 9:30am ET (cron: `30 9 * * 1`, local time).
+
+Runs after the Monday batch (bookmarks, ARIA watch, skills check all run at 9am).
 
 **Group:** `telegram_claire`, `context_mode: group`
 
 **Data sources:** Everything from the daily summary, plus:
-- `data/sessions/{group}/.claude/skills/` — skill counts per group (via IPC `dashboard_query` type `skill_inventory`)
-- `groups/global/state/` directory — file modification times (via IPC)
+- `data/sessions/{group}/.claude/skills/` — skill counts per group (via IPC `skill_inventory` query; these directories persist on the host across container restarts)
+- `groups/global/state/` directory — file modification times (via IPC `state_freshness` query)
 - Task run history for the past 7 days (success rate per task)
-- `bookmarks.md` — current watchlist items and their routing
+- `/workspace/group/bookmarks.md` — current watchlist items (direct filesystem read from group workspace)
 
 **Message format (~40-60 lines):**
 
@@ -119,14 +118,16 @@ projects.md — 11 days stale
 **Not a scheduled task.** This is a lightweight check added to the existing task scheduler loop in `src/task-scheduler.ts`.
 
 **Trigger conditions:**
-1. **Consecutive failures:** A task's `last_result` starts with `error` or `Error` for 2+ consecutive runs (checked via `task_run_logs`)
-2. **Stale task:** A task's `next_run` is more than 2x its interval in the past (e.g., an hourly task hasn't run in 2+ hours)
+1. **Consecutive failures:** A task has 2+ consecutive runs with `status: 'error'` in `task_run_logs`. Requires at least 2 logged runs (new tasks with only 1 failure do not trigger an alert).
+2. **Stale task:** A task's `next_run` is more than 2x its interval in the past. Only applies to `interval`-type tasks. For `cron` tasks, staleness is detected by comparing `next_run` against the current time — if `next_run` is more than 24 hours in the past, the task is considered stale. `once`-type tasks are excluded from staleness checks.
 
 **Behavior:**
 - After each task completes, the scheduler checks whether to fire an alert
-- Uses the existing `router.sendMessage()` (host-side, no container needed) to send to the CLAIRE chat JID
+- Sends alerts to the main group's chat JID, resolved via `deps.registeredGroups()` where `isMain === true`
+- Uses `deps.sendMessage()` (host-side, no container spawn needed)
 - Includes: task name, group, error message (truncated to 200 chars), last successful run time
-- Deduplication: track alerted task IDs in memory; don't re-alert for the same task until it either succeeds or a new failure occurs
+- Deduplication: track alerted task IDs in a `Set<string>` in memory; don't re-alert for the same task until it either succeeds or a new failure occurs
+- Batching: alerts that fire within a 60-second window are combined into a single message
 
 **Message format:**
 
@@ -142,9 +143,12 @@ Check logs: tail -50 logs/nanoclaw.log | grep briefing
 
 ## New Code Required
 
-### 1. IPC Handler: `dashboard_query` (`src/ipc.ts` or new `src/dashboard-ipc.ts`)
+### 1. IPC Handler: `dashboard_query` (new `src/dashboard-ipc.ts`)
 
-Handles requests from container agents to query host-side data:
+Handles requests from container agents to query host-side data.
+
+**Host-side paths:** Results written to `data/ipc/{groupFolder}/dashboard_results/{requestId}.json`
+**Container-side paths:** Visible at `/workspace/ipc/dashboard_results/{requestId}.json`
 
 ```typescript
 type DashboardQueryType =
@@ -152,45 +156,57 @@ type DashboardQueryType =
   | 'run_logs_24h'      // task_run_logs from last 24h
   | 'run_logs_7d'       // task_run_logs from last 7 days
   | 'group_summary'     // registered groups with session info
-  | 'skill_inventory'   // skill counts per group (reads filesystem)
+  | 'skill_inventory'   // skill counts per group (reads host filesystem)
   | 'state_freshness';  // mtime of files in groups/global/state/
 ```
 
-Response written as JSON to `/workspace/ipc/dashboard_results/{requestId}.json`.
+### 2. Container-Side MCP Tool: `query_dashboard` (`container/agent-runner/src/ipc-mcp-stdio.ts`)
 
-### 2. DB Query Functions (`src/db.ts`)
+Follows the existing IPC MCP tool pattern (like `pageindex_fetch`, `browser_*`):
+- Exposes an MCP tool `query_dashboard` with parameter `queryType: DashboardQueryType`
+- Writes a `dashboard_query` JSON task to `/workspace/ipc/tasks/`
+- Polls `/workspace/ipc/dashboard_results/{requestId}.json` via a `waitForDashboardResult()` function
+- Returns the parsed JSON result to the agent
+
+This gives the scheduled dashboard agent a clean MCP interface to query host-side data without writing raw IPC files.
+
+### 3. DB Query Functions (`src/db.ts`)
 
 ```typescript
 getTaskRunLogs(since: string): TaskRunLog[]
 getTaskSuccessRate(taskId: string, days: number): { total: number; passed: number }
-getStaleTaskIds(thresholdMultiplier: number): string[]
+getConsecutiveFailures(taskId: string): number
 ```
 
-### 3. Alert Check (`src/task-scheduler.ts`)
+### 4. Alert Check (`src/task-scheduler.ts`)
 
 After each task run completes:
 ```typescript
 function checkAlerts(task: ScheduledTask, result: string, deps: SchedulerDependencies): void
 ```
 
-- Query last N runs from `task_run_logs`
-- If 2+ consecutive failures, send alert via `deps.router.sendMessage()`
-- Track alerted IDs in a `Set<string>` (reset on success)
+- Query consecutive failure count from `task_run_logs` via `getConsecutiveFailures()`
+- If >= 2 consecutive failures, queue an alert
+- Resolve CLAIRE JID via `deps.registeredGroups()` where `isMain === true`
+- Send via `deps.sendMessage(claireJid, alertText)`
+- Dedup: `alertedTaskIds: Set<string>` (cleared per task on success)
+- Batch: collect alerts within 60s window, send as single message
 
-### 4. Scheduled Tasks (DB inserts)
+### 5. Scheduled Tasks (DB inserts)
 
 Two new rows in `scheduled_tasks`:
-- `dashboard-daily` — cron `15 11 * * 1-5`, group `telegram_claire`
-- `dashboard-weekly` — cron `30 13 * * 1`, group `telegram_claire`
+- `dashboard-daily` — cron `15 7 * * 1-5`, group `telegram_claire`, context_mode `group`
+- `dashboard-weekly` — cron `30 9 * * 1`, group `telegram_claire`, context_mode `group`
 
 ## File Changes
 
 | File | Change |
 |------|--------|
 | `src/dashboard-ipc.ts` | New — IPC handler for dashboard queries |
-| `src/db.ts` | Add `getTaskRunLogs()`, `getTaskSuccessRate()`, `getStaleTaskIds()` |
-| `src/task-scheduler.ts` | Add `checkAlerts()` after task completion |
+| `src/db.ts` | Add `getTaskRunLogs()`, `getTaskSuccessRate()`, `getConsecutiveFailures()` |
+| `src/task-scheduler.ts` | Add `checkAlerts()` after task completion, alert batching |
 | `src/ipc.ts` | Register dashboard IPC handler |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | Add `query_dashboard` MCP tool + `waitForDashboardResult()` |
 
 ## Out of Scope
 
@@ -198,10 +214,11 @@ Two new rows in `scheduled_tasks`:
 - No new services or dependencies
 - No historical trend tracking beyond 7-day run logs
 - No cross-group aggregation of agent conversation metrics
-- Dashboard does not modify any state — read-only
+- Dashboard does not modify any state — read-only (except `dashboard-state.json` snapshot for weekly skill diff)
 
 ## Testing
 
-- Unit tests for DB query functions (`getTaskRunLogs`, `getTaskSuccessRate`, `getStaleTaskIds`)
-- Unit test for `checkAlerts` logic (consecutive failure detection, deduplication)
+- Unit tests for DB query functions (`getTaskRunLogs`, `getTaskSuccessRate`, `getConsecutiveFailures`)
+- Unit test for `checkAlerts` logic (consecutive failure detection, deduplication, batching, first-run edge case)
 - Manual test: trigger daily/weekly tasks via `next_run` update, verify message format
+- Manual test: force a task failure 2x, verify alert fires to CLAIRE
