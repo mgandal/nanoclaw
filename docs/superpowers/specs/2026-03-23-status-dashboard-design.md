@@ -147,6 +147,8 @@ Check logs: tail -50 logs/nanoclaw.log | grep briefing
 
 Handles requests from container agents to query host-side data.
 
+**IPC routing:** Add an explicit `case 'dashboard_query':` in the `processTaskIpc` switch in `src/ipc.ts`, delegating to the handler in `src/dashboard-ipc.ts`. (Single type, not a family — no prefix matching needed.)
+
 **Host-side paths:** Results written to `data/ipc/{groupFolder}/dashboard_results/{requestId}.json`
 **Container-side paths:** Visible at `/workspace/ipc/dashboard_results/{requestId}.json`
 
@@ -156,8 +158,8 @@ type DashboardQueryType =
   | 'run_logs_24h'      // task_run_logs from last 24h
   | 'run_logs_7d'       // task_run_logs from last 7 days
   | 'group_summary'     // registered groups with session info
-  | 'skill_inventory'   // skill counts per group (reads host filesystem)
-  | 'state_freshness';  // mtime of files in groups/global/state/
+  | 'skill_inventory'   // skill counts per group (reads host filesystem; agent cannot access these directly)
+  | 'state_freshness';  // mtime of files in groups/global/state/ (known limitation: reflects host-side mtime, not container write time)
 ```
 
 ### 2. Container-Side MCP Tool: `query_dashboard` (`container/agent-runner/src/ipc-mcp-stdio.ts`)
@@ -165,7 +167,7 @@ type DashboardQueryType =
 Follows the existing IPC MCP tool pattern (like `pageindex_fetch`, `browser_*`):
 - Exposes an MCP tool `query_dashboard` with parameter `queryType: DashboardQueryType`
 - Writes a `dashboard_query` JSON task to `/workspace/ipc/tasks/`
-- Polls `/workspace/ipc/dashboard_results/{requestId}.json` via a `waitForDashboardResult()` function
+- Polls `/workspace/ipc/dashboard_results/{requestId}.json` using a generic `waitForIpcResult(dir, requestId, maxWait)` helper (extract from existing `waitFor*Result` functions to avoid a fifth copy-paste variant)
 - Returns the parsed JSON result to the agent
 
 This gives the scheduled dashboard agent a clean MCP interface to query host-side data without writing raw IPC files.
@@ -175,7 +177,7 @@ This gives the scheduled dashboard agent a clean MCP interface to query host-sid
 ```typescript
 getTaskRunLogs(since: string): TaskRunLog[]
 getTaskSuccessRate(taskId: string, days: number): { total: number; passed: number }
-getConsecutiveFailures(taskId: string): number
+getConsecutiveFailures(taskId: string): number  // scans backwards from most recent, stops at first success or LIMIT 20
 ```
 
 ### 4. Alert Check (`src/task-scheduler.ts`)
@@ -207,6 +209,13 @@ Two new rows in `scheduled_tasks`:
 | `src/task-scheduler.ts` | Add `checkAlerts()` after task completion, alert batching |
 | `src/ipc.ts` | Register dashboard IPC handler |
 | `container/agent-runner/src/ipc-mcp-stdio.ts` | Add `query_dashboard` MCP tool + `waitForDashboardResult()` |
+
+## Known Limitations
+
+- **Alert dedup lost on restart:** The `Set<string>` tracking alerted task IDs is in-memory. On NanoClaw restart, previously-alerted tasks may re-alert if still failing. Acceptable for personal use.
+- **State file mtime:** `state_freshness` reports host-side `mtime`, which may not exactly match container write time due to mount sync.
+- **Missing `current.md`:** If the priorities file is missing or empty, the dashboard task should note "Priorities not yet set" rather than failing.
+- **Alert storm:** If all tasks fail simultaneously (e.g., container runtime down), up to N alerts fire (one per task, batched within 60s). No per-hour cap — acceptable given the small task count (6).
 
 ## Out of Scope
 
