@@ -110,14 +110,14 @@ function buildVolumeMounts(
     });
   }
 
-  // Global memory directory (read-only for all groups)
-  // Contains shared instructions (vault writing, QMD, etc.) via CLAUDE.md
+  // Global memory directory — writable for main group (updates shared state),
+  // read-only for all others
   const globalDir = path.join(GROUPS_DIR, 'global');
   if (fs.existsSync(globalDir)) {
     mounts.push({
       hostPath: globalDir,
       containerPath: '/workspace/global',
-      readonly: true,
+      readonly: !group.isMain,
     });
   }
 
@@ -263,7 +263,9 @@ function buildContainerArgs(
           ? CONTAINER_HOST_GATEWAY
           : parsed.hostname;
       // Rebuild URL with /mcp path, preserving query params (includes auth token)
-      const containerUrl = new URL(`${parsed.protocol}//${hostname}:${parsed.port}/mcp`);
+      const containerUrl = new URL(
+        `${parsed.protocol}//${hostname}:${parsed.port}/mcp`,
+      );
       for (const [k, v] of parsed.searchParams) {
         containerUrl.searchParams.set(k, v);
       }
