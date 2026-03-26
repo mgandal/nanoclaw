@@ -10,16 +10,17 @@ import {
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
+  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
-  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { writeContextPacket } from './context-assembler.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
   readonlyMountArgs,
@@ -229,7 +230,7 @@ function buildVolumeMounts(
   return mounts;
 }
 
-async function buildContainerArgs(
+function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
