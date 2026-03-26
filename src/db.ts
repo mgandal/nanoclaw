@@ -568,7 +568,9 @@ export function logTaskRun(log: TaskRunLog): void {
 /** Get task run logs since a given ISO timestamp, ordered by run_at ascending. */
 export function getTaskRunLogs(since: string): TaskRunLog[] {
   return db
-    .prepare('SELECT * FROM task_run_logs WHERE run_at >= ? ORDER BY run_at ASC')
+    .prepare(
+      'SELECT * FROM task_run_logs WHERE run_at >= ? ORDER BY run_at ASC',
+    )
     .all(since) as TaskRunLog[];
 }
 

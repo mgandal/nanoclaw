@@ -489,9 +489,30 @@ describe('dashboard DB queries', () => {
     it('returns logs since a given timestamp', () => {
       ensureTask('t1');
       ensureTask('t2');
-      logTaskRun({ task_id: 't1', run_at: '2026-03-22T10:00:00Z', duration_ms: 1000, status: 'success', result: 'ok', error: null });
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 2000, status: 'error', result: null, error: 'fail' });
-      logTaskRun({ task_id: 't2', run_at: '2026-03-23T12:00:00Z', duration_ms: 500, status: 'success', result: 'done', error: null });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-22T10:00:00Z',
+        duration_ms: 1000,
+        status: 'success',
+        result: 'ok',
+        error: null,
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T10:00:00Z',
+        duration_ms: 2000,
+        status: 'error',
+        result: null,
+        error: 'fail',
+      });
+      logTaskRun({
+        task_id: 't2',
+        run_at: '2026-03-23T12:00:00Z',
+        duration_ms: 500,
+        status: 'success',
+        result: 'done',
+        error: null,
+      });
 
       const logs = getTaskRunLogs('2026-03-23T00:00:00Z');
       expect(logs).toHaveLength(2);
@@ -505,8 +526,22 @@ describe('dashboard DB queries', () => {
       ensureTask('t1');
       const now = new Date();
       const recent = new Date(now.getTime() - 3600000).toISOString();
-      logTaskRun({ task_id: 't1', run_at: recent, duration_ms: 100, status: 'success', result: 'ok', error: null });
-      logTaskRun({ task_id: 't1', run_at: now.toISOString(), duration_ms: 100, status: 'error', result: null, error: 'fail' });
+      logTaskRun({
+        task_id: 't1',
+        run_at: recent,
+        duration_ms: 100,
+        status: 'success',
+        result: 'ok',
+        error: null,
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: now.toISOString(),
+        duration_ms: 100,
+        status: 'error',
+        result: null,
+        error: 'fail',
+      });
 
       const rate = getTaskSuccessRate('t1', 1);
       expect(rate).toEqual({ total: 2, passed: 1 });
@@ -516,18 +551,60 @@ describe('dashboard DB queries', () => {
   describe('getConsecutiveFailures', () => {
     it('returns 0 when last run was success', () => {
       ensureTask('t1');
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail' });
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'success', result: 'ok', error: null });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T10:00:00Z',
+        duration_ms: 100,
+        status: 'error',
+        result: null,
+        error: 'fail',
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T11:00:00Z',
+        duration_ms: 100,
+        status: 'success',
+        result: 'ok',
+        error: null,
+      });
 
       expect(getConsecutiveFailures('t1')).toBe(0);
     });
 
     it('returns count of trailing consecutive failures', () => {
       ensureTask('t1');
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T10:00:00Z', duration_ms: 100, status: 'success', result: 'ok', error: null });
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T11:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail1' });
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T12:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail2' });
-      logTaskRun({ task_id: 't1', run_at: '2026-03-23T13:00:00Z', duration_ms: 100, status: 'error', result: null, error: 'fail3' });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T10:00:00Z',
+        duration_ms: 100,
+        status: 'success',
+        result: 'ok',
+        error: null,
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T11:00:00Z',
+        duration_ms: 100,
+        status: 'error',
+        result: null,
+        error: 'fail1',
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T12:00:00Z',
+        duration_ms: 100,
+        status: 'error',
+        result: null,
+        error: 'fail2',
+      });
+      logTaskRun({
+        task_id: 't1',
+        run_at: '2026-03-23T13:00:00Z',
+        duration_ms: 100,
+        status: 'error',
+        result: null,
+        error: 'fail3',
+      });
 
       expect(getConsecutiveFailures('t1')).toBe(3);
     });

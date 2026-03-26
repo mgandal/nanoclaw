@@ -17,8 +17,28 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MAIL_SEARCH_SCRIPT = os.path.join(_SCRIPT_DIR, "mail-search.applescript")
 MAIL_READ_SCRIPT = os.path.join(_SCRIPT_DIR, "mail-read.applescript")
+MAIL_RECENT_SCRIPT = os.path.join(_SCRIPT_DIR, "mail-recent.applescript")
 
 ICALBUDDY = "/opt/homebrew/bin/icalBuddy"
+
+# Calendar configuration
+# Work calendars: always included during work hours
+WORK_CALENDARS = ["Outlook", "MJG", "Gandal_Lab_Meetings", "Gandal_Lab_Calendar"]
+# Personal calendar: included outside work hours
+PERSONAL_CALENDARS = ["morgan.gandal@gmail.com"]
+# Work hours: 7 AM - 6 PM Eastern
+WORK_HOUR_START = 7
+WORK_HOUR_END = 18
+
+
+def get_included_calendars():
+    """Return calendar include list based on time of day."""
+    from datetime import datetime
+    hour = datetime.now().hour
+    cals = list(WORK_CALENDARS)
+    if hour < WORK_HOUR_START or hour >= WORK_HOUR_END:
+        cals.extend(PERSONAL_CALENDARS)
+    return ",".join(cals)
 
 
 def run_command(args, timeout=120, **kwargs):
@@ -70,6 +90,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._handle_calendar_today(body)
         elif self.path == "/calendar/range":
             self._handle_calendar_range(body)
+        elif self.path == "/mail/recent":
+            self._handle_mail_recent(body)
         elif self.path == "/mail/search":
             self._handle_mail_search(body)
         elif self.path == "/mail/read":
@@ -83,9 +105,11 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"status": "ok", "service": "marvinclaw-bridge"})
 
     def _handle_calendar_today(self, body):
+        cals = get_included_calendars()
         args = [
             ICALBUDDY, "-nc",
-            "-ec", "morgan.gandal@gmail.com",
+            "-ic", cals,
+            "-npn", "-nrd",
             "eventsToday"
         ]
         code, stdout, stderr = run_command(args, timeout=30)
@@ -100,14 +124,35 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": "days must be a non-negative integer"})
             return
         days = min(days, 30)
+        cals = get_included_calendars()
         args = [
             ICALBUDDY, "-nc",
-            "-ec", "morgan.gandal@gmail.com",
+            "-ic", cals,
+            "-npn", "-nrd",
             f"eventsToday+{days}"
         ]
         code, stdout, stderr = run_command(args, timeout=30)
         if code != 0:
             self._send_json(502, {"error": f"iCalBuddy failed: {stderr}"})
+            return
+        self._send_json(200, {"output": stdout})
+
+    def _handle_mail_recent(self, body):
+        days = body.get("days", 1)
+        if not isinstance(days, int) or days < 0:
+            self._send_json(400, {"error": "days must be a non-negative integer"})
+            return
+        days = min(days, 7)
+        account = body.get("account", "")
+        args = ["osascript", MAIL_RECENT_SCRIPT, str(days)]
+        if account:
+            args.append(account)
+        code, stdout, stderr = run_command(args, timeout=120)
+        if code == -1:
+            self._send_json(504, {"error": "Mail recent timed out"})
+            return
+        if code != 0:
+            self._send_json(502, {"error": f"Mail recent failed: {stderr}"})
             return
         self._send_json(200, {"output": stdout})
 

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, createTask, getTaskById, logTaskRun } from './db.js';
+import {
+  _initTestDatabase,
+  createTask,
+  getTaskById,
+  logTaskRun,
+} from './db.js';
 import {
   _resetAlertsForTests,
   _resetSchedulerLoopForTests,
@@ -366,9 +371,7 @@ describe('checkStaleTasks', () => {
   it('alerts for interval task with next_run > 2x interval behind', () => {
     const deps = makeMockDeps();
     const intervalMs = 3600000;
-    const staleNextRun = new Date(
-      Date.now() - intervalMs * 3,
-    ).toISOString();
+    const staleNextRun = new Date(Date.now() - intervalMs * 3).toISOString();
     checkStaleTasks(
       [
         makeTask({
