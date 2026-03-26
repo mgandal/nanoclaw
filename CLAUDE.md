@@ -25,6 +25,10 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
 | `scripts/sync/sync-all.sh` | Email + calendar sync (every 8h via launchd) |
 
+## Secrets / Credentials / Proxy (OneCLI)
+
+API keys, secret keys, OAuth tokens, and auth credentials are managed by the OneCLI gateway — which handles secret injection into containers at request time, so no keys or tokens are ever passed to containers directly. Run `onecli --help`.
+
 ## Skills
 
 Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full taxonomy and guidelines.
