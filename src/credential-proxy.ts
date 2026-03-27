@@ -3,12 +3,11 @@
  * Containers connect here instead of directly to the Anthropic API.
  * The proxy injects real credentials so containers never see them.
  *
- * Two auth modes:
+ * Auth modes:
  *   API key:  Proxy injects x-api-key on every request.
- *   OAuth:    Container CLI exchanges its placeholder token for a temp
- *             API key via /api/oauth/claude_cli/create_api_key.
- *             Proxy injects real OAuth token on that exchange request;
- *             subsequent requests carry the temp key which is valid as-is.
+ *   OAuth:    Proxy injects the real OAuth Bearer token, the oauth beta
+ *             flag, and anthropic-dangerous-direct-browser-access on
+ *             every request so the API accepts subscription-based auth.
  */
 import { randomUUID } from 'crypto';
 import { createServer, Server } from 'http';
@@ -30,9 +29,37 @@ export interface ProxyConfig {
   authMode: AuthMode;
 }
 
+/**
+ * Ensure the anthropic-beta header includes the required OAuth beta flag.
+ */
+function ensureOAuthBeta(
+  headers: Record<string, string | number | string[] | undefined>,
+): void {
+  const OAUTH_BETA = 'oauth-2025-04-20';
+  const CODE_BETA = 'claude-code-20250219';
+  const existing = headers['anthropic-beta'];
+  const betasToAdd: string[] = [];
+
+  if (!existing) {
+    betasToAdd.push(CODE_BETA, OAUTH_BETA);
+  } else if (typeof existing === 'string') {
+    if (!existing.includes(CODE_BETA)) betasToAdd.push(CODE_BETA);
+    if (!existing.includes(OAUTH_BETA)) betasToAdd.push(OAUTH_BETA);
+  }
+
+  if (betasToAdd.length > 0) {
+    const base = existing && typeof existing === 'string' ? existing : '';
+    headers['anthropic-beta'] = [base, ...betasToAdd].filter(Boolean).join(',');
+  }
+
+  // Required for OAuth-based access
+  headers['anthropic-dangerous-direct-browser-access'] = 'true';
+}
+
 export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
+  onAuthFailure?: (statusCode: number) => void,
 ): Promise<Server> {
   const secrets = readEnvFile([
     'ANTHROPIC_API_KEY',
@@ -51,6 +78,16 @@ export function startCredentialProxy(
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
+  let consecutiveAuthFailures = 0;
+  const AUTH_FAILURE_THRESHOLD = 3;
+
+  if (authMode === 'oauth' && !oauthToken) {
+    logger.error(
+      { tag: 'SYSTEM_ALERT' },
+      'Credential proxy: no OAuth token found (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN both missing)',
+    );
+  }
+
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       // Validate proxy token (first path segment)
@@ -61,7 +98,7 @@ export function startCredentialProxy(
         return;
       }
       // Strip the token prefix before forwarding
-      const upstreamPath = req.url.slice(tokenPrefix.length - 1); // keep leading /
+      let upstreamPath = req.url.slice(tokenPrefix.length - 1); // keep leading /
 
       const chunks: Buffer[] = [];
       let bodySize = 0;
@@ -98,15 +135,23 @@ export function startCredentialProxy(
           delete headers['x-api-key'];
           headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
         } else {
-          // OAuth mode: replace placeholder Bearer token with the real one
-          // only when the container actually sends an Authorization header
-          // (exchange request + auth probes). Post-exchange requests use
-          // x-api-key only, so they pass through without token injection.
-          if (headers['authorization']) {
-            delete headers['authorization'];
-            if (oauthToken) {
-              headers['authorization'] = `Bearer ${oauthToken}`;
-            }
+          // OAuth mode: inject real Bearer token on EVERY request
+          // and add required beta headers for OAuth access
+          delete headers['authorization'];
+          delete headers['x-api-key'];
+          if (oauthToken) {
+            headers['authorization'] = `Bearer ${oauthToken}`;
+            ensureOAuthBeta(headers);
+          }
+
+          // Ensure ?beta=true query param is present (required by API)
+          if (
+            upstreamPath.includes('/v1/messages') &&
+            !upstreamPath.includes('beta=true')
+          ) {
+            upstreamPath += upstreamPath.includes('?')
+              ? '&beta=true'
+              : '?beta=true';
           }
         }
 
@@ -120,6 +165,23 @@ export function startCredentialProxy(
             timeout: UPSTREAM_TIMEOUT,
           } as RequestOptions,
           (upRes) => {
+            const status = upRes.statusCode ?? 0;
+
+            // Track auth failures from upstream API
+            if (status === 401 || status === 403) {
+              consecutiveAuthFailures++;
+              if (
+                consecutiveAuthFailures >= AUTH_FAILURE_THRESHOLD &&
+                onAuthFailure
+              ) {
+                onAuthFailure(status);
+                // Reset to avoid firing on every subsequent request
+                consecutiveAuthFailures = 0;
+              }
+            } else {
+              consecutiveAuthFailures = 0;
+            }
+
             res.writeHead(upRes.statusCode!, upRes.headers);
             upRes.pipe(res);
           },
