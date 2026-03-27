@@ -339,6 +339,8 @@ export class GmailWatcher {
       const message = err instanceof Error ? err.message : String(err);
       const isAuthError =
         message.includes('invalid_grant') ||
+        message.includes('Invalid Credentials') ||
+        message.includes('invalid authentication credentials') ||
         message.includes('Token has been expired or revoked');
 
       if (isAuthError) {
