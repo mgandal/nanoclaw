@@ -222,6 +222,23 @@ Poll for result in `/workspace/ipc/pageindex_results/`.
 - Page numbers in the tree are 1-based and inclusive (start_index=3, end_index=12 means pages 3 through 12)
 - If polling times out after 120s, proceed without the indexed data
 
+## Danger Zone — Actions Requiring Confirmation
+
+These actions affect other people or shared systems. NEVER perform them without explicit user approval:
+
+| Action | Risk | Rule |
+|--------|------|------|
+| **Send email** | Recipients see it | Always create a *draft* first. Never auto-send. |
+| **Modify shared calendar** | Attendees get notifications | Never bulk-update or clear-and-rewrite calendar events. Single edits only, after confirmation. |
+| **Post to Slack/Telegram group** | Visible to all members | Only post when explicitly asked. Never spam channels. |
+| **Delete files in vault** | Data loss | Confirm before deleting any vault file. Prefer archiving. |
+| **Create/modify scheduled tasks** | Runs unattended | Confirm schedule and prompt before creating. Never schedule tasks that send external messages without approval. |
+| **Modify group CLAUDE.md** | Changes agent behavior for all sessions | Confirm changes with user before writing. |
+| **Register/unregister groups** | Affects message routing | Main channel only. Confirm before changes. |
+| **Write to shared state files** | Affects all groups | Confirm before modifying files in `groups/global/state/`. |
+
+When in doubt: **ask first, act second**. The cost of a confirmation message is far lower than the cost of an unwanted email, notification, or deletion.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:
