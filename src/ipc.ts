@@ -900,12 +900,7 @@ function handleSaveSkillIpc(
   }
 
   try {
-    const skillDir = path.join(
-      process.cwd(),
-      'container',
-      'skills',
-      skillName,
-    );
+    const skillDir = path.join(process.cwd(), 'container', 'skills', skillName);
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent);
 
@@ -934,12 +929,7 @@ function writeSkillResult(
   result: { success: boolean; message: string },
 ): void {
   if (!requestId) return;
-  const resultsDir = path.join(
-    DATA_DIR,
-    'ipc',
-    sourceGroup,
-    'skill_results',
-  );
+  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'skill_results');
   fs.mkdirSync(resultsDir, { recursive: true });
   const resultFile = path.join(resultsDir, `${requestId}.json`);
   const tmpFile = `${resultFile}.tmp`;
