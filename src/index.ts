@@ -94,6 +94,9 @@ import { MessageBus } from './message-bus.js';
 import { EventRouter, TrustConfig } from './event-router.js';
 import { GmailWatcher } from './watchers/gmail-watcher.js';
 import { CalendarWatcher } from './watchers/calendar-watcher.js';
+import { checkMcpEndpoint } from './health-check.js';
+import { appendAlert } from './system-alerts.js';
+import { readEnvFile } from './env.js';
 import YAML from 'yaml';
 
 // Re-export for backwards compatibility during refactor
@@ -690,79 +693,33 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
-function checkMcpEndpoints(): void {
-  import('http').then((http) => {
-    import('./env.js').then(({ readEnvFile }) => {
-      const endpoints: Array<{ name: string; url: string | undefined }> = [
-        { name: 'QMD', url: 'http://localhost:8181/mcp' },
-        {
-          name: 'SimpleMem',
-          url:
-            process.env.SIMPLEMEM_URL ||
-            readEnvFile(['SIMPLEMEM_URL']).SIMPLEMEM_URL,
-        },
-        {
-          name: 'Apple Notes',
-          url:
-            process.env.APPLE_NOTES_URL ||
-            readEnvFile(['APPLE_NOTES_URL']).APPLE_NOTES_URL,
-        },
-        {
-          name: 'Todoist',
-          url:
-            process.env.TODOIST_URL || readEnvFile(['TODOIST_URL']).TODOIST_URL,
-        },
-      ];
+/** Send an alert to specified groups + persist for digests. */
+async function sendSystemAlert(
+  service: string,
+  message: string,
+  targetFolders: string[],
+  fixInstructions?: string,
+): Promise<void> {
+  appendAlert({ timestamp: new Date().toISOString(), service, message, fixInstructions });
 
-      for (const ep of endpoints) {
-        if (!ep.url) continue;
-        try {
-          const parsed = new URL(ep.url);
-          const req = http.request(
-            {
-              hostname: parsed.hostname,
-              port: parsed.port,
-              path: parsed.pathname,
-              method: 'GET',
-              timeout: 3000,
-            },
-            (res) => {
-              logger.info(
-                { name: ep.name, status: res.statusCode },
-                'MCP endpoint reachable',
-              );
-            },
-          );
-          req.on('error', () => {
-            logger.warn(
-              { name: ep.name, url: ep.url },
-              'MCP endpoint unreachable at startup',
-            );
-          });
-          req.on('timeout', () => {
-            req.destroy();
-            logger.warn(
-              { name: ep.name, url: ep.url },
-              'MCP endpoint timed out at startup',
-            );
-          });
-          req.end();
-        } catch {
-          logger.warn(
-            { name: ep.name, url: ep.url },
-            'Invalid MCP endpoint URL',
-          );
-        }
-      }
-    });
-  });
+  for (const folder of targetFolders) {
+    const jid = Object.keys(registeredGroups).find(
+      (j) => registeredGroups[j]?.folder === folder,
+    );
+    if (!jid) continue;
+    const channel = findChannel(channels, jid);
+    if (!channel) continue;
+    const text = fixInstructions
+      ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
+      : `⚠️ *${service}*: ${message}`;
+    await channel.sendMessage(jid, text).catch(() => {});
+  }
 }
 
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
-  checkMcpEndpoints();
   loadState();
 
   // Health monitor — tracks spawn/error rates, alerts on anomalies
@@ -770,8 +727,8 @@ async function main(): Promise<void> {
     maxSpawnsPerHour: MAX_CONTAINER_SPAWNS_PER_HOUR,
     maxErrorsPerHour: MAX_ERRORS_PER_HOUR,
     onAlert: (alert) => {
-      logger.error({ alert }, 'Health monitor alert');
-      // Best-effort Telegram notification to main group
+      logger.error({ tag: 'SYSTEM_ALERT', alert }, 'Health monitor alert');
+      // Send to main group (existing behavior)
       const mainJid = Object.keys(registeredGroups).find(
         (jid) => registeredGroups[jid]?.isMain,
       );
@@ -781,11 +738,47 @@ async function main(): Promise<void> {
           ?.sendMessage(mainJid, `System alert: ${alert.detail}`)
           .catch(() => {});
       }
+      // Also send infra alerts to CODE-claw
+      if (alert.type === 'infra_error') {
+        void sendSystemAlert(alert.group, alert.detail, ['telegram_code-claw']);
+      }
     },
   });
 
-  // Periodically check health thresholds
-  setInterval(() => healthMonitor.checkThresholds(), HEALTH_MONITOR_INTERVAL);
+  // Periodically check health thresholds + MCP endpoints
+  const mcpEndpoints: Array<{ name: string; url: string | undefined }> = [
+    { name: 'QMD', url: 'http://localhost:8181/mcp' },
+    { name: 'SimpleMem', url: process.env.SIMPLEMEM_URL },
+    { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
+    { name: 'Todoist', url: process.env.TODOIST_URL },
+  ];
+
+  // Read URLs from .env if not in process.env
+  {
+    const envUrls = readEnvFile(['SIMPLEMEM_URL', 'APPLE_NOTES_URL', 'TODOIST_URL']);
+    if (!mcpEndpoints[1].url) mcpEndpoints[1].url = envUrls.SIMPLEMEM_URL;
+    if (!mcpEndpoints[2].url) mcpEndpoints[2].url = envUrls.APPLE_NOTES_URL;
+    if (!mcpEndpoints[3].url) mcpEndpoints[3].url = envUrls.TODOIST_URL;
+  }
+
+  setInterval(async () => {
+    healthMonitor.checkThresholds();
+
+    // Check MCP endpoints (only after channels are connected)
+    if (channels.length === 0) return;
+    for (const ep of mcpEndpoints) {
+      if (!ep.url) continue;
+      const result = await checkMcpEndpoint(ep.url);
+      if (result.reachable) {
+        healthMonitor.clearInfraEvent(`mcp:${ep.name}`);
+      } else {
+        healthMonitor.recordInfraEvent(
+          `mcp:${ep.name}`,
+          `MCP server ${ep.name} is unreachable`,
+        );
+      }
+    }
+  }, HEALTH_MONITOR_INTERVAL);
 
   // Inter-agent message bus
   const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
@@ -838,6 +831,14 @@ async function main(): Promise<void> {
         eventRouter,
         pollIntervalMs: GMAIL_POLL_INTERVAL,
         stateDir: watcherStateDir,
+        onAuthFailure: (error) => {
+          void sendSystemAlert(
+            'Gmail',
+            error,
+            ['telegram_code-claw'],
+            'Re-authorize Gmail OAuth: run the OAuth refresh flow in ~/.gmail-mcp/',
+          );
+        },
       });
       gmailWatcher
         .start()
@@ -867,6 +868,14 @@ async function main(): Promise<void> {
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
+    (statusCode) => {
+      void sendSystemAlert(
+        'Credential Proxy',
+        `${statusCode} auth failures from Anthropic API — token may be expired or invalid`,
+        ['telegram_code-claw'],
+        'Check CLAUDE_CODE_OAUTH_TOKEN in .env or run scripts/refresh-api-key.sh',
+      );
+    },
   );
 
   restoreRemoteControl();
