@@ -23,41 +23,79 @@ ERRORS=0
 
 # --- Step 1: Exchange email → mikejg1838@gmail.com ---
 echo ""
-echo "[1/4] Exchange email sync..."
+echo "[1/7] Exchange email sync..."
 MARVIN_DIR="/Users/mgandal/Agents/marvin2"
 if [ -f "$MARVIN_DIR/scripts/email-migrate.py" ]; then
     OUTPUT=$($PYTHON3 "$MARVIN_DIR/scripts/email-migrate.py" 2>&1)
     EC=$?
     echo "$OUTPUT" | tail -20
     if [ $EC -ne 0 ]; then
-        echo "[1/4] WARNING: Exchange email sync had errors (exit $EC)"
+        echo "[1/7] WARNING: Exchange email sync had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[1/4] SKIP: email-migrate.py not found at $MARVIN_DIR/scripts/"
+    echo "[1/7] SKIP: email-migrate.py not found at $MARVIN_DIR/scripts/"
 fi
 
 # --- Step 2: Gmail sync (mgandal → mikejg1838) ---
 echo ""
-echo "[2/4] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
+echo "[2/7] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
 $PYTHON3 "$SCRIPT_DIR/gmail-sync.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[2/4] WARNING: Gmail sync had errors (exit $EC)"
+    echo "[2/7] WARNING: Gmail sync had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- Step 3: Calendar sync (DISABLED — clear-and-rewrite triggers repeated attendee notifications) ---
 echo ""
-echo "[3/4] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
+echo "[3/7] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
 
 # --- Step 4: SimpleMem email ingest ---
 echo ""
-echo "[4/4] SimpleMem email ingest..."
+echo "[4/7] SimpleMem email ingest..."
 $PYTHON3 "$SCRIPT_DIR/simplemem-ingest.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[4/4] WARNING: SimpleMem ingest had errors (exit $EC)"
+    echo "[4/7] WARNING: SimpleMem ingest had errors (exit $EC)"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# --- Step 5: QMD update (re-scan collections for new/changed files) ---
+echo ""
+echo "[5/7] QMD update..."
+if command -v qmd &>/dev/null; then
+    qmd update 2>&1
+    EC=$?
+    if [ $EC -ne 0 ]; then
+        echo "[5/7] WARNING: QMD update had errors (exit $EC)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "[5/7] SKIP: qmd not found in PATH"
+fi
+
+# --- Step 6: QMD embed (vectorize pending docs) ---
+echo ""
+echo "[6/7] QMD embed..."
+if command -v qmd &>/dev/null; then
+    qmd embed 2>&1
+    EC=$?
+    if [ $EC -ne 0 ]; then
+        echo "[6/7] WARNING: QMD embed had errors (exit $EC)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "[6/7] SKIP: qmd not found in PATH"
+fi
+
+# --- Step 7: Vault → SimpleMem ingest ---
+echo ""
+echo "[7/7] Vault → SimpleMem ingest..."
+$PYTHON3 "$SCRIPT_DIR/vault-ingest.py" 2>&1
+EC=$?
+if [ $EC -ne 0 ]; then
+    echo "[7/7] WARNING: Vault ingest had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
