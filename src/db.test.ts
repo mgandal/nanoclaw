@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import {
   _initTestDatabase,
+  _closeDatabase,
   createTask,
   deleteTask,
   getAllChats,
@@ -612,5 +613,69 @@ describe('dashboard DB queries', () => {
     it('returns 0 when no runs exist', () => {
       expect(getConsecutiveFailures('nonexistent')).toBe(0);
     });
+  });
+});
+
+// --- registered_groups schema round-trip ---
+
+describe('registered_groups schema', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('round-trips a registered group with all fields', () => {
+    const jid = 'tg:-1234567890';
+    setRegisteredGroup(jid, {
+      name: 'TEST-GROUP',
+      folder: 'telegram_test-group',
+      trigger: '@Test',
+      added_at: '2026-03-26T00:00:00.000Z',
+      containerConfig: {
+        additionalMounts: [
+          {
+            hostPath: '/Volumes/sandisk4TB/marvin-vault',
+            containerPath: 'claire-vault',
+            readonly: false,
+          },
+        ],
+      },
+      requiresTrigger: false,
+      isMain: true,
+    });
+
+    const groups = getAllRegisteredGroups();
+    const group = groups[jid];
+
+    expect(group).toBeDefined();
+    expect(group.name).toBe('TEST-GROUP');
+    expect(group.folder).toBe('telegram_test-group');
+    expect(group.trigger).toBe('@Test');
+    expect(group.added_at).toBe('2026-03-26T00:00:00.000Z');
+    expect(group.containerConfig?.additionalMounts).toHaveLength(1);
+    expect(group.requiresTrigger).toBe(false);
+    expect(group.isMain).toBe(true);
+  });
+
+  it('round-trips a group with no optional fields', () => {
+    const jid = 'tg:999';
+    setRegisteredGroup(jid, {
+      name: 'MINIMAL',
+      folder: 'telegram_minimal',
+      trigger: '@Bot',
+      added_at: '2026-03-26T00:00:00.000Z',
+    });
+
+    const groups = getAllRegisteredGroups();
+    const group = groups[jid];
+
+    expect(group).toBeDefined();
+    expect(group.name).toBe('MINIMAL');
+    expect(group.containerConfig).toBeUndefined();
+    expect(group.requiresTrigger).toBe(true); // default
+    expect(group.isMain).toBeUndefined(); // false stored as 0, read as undefined
   });
 });
