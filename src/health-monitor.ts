@@ -22,7 +22,7 @@ interface ErrorEvent {
 }
 
 export interface HealthAlert {
-  type: 'excessive_spawns' | 'excessive_errors';
+  type: 'excessive_spawns' | 'excessive_errors' | 'infra_error';
   group: string;
   detail: string;
   timestamp: number;
@@ -42,6 +42,7 @@ export class HealthMonitor {
   private recentAlerts: Map<string, number> = new Map(); // dedup: key → timestamp
   private ollamaLatencyLog: Array<{ latencyMs: number; timestamp: number }> =
     [];
+  private infraAlerts: Map<string, string> = new Map(); // service → message
 
   constructor(config: HealthMonitorConfig) {
     this.config = config;
@@ -55,6 +56,14 @@ export class HealthMonitor {
   recordError(group: string, message: string): void {
     this.errorLog.push({ group, message, timestamp: Date.now() });
     this.pruneOldEvents();
+  }
+
+  recordInfraEvent(service: string, message: string): void {
+    this.infraAlerts.set(service, message);
+  }
+
+  clearInfraEvent(service: string): void {
+    this.infraAlerts.delete(service);
   }
 
   getSpawnCount(group: string, windowMs: number): number {
@@ -130,6 +139,23 @@ export class HealthMonitor {
           this.recentAlerts.set(alertKey, now);
           this.config.onAlert(alert);
         }
+      }
+    }
+
+    // Infrastructure alerts
+    for (const [service, message] of this.infraAlerts) {
+      const alertKey = `infra_error:${service}`;
+      const lastAlerted = this.recentAlerts.get(alertKey) ?? 0;
+      const alert: HealthAlert = {
+        type: 'infra_error',
+        group: service,
+        detail: message,
+        timestamp: now,
+      };
+      alerts.push(alert);
+      if (now - lastAlerted > alertCooldownMs) {
+        this.recentAlerts.set(alertKey, now);
+        this.config.onAlert(alert);
       }
     }
 
