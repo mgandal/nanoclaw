@@ -202,6 +202,14 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     };
   }
 
+  // Gmail MCP (if credentials exist in the container)
+  if (fs.existsSync('/home/node/.gmail-mcp/credentials.json')) {
+    servers.gmail = {
+      command: 'npx',
+      args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+    };
+  }
+
   return servers;
 }
 
@@ -491,7 +499,8 @@ async function runQuery(
         'mcp__simplemem__*',
         'mcp__apple_notes__*',
         'mcp__ollama__*',
-        'mcp__todoist__*'
+        'mcp__todoist__*',
+        'mcp__gmail__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
