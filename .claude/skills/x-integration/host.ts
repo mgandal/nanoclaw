@@ -26,7 +26,7 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
   const scriptPath = path.join(process.cwd(), '.claude', 'skills', 'x-integration', 'scripts', `${script}.ts`);
 
   return new Promise((resolve) => {
-    const proc = spawn('npx', ['tsx', scriptPath], {
+    const proc = spawn(path.join(path.dirname(process.execPath), 'npx'), ['tsx', scriptPath], {
       cwd: process.cwd(),
       env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
       stdio: ['pipe', 'pipe', 'pipe']
