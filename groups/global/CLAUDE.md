@@ -171,6 +171,44 @@ For group-specific details and detailed data:
 - Temporary or one-off information
 - Anything the user asks you to forget
 
+## People Tracking
+
+The vault has contact files for 370+ collaborators and 38 lab members. Actively maintain these as you work.
+
+**Locations:**
+- External contacts: `/workspace/extra/claire-vault/people/contacts/{firstname-lastname}.md`
+- Lab members: `/workspace/extra/claire-vault/people/lab/{firstname-lastname}.md`
+
+**When to update — do this as a side effect of normal work, not as a separate task:**
+- *Email triage*: When you read or draft an email involving someone, check if they have a contact file. Update `last_contact` and add to Interactions.
+- *Calendar events*: When you see a meeting with someone, add it to their Interactions section.
+- *Discussions*: When Mike mentions a person and shares context (new role, new project, collaboration update), update their file.
+- *New people*: If someone appears who doesn't have a file, create one from the template at `people/contacts/_template.md`.
+
+**Contact file format:**
+```yaml
+---
+type: collaborator
+name: "Full Name"
+email: "email@example.com"
+institution: "University"
+role: PI | Collaborator | Trainee | Admin
+stage: prospect | active | ongoing | dormant
+next_action: "what needs to happen next"
+last_contact: "YYYY-MM-DD"
+projects: [list, of, projects]
+---
+```
+Sections: Context, Collaboration History, Interactions, Notes
+
+**Rules:**
+- Always search QMD or grep before creating — avoid duplicates
+- Filename format: `firstname-lastname.md` (lowercase, hyphenated)
+- Update `last_contact` date whenever you process an interaction
+- Set `next_action` when there's a pending follow-up
+- Set `stage` to `dormant` if no contact in 6+ months
+- Never delete contact files — mark dormant instead
+
 ## Obsidian Vault (Shared Knowledge Base)
 
 You have read-write access to the shared Obsidian vault at `/workspace/extra/claire-vault/`. This vault syncs to Dropbox and is the user's primary knowledge base.
