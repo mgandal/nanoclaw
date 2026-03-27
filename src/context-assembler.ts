@@ -57,9 +57,7 @@ export function assembleContextPacket(
   // 4. Staleness warnings for key state files and group memory
   const stalenessWarnings = checkStaleness(groupFolder, now);
   if (stalenessWarnings.length > 0) {
-    sections.push(
-      `\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`,
-    );
+    sections.push(`\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`);
   }
 
   // 5. Recent messages (last 10)
