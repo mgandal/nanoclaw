@@ -10,6 +10,7 @@
  * - Pending message bus items
  */
 import fs from 'fs';
+import http from 'http';
 import path from 'path';
 
 import {
@@ -19,11 +20,110 @@ import {
   TIMEZONE,
 } from './config.js';
 import { getRecentMessages, getAllTasks } from './db.js';
+import { logger } from './logger.js';
 
-export function assembleContextPacket(
+/**
+ * Query QMD for relevant knowledge based on the latest message.
+ * Returns formatted snippets or empty string if QMD is unreachable.
+ */
+async function queryQmdForContext(query: string): Promise<string> {
+  const QMD_URL = 'http://localhost:8181/mcp';
+  const TIMEOUT_MS = 3000;
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(''), TIMEOUT_MS);
+
+    try {
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'query',
+          arguments: {
+            searches: [{ type: 'vec', query }],
+            intent: query,
+            minScore: 0.5,
+            limit: 3,
+          },
+        },
+      });
+
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port: 8181,
+          path: '/mcp',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            'Content-Length': Buffer.byteLength(body),
+          },
+          timeout: TIMEOUT_MS,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            clearTimeout(timer);
+            try {
+              const text = Buffer.concat(chunks).toString();
+              const parsed = JSON.parse(text);
+              const content = parsed?.result?.content;
+              if (!Array.isArray(content) || content.length === 0) {
+                resolve('');
+                return;
+              }
+              // Extract text from MCP response
+              const resultText = content
+                .filter((c: { type: string }) => c.type === 'text')
+                .map((c: { text: string }) => c.text)
+                .join('\n');
+
+              if (!resultText.trim()) {
+                resolve('');
+                return;
+              }
+
+              // Parse QMD results and format as snippets
+              const lines = resultText.split('\n').filter((l: string) => l.trim());
+              const snippets = lines
+                .slice(0, 6) // title + snippet pairs
+                .map((l: string) => l.slice(0, 200))
+                .join('\n');
+
+              resolve(snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '');
+            } catch {
+              resolve('');
+            }
+          });
+        },
+      );
+
+      req.on('error', () => {
+        clearTimeout(timer);
+        resolve('');
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        clearTimeout(timer);
+        resolve('');
+      });
+
+      req.write(body);
+      req.end();
+    } catch {
+      clearTimeout(timer);
+      resolve('');
+    }
+  });
+}
+
+export async function assembleContextPacket(
   groupFolder: string,
   isMain: boolean,
-): string {
+): Promise<string> {
   const sections: string[] = [];
 
   // 1. Date and timezone
@@ -60,12 +160,12 @@ export function assembleContextPacket(
     sections.push(`\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`);
   }
 
-  // 5. Recent messages (last 10)
+  // 5. Recent messages (last 30)
   try {
-    const messages = getRecentMessages(groupFolder);
+    const messages = getRecentMessages(groupFolder, 30);
     if (messages.length > 0) {
       const formatted = messages
-        .slice(-10)
+        .slice(-30)
         .map(
           (m) =>
             `[${new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}] ${m.sender}: ${m.content.slice(0, 200)}`,
@@ -75,6 +175,20 @@ export function assembleContextPacket(
     }
   } catch {
     // DB not initialized yet or query failed, skip
+  }
+
+  // 5b. Topic-aware QMD search — surface relevant vault/notes content
+  try {
+    const messages = getRecentMessages(groupFolder, 1);
+    const lastMsg = messages[0];
+    if (lastMsg?.content && lastMsg.content.length > 10) {
+      const qmdResult = await queryQmdForContext(lastMsg.content.slice(0, 300));
+      if (qmdResult) {
+        sections.push(qmdResult);
+      }
+    }
+  } catch {
+    // QMD unavailable, skip
   }
 
   // 6. Active scheduled tasks
@@ -213,12 +327,12 @@ function checkStaleness(groupFolder: string, now: Date): string[] {
  * Write the context packet + bus queue to the group's IPC directory
  * so the container can read them at startup.
  */
-export function writeContextPacket(
+export async function writeContextPacket(
   groupFolder: string,
   isMain: boolean,
   ipcDir: string,
-): void {
-  const packet = assembleContextPacket(groupFolder, isMain);
+): Promise<void> {
+  const packet = await assembleContextPacket(groupFolder, isMain);
   const packetPath = path.join(ipcDir, 'context-packet.txt');
   fs.writeFileSync(packetPath, packet);
 
