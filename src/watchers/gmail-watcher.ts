@@ -14,6 +14,17 @@ import { logger } from '../logger.js';
 import type { EventRouter } from '../event-router.js';
 import type { EmailPayload } from '../classification-prompts.js';
 
+// ─── Auth failure backoff ─────────────────────────────────────────────────────
+
+/** Backoff intervals in ms: 1min, 5min, 30min, then stop (-1). */
+export const AUTH_BACKOFF_SCHEDULE = [60_000, 300_000, 1_800_000];
+
+/** Given consecutive auth failure count, return backoff ms or -1 to stop. */
+export function computeBackoffMs(failureCount: number): number {
+  if (failureCount >= AUTH_BACKOFF_SCHEDULE.length) return -1;
+  return AUTH_BACKOFF_SCHEDULE[failureCount];
+}
+
 // ─── Public interfaces ────────────────────────────────────────────────────────
 
 export interface GmailWatcherConfig {
@@ -27,6 +38,8 @@ export interface GmailWatcherConfig {
   pollIntervalMs: number;
   /** Directory where gmail-state.json is persisted */
   stateDir: string;
+  /** Called on first auth failure (e.g. expired token). Fire-and-forget. */
+  onAuthFailure?: (error: string) => void;
 }
 
 export interface GmailWatcherStatus {
@@ -80,6 +93,7 @@ export class GmailWatcher {
   private lastCheck: string | null = null;
   private stateFilePath: string;
   private state: GmailState = { processedIds: [] };
+  private authFailureCount = 0;
 
   constructor(config: GmailWatcherConfig) {
     this.config = config;
@@ -157,36 +171,54 @@ export class GmailWatcher {
 
   private async authenticate(): Promise<OAuth2Client> {
     const raw = fs.readFileSync(this.config.credentialsPath, 'utf-8');
-    const creds = JSON.parse(raw) as {
-      installed?: {
-        client_id: string;
-        client_secret: string;
-        redirect_uris: string[];
-        token?: Record<string, unknown>;
-      };
-      web?: {
-        client_id: string;
-        client_secret: string;
-        redirect_uris: string[];
-        token?: Record<string, unknown>;
-      };
-    };
+    const creds = JSON.parse(raw) as Record<string, unknown>;
 
-    const data = creds.installed ?? creds.web;
-    if (!data) {
-      throw new Error(
-        `credentials.json at ${this.config.credentialsPath} has no "installed" or "web" key`,
+    // Try standard format first (installed/web key with client config)
+    let clientConfig = (creds.installed ?? creds.web) as
+      | {
+          client_id: string;
+          client_secret: string;
+          redirect_uris: string[];
+          token?: Record<string, unknown>;
+        }
+      | undefined;
+
+    let tokenData: Record<string, unknown> | undefined;
+
+    if (clientConfig) {
+      tokenData = clientConfig.token;
+    } else {
+      // credentials.json is a bare token file — look for a separate OAuth keys file
+      const keysPath = path.join(
+        path.dirname(this.config.credentialsPath),
+        'gcp-oauth.keys.json',
       );
+      if (!fs.existsSync(keysPath)) {
+        throw new Error(
+          `credentials.json at ${this.config.credentialsPath} has no "installed" or "web" key, ` +
+            `and no gcp-oauth.keys.json found alongside it`,
+        );
+      }
+      const keysRaw = fs.readFileSync(keysPath, 'utf-8');
+      const keys = JSON.parse(keysRaw) as Record<string, unknown>;
+      clientConfig = (keys.installed ?? keys.web) as typeof clientConfig;
+      if (!clientConfig) {
+        throw new Error(
+          `gcp-oauth.keys.json at ${keysPath} has no "installed" or "web" key`,
+        );
+      }
+      // The original credentials.json is the token
+      tokenData = creds as Record<string, unknown>;
     }
 
     const client = new OAuth2Client(
-      data.client_id,
-      data.client_secret,
-      data.redirect_uris[0],
+      clientConfig.client_id,
+      clientConfig.client_secret,
+      clientConfig.redirect_uris[0],
     );
 
-    if (data.token) {
-      client.setCredentials(data.token);
+    if (tokenData) {
+      client.setCredentials(tokenData);
     }
 
     return client;
@@ -292,6 +324,9 @@ export class GmailWatcher {
 
       this.saveState();
 
+      // Reset auth failure counter on successful poll
+      this.authFailureCount = 0;
+
       logger.debug(
         {
           account: this.config.account,
@@ -300,7 +335,50 @@ export class GmailWatcher {
         },
         'GmailWatcher poll complete',
       );
-    } catch (err) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isAuthError =
+        message.includes('invalid_grant') ||
+        message.includes('Token has been expired or revoked');
+
+      if (isAuthError) {
+        this.authFailureCount++;
+        const backoff = computeBackoffMs(this.authFailureCount - 1);
+
+        if (this.authFailureCount === 1 && this.config.onAuthFailure) {
+          this.config.onAuthFailure(
+            `Gmail OAuth failed for ${this.config.account}: ${message}. ` +
+              `Re-authorize by running the OAuth refresh flow in ~/.gmail-mcp/`,
+          );
+        }
+
+        if (backoff === -1) {
+          logger.error(
+            { tag: 'SYSTEM_ALERT', account: this.config.account },
+            'GmailWatcher stopping after repeated auth failures',
+          );
+          this.stop();
+          return;
+        }
+
+        logger.error(
+          {
+            tag: 'SYSTEM_ALERT',
+            account: this.config.account,
+            attempt: this.authFailureCount,
+            nextRetryMs: backoff,
+          },
+          'GmailWatcher auth failure — backing off',
+        );
+
+        // Override the normal poll interval for backoff
+        if (this.timer !== null) clearTimeout(this.timer);
+        this.timer = setTimeout(() => {
+          void this.poll().then(() => this.scheduleNext());
+        }, backoff);
+        return;
+      }
+
       logger.warn(
         { err, account: this.config.account },
         'GmailWatcher poll failed',

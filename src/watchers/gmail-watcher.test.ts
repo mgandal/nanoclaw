@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { GmailWatcher } from './gmail-watcher.js';
+import {
+  GmailWatcher,
+  computeBackoffMs,
+  AUTH_BACKOFF_SCHEDULE,
+} from './gmail-watcher.js';
 import type { EventRouter } from '../event-router.js';
 import type { EmailPayload } from '../classification-prompts.js';
 
@@ -234,5 +238,20 @@ describe('GmailWatcher.parseMessage', () => {
     expect(payload.to).toEqual([]);
     expect(payload.cc).toEqual([]);
     expect(payload.hasAttachments).toBe(false);
+  });
+});
+
+// ─── Gmail auth failure backoff ───────────────────────────────────────────────
+
+describe('Gmail auth failure backoff', () => {
+  it('returns the correct backoff for each failure count', () => {
+    expect(computeBackoffMs(0)).toBe(AUTH_BACKOFF_SCHEDULE[0]); // 60_000
+    expect(computeBackoffMs(1)).toBe(AUTH_BACKOFF_SCHEDULE[1]); // 300_000
+    expect(computeBackoffMs(2)).toBe(AUTH_BACKOFF_SCHEDULE[2]); // 1_800_000
+  });
+
+  it('returns -1 (stop) when failures exceed schedule length', () => {
+    expect(computeBackoffMs(3)).toBe(-1);
+    expect(computeBackoffMs(10)).toBe(-1);
   });
 });
