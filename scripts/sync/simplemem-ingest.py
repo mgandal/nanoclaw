@@ -54,7 +54,7 @@ def load_simplemem_config():
     from urllib.parse import urlparse, parse_qs
     parsed = urlparse(simplemem_url)
     token = parse_qs(parsed.query).get("token", [""])[0]
-    base_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}/mcp"
+    base_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}/mcp/message"
 
     return base_url, token
 

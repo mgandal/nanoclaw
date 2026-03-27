@@ -58,7 +58,8 @@ def load_simplemem_config():
 
     parsed = urlparse(simplemem_url)
     token = parse_qs(parsed.query).get("token", [""])[0]
-    base_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}/mcp"
+    base_url = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}/mcp/message"
+    # Note: SimpleMem uses SSE MCP transport. GET /mcp/sse for stream, POST /mcp/message for calls.
 
     return base_url, token
 
