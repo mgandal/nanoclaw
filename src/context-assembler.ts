@@ -54,7 +54,15 @@ export function assembleContextPacket(
     }
   }
 
-  // 4. Recent messages (last 10)
+  // 4. Staleness warnings for key state files and group memory
+  const stalenessWarnings = checkStaleness(groupFolder, now);
+  if (stalenessWarnings.length > 0) {
+    sections.push(
+      `\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`,
+    );
+  }
+
+  // 5. Recent messages (last 10)
   try {
     const messages = getRecentMessages(groupFolder);
     if (messages.length > 0) {
@@ -71,7 +79,7 @@ export function assembleContextPacket(
     // DB not initialized yet or query failed, skip
   }
 
-  // 5. Active scheduled tasks
+  // 6. Active scheduled tasks
   try {
     const tasks = getAllTasks();
     const groupTasks = tasks
@@ -90,7 +98,7 @@ export function assembleContextPacket(
     // DB not initialized, skip
   }
 
-  // 6. Message bus items pending for this group
+  // 7. Message bus items pending for this group
   const busQueuePath = path.join(
     DATA_DIR,
     'bus',
@@ -118,7 +126,7 @@ export function assembleContextPacket(
     }
   }
 
-  // 7. Classified events (from message bus)
+  // 8. Classified events (from message bus)
   if (fs.existsSync(busQueuePath)) {
     try {
       const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
@@ -153,6 +161,54 @@ export function assembleContextPacket(
   }
 
   return packet;
+}
+
+const STALENESS_THRESHOLD_DAYS = 3;
+
+/**
+ * Check key state files and group memory for staleness.
+ * Returns human-readable warnings for files not updated in >3 days.
+ */
+function checkStaleness(groupFolder: string, now: Date): string[] {
+  const warnings: string[] = [];
+
+  const filesToCheck: Array<{ path: string; label: string }> = [
+    {
+      path: path.join(GROUPS_DIR, 'global', 'state', 'current.md'),
+      label: 'current.md (priorities)',
+    },
+    {
+      path: path.join(GROUPS_DIR, 'global', 'state', 'goals.md'),
+      label: 'goals.md',
+    },
+    {
+      path: path.join(GROUPS_DIR, 'global', 'state', 'todo.md'),
+      label: 'todo.md',
+    },
+    {
+      path: path.join(GROUPS_DIR, groupFolder, 'memory.md'),
+      label: 'group memory.md',
+    },
+  ];
+
+  for (const file of filesToCheck) {
+    try {
+      if (!fs.existsSync(file.path)) continue;
+      const stat = fs.statSync(file.path);
+      const ageDays = Math.floor(
+        (now.getTime() - stat.mtimeMs) / (24 * 60 * 60 * 1000),
+      );
+      if (ageDays >= STALENESS_THRESHOLD_DAYS) {
+        warnings.push(
+          `- ${file.label}: last updated ${ageDays} days ago — may be outdated`,
+        );
+      }
+    } catch {
+      // stat failed, skip
+    }
+  }
+
+  return warnings;
 }
 
 /**

@@ -43,6 +43,16 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Danger Zone
+
+As the main channel with elevated privileges, you have the most power and the most risk:
+
+- *Group registration*: Registering/unregistering groups changes message routing for all channels. Always confirm.
+- *Global state files*: Writing to `groups/global/state/` affects all groups. Confirm before modifying.
+- *Cross-group scheduling*: Tasks scheduled with `target_group_jid` run in other groups' contexts. Confirm the target group and prompt.
+- *Sender allowlist*: Modifying `sender-allowlist.json` controls who can interact with the bot. Confirm changes.
+- *Email and calendar*: All global Danger Zone rules apply. Draft emails, never auto-send. No bulk calendar operations.
+
 ## Message Formatting
 
 Format messages based on the channel. Check the group folder name prefix:

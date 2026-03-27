@@ -717,6 +717,13 @@ export async function processTaskIpc(
           logger.warn({ err }, 'Browser automation handler not available');
         }
       }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type === 'save_skill'
+      ) {
+        handled = handleSaveSkillIpc(data, sourceGroup);
+      }
       if (!handled) {
         logger.warn({ type: data.type }, 'Unknown IPC task type');
       }
@@ -839,4 +846,103 @@ async function handleImessageIpc(
     });
     return true;
   }
+}
+
+/**
+ * Handle save_skill IPC: persist a container-created skill to host's
+ * container/skills/ so it survives session resets and is available to all groups.
+ */
+function handleSaveSkillIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+): boolean {
+  const skillName = data.skillName as string | undefined;
+  const skillContent = data.skillContent as string | undefined;
+  const requestId = data.requestId as string | undefined;
+
+  if (!skillName || !skillContent) {
+    logger.warn({ data }, 'save_skill IPC missing skillName or skillContent');
+    return true;
+  }
+
+  // Sanitize skill name: only allow lowercase alphanumeric and hyphens
+  if (!/^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(skillName)) {
+    logger.warn(
+      { skillName, sourceGroup },
+      'save_skill IPC rejected: invalid skill name',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message:
+        'Invalid skill name. Use lowercase letters, numbers, and hyphens (2-64 chars).',
+    });
+    return true;
+  }
+
+  // Prevent overwriting built-in skills
+  const builtinSkills = [
+    'agent-browser',
+    'capabilities',
+    'slack-formatting',
+    'status',
+    'skill-creator',
+  ];
+  if (builtinSkills.includes(skillName)) {
+    logger.warn(
+      { skillName, sourceGroup },
+      'save_skill IPC rejected: cannot overwrite built-in skill',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: `Cannot overwrite built-in skill "${skillName}".`,
+    });
+    return true;
+  }
+
+  try {
+    const skillDir = path.join(
+      process.cwd(),
+      'container',
+      'skills',
+      skillName,
+    );
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skillContent);
+
+    logger.info(
+      { skillName, sourceGroup },
+      'Container skill saved permanently via IPC',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: true,
+      message: `Skill "${skillName}" saved permanently.`,
+    });
+  } catch (err) {
+    logger.error({ err, skillName, sourceGroup }, 'save_skill IPC error');
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: `Error saving skill: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+
+  return true;
+}
+
+function writeSkillResult(
+  sourceGroup: string,
+  requestId: string | undefined,
+  result: { success: boolean; message: string },
+): void {
+  if (!requestId) return;
+  const resultsDir = path.join(
+    DATA_DIR,
+    'ipc',
+    sourceGroup,
+    'skill_results',
+  );
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const resultFile = path.join(resultsDir, `${requestId}.json`);
+  const tmpFile = `${resultFile}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(result));
+  fs.renameSync(tmpFile, resultFile);
 }
