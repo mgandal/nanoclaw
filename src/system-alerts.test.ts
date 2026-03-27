@@ -75,7 +75,9 @@ describe('system-alerts', () => {
 
     cleanupAlerts(ALERTS_FILE);
 
-    const all = JSON.parse(fs.readFileSync(ALERTS_FILE, 'utf-8')) as SystemAlert[];
+    const all = JSON.parse(
+      fs.readFileSync(ALERTS_FILE, 'utf-8'),
+    ) as SystemAlert[];
     expect(all).toHaveLength(1);
     expect(all[0].message).toBe('new alert');
   });

@@ -700,7 +700,12 @@ async function sendSystemAlert(
   targetFolders: string[],
   fixInstructions?: string,
 ): Promise<void> {
-  appendAlert({ timestamp: new Date().toISOString(), service, message, fixInstructions });
+  appendAlert({
+    timestamp: new Date().toISOString(),
+    service,
+    message,
+    fixInstructions,
+  });
 
   for (const folder of targetFolders) {
     const jid = Object.keys(registeredGroups).find(
@@ -755,7 +760,11 @@ async function main(): Promise<void> {
 
   // Read URLs from .env if not in process.env
   {
-    const envUrls = readEnvFile(['SIMPLEMEM_URL', 'APPLE_NOTES_URL', 'TODOIST_URL']);
+    const envUrls = readEnvFile([
+      'SIMPLEMEM_URL',
+      'APPLE_NOTES_URL',
+      'TODOIST_URL',
+    ]);
     if (!mcpEndpoints[1].url) mcpEndpoints[1].url = envUrls.SIMPLEMEM_URL;
     if (!mcpEndpoints[2].url) mcpEndpoints[2].url = envUrls.APPLE_NOTES_URL;
     if (!mcpEndpoints[3].url) mcpEndpoints[3].url = envUrls.TODOIST_URL;

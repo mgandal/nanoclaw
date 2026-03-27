@@ -37,10 +37,7 @@ export function appendAlert(
   const alerts = readAlerts(filePath);
   alerts.push(full);
   writeAlerts(alerts, filePath);
-  logger.error(
-    { tag: 'SYSTEM_ALERT', service: full.service },
-    full.message,
-  );
+  logger.error({ tag: 'SYSTEM_ALERT', service: full.service }, full.message);
   return full;
 }
 

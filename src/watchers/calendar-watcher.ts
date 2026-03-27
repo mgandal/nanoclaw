@@ -260,10 +260,12 @@ export class CalendarWatcher {
    * Back-to-back events (end === next start) are NOT conflicts.
    */
   static detectConflicts(events: CalendarEvent[]): CalendarPayload[] {
-    if (events.length < 2) return [];
+    // Filter out events missing start/end (incomplete parse results)
+    const complete = events.filter((e) => e.start && e.end);
+    if (complete.length < 2) return [];
 
     // Sort by start ascending
-    const sorted = [...events].sort((a, b) => a.start.localeCompare(b.start));
+    const sorted = [...complete].sort((a, b) => a.start.localeCompare(b.start));
 
     const conflicts: CalendarPayload[] = [];
 
