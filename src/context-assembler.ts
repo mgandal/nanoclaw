@@ -87,13 +87,17 @@ async function queryQmdForContext(query: string): Promise<string> {
               }
 
               // Parse QMD results and format as snippets
-              const lines = resultText.split('\n').filter((l: string) => l.trim());
+              const lines = resultText
+                .split('\n')
+                .filter((l: string) => l.trim());
               const snippets = lines
                 .slice(0, 6) // title + snippet pairs
                 .map((l: string) => l.slice(0, 200))
                 .join('\n');
 
-              resolve(snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '');
+              resolve(
+                snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '',
+              );
             } catch {
               resolve('');
             }
