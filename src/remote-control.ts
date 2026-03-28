@@ -147,7 +147,9 @@ export async function startRemoteControl(
     }
 
     // Poll the stdout file for the URL
-    return await new Promise<{ ok: true; url: string } | { ok: false; error: string }>((resolve) => {
+    return await new Promise<
+      { ok: true; url: string } | { ok: false; error: string }
+    >((resolve) => {
       const startTime = Date.now();
 
       const poll = () => {
@@ -228,7 +230,9 @@ export function stopRemoteControl():
   } catch {
     try {
       process.kill(pid, 'SIGTERM');
-    } catch { /* already dead */ }
+    } catch {
+      /* already dead */
+    }
   }
   activeSession = null;
   clearState();

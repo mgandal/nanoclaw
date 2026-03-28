@@ -318,7 +318,12 @@ export class GroupQueue {
     }
 
     // Clean up empty group states to prevent unbounded map growth
-    if (!state.active && !state.pendingMessages && state.pendingTasks.length === 0 && state.retryCount === 0) {
+    if (
+      !state.active &&
+      !state.pendingMessages &&
+      state.pendingTasks.length === 0 &&
+      state.retryCount === 0
+    ) {
       this.groups.delete(groupJid);
     }
 
