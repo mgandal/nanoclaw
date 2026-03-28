@@ -13,11 +13,14 @@ logs/
 groups/*
 !groups/main/
 !groups/global/
+!groups/telegram_claire/
 groups/main/*
 groups/global/*
+groups/telegram_claire/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
-
+!groups/telegram_claire/CLAUDE.md
+!groups/telegram_claire/memory_guardian/
 # Secrets
 *.keys.json
 .env
