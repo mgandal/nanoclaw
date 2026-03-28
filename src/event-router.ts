@@ -149,7 +149,7 @@ export class EventRouter {
     });
 
     if (routing === 'escalate' && this.config.onEscalate) {
-      Promise.resolve(this.config.onEscalate(classified)).catch(err =>
+      Promise.resolve(this.config.onEscalate(classified)).catch((err) =>
         logger.error({ err, eventId: event.id }, 'Escalation callback failed'),
       );
     }

@@ -227,23 +227,21 @@ export async function assembleContextPacket(
     try {
       const parsed = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
       if (Array.isArray(parsed)) busQueue = parsed;
-    } catch { /* skip */ }
+    } catch {
+      /* skip */
+    }
   }
 
   // 7. Message bus items pending for this group
   if (busQueue.length > 0) {
     const formatted = busQueue
       .slice(0, 5)
-      .map(
-        (item: unknown) => {
-          const i = item as { from: string; finding: string };
-          return `- From ${i.from}: ${(i.finding || '').slice(0, 150)}`;
-        },
-      )
+      .map((item: unknown) => {
+        const i = item as { from: string; finding: string };
+        return `- From ${i.from}: ${(i.finding || '').slice(0, 150)}`;
+      })
       .join('\n');
-    sections.push(
-      `\n--- Pending items from other agents ---\n${formatted}`,
-    );
+    sections.push(`\n--- Pending items from other agents ---\n${formatted}`);
   }
 
   // 8. Classified events (from message bus)
@@ -253,16 +251,14 @@ export async function assembleContextPacket(
   if (classified.length > 0) {
     const formatted = classified
       .slice(0, 10)
-      .map(
-        (e: unknown) => {
-          const ev = e as {
-            classification?: { urgency?: string; summary?: string };
-            from?: string;
-            finding?: string;
-          };
-          return `[${ev.classification?.urgency || 'medium'}] ${ev.classification?.summary || ev.finding || 'No summary'} (from: ${ev.from || 'unknown'})`;
-        },
-      )
+      .map((e: unknown) => {
+        const ev = e as {
+          classification?: { urgency?: string; summary?: string };
+          from?: string;
+          finding?: string;
+        };
+        return `[${ev.classification?.urgency || 'medium'}] ${ev.classification?.summary || ev.finding || 'No summary'} (from: ${ev.from || 'unknown'})`;
+      })
       .join('\n');
     sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
   }
