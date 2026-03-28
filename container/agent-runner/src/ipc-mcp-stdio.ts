@@ -835,6 +835,81 @@ server.tool(
   },
 );
 
+// --- Telegram Mini App Tools ---
+// Agents can deploy a self-contained HTML page to Vercel and send the user
+// an inline button that opens it as a Telegram Mini App (WebApp).
+
+const DEPLOY_RESULTS_DIR = path.join(IPC_DIR, 'deploy_results');
+
+server.tool(
+  'deploy_mini_app',
+  'Deploy a self-contained HTML page to Vercel and get back a public HTTPS URL. Use send_webapp_button to send the URL to the user as a Telegram Mini App button. The HTML must be fully self-contained (inline CSS/JS, no external build step).',
+  {
+    appName: z
+      .string()
+      .regex(/^[a-z0-9-]{1,50}$/)
+      .describe(
+        'Short lowercase name for the app (e.g. "quiz", "survey", "data-viewer"). Used in the Vercel deployment URL.',
+      ),
+    html: z
+      .string()
+      .min(1)
+      .describe(
+        'Complete HTML for index.html. Must be fully self-contained with inline CSS/JS. No external dependencies that require bundling.',
+      ),
+  },
+  async (args) => {
+    const requestId = `deploy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'deploy_mini_app',
+      requestId,
+      appName: args.appName,
+      html: args.html,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(DEPLOY_RESULTS_DIR, requestId, 60000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
+server.tool(
+  'send_webapp_button',
+  'Send a Telegram inline keyboard button that opens a Mini App (WebApp) when tapped. Use deploy_mini_app first to get the HTTPS URL.',
+  {
+    label: z
+      .string()
+      .min(1)
+      .max(64)
+      .describe('Button text shown to the user (e.g. "Open Quiz", "View Results")'),
+    url: z
+      .string()
+      .url()
+      .describe('HTTPS URL of the deployed mini app (from deploy_mini_app)'),
+  },
+  async (args) => {
+    writeIpcFile(MESSAGES_DIR, {
+      type: 'message',
+      chatJid,
+      text: args.label,
+      webAppUrl: args.url,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `WebApp button sent: "${args.label}" → ${args.url}`,
+        },
+      ],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

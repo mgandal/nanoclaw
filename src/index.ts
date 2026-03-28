@@ -997,6 +997,14 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendWebAppButton: async (jid, label, url) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendWebAppButton) {
+        logger.warn({ jid }, 'No channel supports sendWebAppButton for JID');
+        return;
+      }
+      await channel.sendWebAppButton(jid, label, url);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
