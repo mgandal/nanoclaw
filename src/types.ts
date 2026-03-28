@@ -90,6 +90,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: send a Telegram Mini App (WebApp) inline button.
+  sendWebAppButton?(jid: string, label: string, url: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages
