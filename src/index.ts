@@ -999,9 +999,11 @@ async function main(): Promise<void> {
     },
     sendWebAppButton: async (jid, label, url) => {
       const channel = findChannel(channels, jid);
-      if (!channel?.sendWebAppButton) {
-        logger.warn({ jid }, 'No channel supports sendWebAppButton for JID');
-        return;
+      if (!channel) {
+        throw new Error(`No channel for JID: ${jid}`);
+      }
+      if (!channel.sendWebAppButton) {
+        throw new Error(`Channel for JID ${jid} does not support sendWebAppButton`);
       }
       await channel.sendWebAppButton(jid, label, url);
     },
