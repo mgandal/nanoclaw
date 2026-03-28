@@ -107,12 +107,17 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 You have two memory systems. Use both proactively.
 
-### IMPORTANT: Proactive context loading
+### MANDATORY: Session Start Protocol
 
-At the *start of each session* (first message), before responding:
-1. Check `memory.md` in your group workspace for team structure, active tasks, and key context
-2. Query SimpleMem: `memory_query("What are the most recent and important things I should know?")` to recall cross-session context
-3. Check `/workspace/project/groups/global/state/current.md` for top priorities and deadlines
+**Do NOT skip this.** At the START of every session (first message), before responding to anything:
+
+1. **Check group memory** — read `memory.md` in your group workspace (`/workspace/group/memory.md`) for team structure, active tasks, and key context
+2. **Query SimpleMem** — run `mcp__simplemem__memory_query(query: "What are the most recent and important things I should know?")` to recall cross-session context
+3. **Check global state** — read `/workspace/project/groups/global/state/current.md` for top priorities and deadlines
+
+Failure to load context at session start is the #1 cause of context loss, dropped tasks, and asking Mike to repeat himself. This is non-negotiable.
+
+If memory.md is missing or SimpleMem returns zero results, note this internally and proceed in degraded mode — but do NOT skip the attempt.
 
 When the user asks about something and you don't immediately know the answer:
 1. Search QMD first (it indexes 800+ Apple Notes, the Obsidian vault, research docs, and state files)
@@ -170,6 +175,28 @@ For group-specific details and detailed data:
 - Verbatim conversation transcripts (those go to `conversations/` automatically)
 - Temporary or one-off information
 - Anything the user asks you to forget
+
+## MANDATORY: Research Before Asking
+
+**NEVER ask Mike for information without first exhausting all available sources. This is a hard rule with no exceptions.**
+
+Before asking Mike for any specific fact, detail, or piece of information, you MUST search ALL of the following:
+
+### Tier 1 — Search first (always)
+1. **Group memory** — `/workspace/group/memory.md` plus any topic-specific files
+2. **QMD** — `mcp__qmd__query` across vault, sessions, conversations, state files (shared across ALL groups)
+3. **SimpleMem** — `mcp__simplemem__memory_query` for past conversation context (shared across ALL groups)
+4. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
+5. **Conversation logs** — `/workspace/group/conversations/`
+
+### Tier 2 — Search if Tier 1 is empty
+6. **Gmail** — search inbox/sent for relevant emails, reservations, confirmations
+7. **Calendar** — check for relevant events and appointments
+8. **iMessage** — search recent messages for context
+9. **Apple Notes** — `mcp__apple_notes__search_notes` for note content
+
+### Rule
+Only ask Mike after documenting (internally) which sources you searched and what you found. Mike should never be asked to repeat information he has already provided anywhere in the system — in any group, any email, any note.
 
 ## People Tracking
 
