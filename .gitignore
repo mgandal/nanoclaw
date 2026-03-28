@@ -48,3 +48,4 @@ agents-sdk-docs
 
 # PageIndex Python venv
 scripts/pageindex/venv/
+.claude/worktrees/
