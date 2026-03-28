@@ -690,8 +690,7 @@ export class TelegramChannel implements Channel {
    */
   async sendWebAppButton(jid: string, label: string, url: string): Promise<void> {
     if (!this.bot) {
-      logger.warn('Telegram bot not initialized');
-      return;
+      throw new Error('Telegram bot not initialized — cannot send WebApp button');
     }
     const chatId = jid.replace(/^tg:/, '');
     const keyboard = new InlineKeyboard().webApp(label, url);
