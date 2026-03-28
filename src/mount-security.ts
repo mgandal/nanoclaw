@@ -53,7 +53,9 @@ export function loadMountAllowlist(): MountAllowlist | null {
     return cachedAllowlist;
   }
 
-  if (allowlistLoadError !== null && now - cacheTimestamp < CACHE_TTL_MS) {
+  // Only cache parse/structural errors — "file not found" should be retried
+  // so the allowlist can be created after startup without a restart.
+  if (allowlistLoadError !== null && allowlistLoadError !== 'file_not_found' && now - cacheTimestamp < CACHE_TTL_MS) {
     return null;
   }
 
@@ -64,7 +66,7 @@ export function loadMountAllowlist(): MountAllowlist | null {
 
   try {
     if (!fs.existsSync(MOUNT_ALLOWLIST_PATH)) {
-      allowlistLoadError = `Mount allowlist not found at ${MOUNT_ALLOWLIST_PATH}`;
+      allowlistLoadError = 'file_not_found';
       logger.warn(
         { path: MOUNT_ALLOWLIST_PATH },
         'Mount allowlist not found - additional mounts will be BLOCKED. ' +
@@ -203,6 +205,12 @@ function findAllowedRoot(
 function isValidContainerPath(containerPath: string): boolean {
   // Must not contain .. to prevent path traversal
   if (containerPath.includes('..')) {
+    return false;
+  }
+
+  // Must not contain : to prevent Docker -v option injection
+  // (e.g., "repo:rw" in -v host:repo:rw overrides readonly flags)
+  if (containerPath.includes(':')) {
     return false;
   }
 
