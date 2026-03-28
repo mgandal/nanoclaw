@@ -22,11 +22,13 @@ import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { handleDashboardIpc } from './dashboard-ipc.js';
+import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendWebAppButton?: (jid: string, label: string, url: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -149,6 +151,17 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
                   if (
+                    data.webAppUrl &&
+                    typeof data.webAppUrl === 'string' &&
+                    deps.sendWebAppButton
+                  ) {
+                    // Telegram Mini App button — delegate to channel
+                    await deps.sendWebAppButton(data.chatJid, data.text, data.webAppUrl);
+                    logger.info(
+                      { chatJid: data.chatJid, sourceGroup },
+                      'IPC WebApp button sent',
+                    );
+                  } else if (
                     data.sender &&
                     data.chatJid.startsWith('tg:') &&
                     TELEGRAM_BOT_POOL.length > 0
@@ -622,6 +635,14 @@ export async function processTaskIpc(
 
     default: {
       let handled = false;
+      if (typeof data.type === 'string' && data.type === 'deploy_mini_app') {
+        handled = await handleDeployMiniApp(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+          DATA_DIR,
+        );
+      }
       if (typeof data.type === 'string' && data.type === 'dashboard_query') {
         handled = await handleDashboardIpc(
           data as Record<string, unknown>,
