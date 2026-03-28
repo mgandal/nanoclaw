@@ -149,7 +149,10 @@ function getOrRecoverSeq(chatJid: string): number {
   if (recovered > 0) {
     lastAgentSeq[chatJid] = recovered;
     saveState();
-    logger.info({ chatJid, recovered }, 'Recovered message cursor from last bot reply');
+    logger.info(
+      { chatJid, recovered },
+      'Recovered message cursor from last bot reply',
+    );
   }
   return recovered;
 }
@@ -240,7 +243,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const isMainGroup = group.isMain === true;
 
   const sinceSeq = getOrRecoverSeq(chatJid);
-  const missedMessages = getMessagesSince(chatJid, sinceSeq, ASSISTANT_NAME, MAX_MESSAGES_PER_PROMPT);
+  const missedMessages = getMessagesSince(
+    chatJid,
+    sinceSeq,
+    ASSISTANT_NAME,
+    MAX_MESSAGES_PER_PROMPT,
+  );
 
   if (missedMessages.length === 0) return true;
 
@@ -699,7 +707,12 @@ async function startMessageLoop(): Promise<void> {
 function recoverPendingMessages(): void {
   for (const [chatJid, group] of Object.entries(registeredGroups)) {
     const sinceSeq = getOrRecoverSeq(chatJid);
-    const pending = getMessagesSince(chatJid, sinceSeq, ASSISTANT_NAME, MAX_MESSAGES_PER_PROMPT);
+    const pending = getMessagesSince(
+      chatJid,
+      sinceSeq,
+      ASSISTANT_NAME,
+      MAX_MESSAGES_PER_PROMPT,
+    );
     if (pending.length > 0) {
       logger.info(
         { group: group.name, pendingCount: pending.length },
