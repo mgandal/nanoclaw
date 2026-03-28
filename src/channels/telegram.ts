@@ -609,9 +609,18 @@ export class TelegramChannel implements Channel {
 
         const timestamp = new Date(ctx.message.date * 1000).toISOString();
         const senderName =
-          ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+          ctx.from?.first_name ||
+          ctx.from?.username ||
+          ctx.from?.id?.toString() ||
+          'Unknown';
 
-        this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', false);
+        this.opts.onChatMetadata(
+          chatJid,
+          timestamp,
+          undefined,
+          'telegram',
+          false,
+        );
         this.opts.onMessage(chatJid, {
           id: ctx.message.message_id.toString(),
           chat_jid: chatJid,
@@ -688,9 +697,15 @@ export class TelegramChannel implements Channel {
    * When the user taps the button, Telegram opens the given HTTPS URL as a WebApp.
    * The URL must be HTTPS (Vercel deployments always are).
    */
-  async sendWebAppButton(jid: string, label: string, url: string): Promise<void> {
+  async sendWebAppButton(
+    jid: string,
+    label: string,
+    url: string,
+  ): Promise<void> {
     if (!this.bot) {
-      throw new Error('Telegram bot not initialized — cannot send WebApp button');
+      throw new Error(
+        'Telegram bot not initialized — cannot send WebApp button',
+      );
     }
     const chatId = jid.replace(/^tg:/, '');
     const keyboard = new InlineKeyboard().webApp(label, url);
@@ -698,7 +713,10 @@ export class TelegramChannel implements Channel {
       await this.bot.api.sendMessage(chatId, label, { reply_markup: keyboard });
       logger.info({ chatId, label, url }, 'Telegram WebApp button sent');
     } catch (err) {
-      logger.error({ chatId, label, url, err }, 'Failed to send Telegram WebApp button');
+      logger.error(
+        { chatId, label, url, err },
+        'Failed to send Telegram WebApp button',
+      );
       throw err;
     }
   }

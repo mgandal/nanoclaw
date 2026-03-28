@@ -21,7 +21,10 @@ export async function handleDeployMiniApp(
 
   const requestId = data.requestId as string | undefined;
   if (!requestId || !/^[A-Za-z0-9_-]{1,80}$/.test(requestId)) {
-    logger.warn({ sourceGroup, requestId }, 'deploy_mini_app IPC invalid requestId');
+    logger.warn(
+      { sourceGroup, requestId },
+      'deploy_mini_app IPC invalid requestId',
+    );
     return true;
   }
 
@@ -54,7 +57,8 @@ export async function handleDeployMiniApp(
     if (!/^[a-z0-9-]{1,50}$/.test(appName)) {
       writeResult({
         success: false,
-        error: 'Invalid appName: must be lowercase alphanumeric with hyphens, max 50 chars',
+        error:
+          'Invalid appName: must be lowercase alphanumeric with hyphens, max 50 chars',
       });
       return true;
     }
@@ -99,13 +103,21 @@ export async function handleDeployMiniApp(
 
     const result = (await response.json()) as { url?: string };
     if (!result.url) {
-      writeResult({ success: false, error: 'Vercel response missing url field' });
+      writeResult({
+        success: false,
+        error: 'Vercel response missing url field',
+      });
       return true;
     }
 
-    const url = result.url.startsWith('https://') ? result.url : `https://${result.url}`;
+    const url = result.url.startsWith('https://')
+      ? result.url
+      : `https://${result.url}`;
     writeResult({ success: true, url });
-    logger.info({ appName, deployName, url, sourceGroup }, 'Mini app deployed to Vercel');
+    logger.info(
+      { appName, deployName, url, sourceGroup },
+      'Mini app deployed to Vercel',
+    );
     return true;
   } catch (err) {
     logger.error({ err, sourceGroup }, 'deploy_mini_app IPC error');
