@@ -31,6 +31,14 @@ type Handler = (...args: any[]) => any;
 const botRef = vi.hoisted(() => ({ current: null as any }));
 
 vi.mock('grammy', () => ({
+  Api: class MockApi {},
+  InlineKeyboard: class MockInlineKeyboard {
+    buttons: any[] = [];
+    webApp(label: string, url: string) {
+      this.buttons.push({ label, url, type: 'web_app' });
+      return this;
+    }
+  },
   Bot: class MockBot {
     token: string;
     commandHandlers = new Map<string, Handler>();
@@ -931,6 +939,121 @@ describe('TelegramChannel', () => {
     it('has name "telegram"', () => {
       const channel = new TelegramChannel('test-token', createTestOpts());
       expect(channel.name).toBe('telegram');
+    });
+  });
+
+  // --- sendWebAppButton ---
+
+  describe('sendWebAppButton', () => {
+    it('sends an inline keyboard WebApp button', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendWebAppButton('tg:100200300', 'Open Quiz', 'https://quiz.vercel.app');
+
+      const bot = currentBot();
+      expect(bot.api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'Open Quiz',
+        expect.objectContaining({ reply_markup: expect.any(Object) }),
+      );
+    });
+
+    it('throws when bot is not initialized', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      // Do not call connect() — bot stays null
+
+      await expect(
+        channel.sendWebAppButton('tg:100200300', 'label', 'https://example.com'),
+      ).rejects.toThrow('Telegram bot not initialized');
+    });
+
+    it('propagates Telegram API errors', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const bot = currentBot();
+      bot.api.sendMessage.mockRejectedValueOnce(new Error('Telegram API error'));
+
+      await expect(
+        channel.sendWebAppButton('tg:100200300', 'label', 'https://example.com'),
+      ).rejects.toThrow('Telegram API error');
+    });
+  });
+
+  // --- web_app_data handler ---
+
+  describe('web_app_data handler', () => {
+    it('routes Mini App data into the message pipeline', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handlers = currentBot().filterHandlers.get('message:web_app_data') || [];
+      expect(handlers).toHaveLength(1);
+
+      const ctx = {
+        chat: { id: 100200300 },
+        from: { id: 99001, first_name: 'Alice' },
+        message: {
+          message_id: 42,
+          date: 1700000000,
+          web_app_data: { data: '{"score":100}' },
+        },
+      };
+
+      await handlers[0](ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '[Mini App Data] {"score":100}',
+          is_from_me: false,
+        }),
+      );
+    });
+
+    it('logs a warning and skips when web_app_data has no data', async () => {
+      const { logger } = await import('../logger.js');
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handlers = currentBot().filterHandlers.get('message:web_app_data') || [];
+      const ctx = {
+        chat: { id: 100200300 },
+        from: { id: 99001 },
+        message: { message_id: 1, date: 1700000000, web_app_data: { data: '' } },
+      };
+
+      await handlers[0](ctx);
+
+      expect(opts.onMessage).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('web_app_data'));
+    });
+
+    it('skips unregistered chats', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handlers = currentBot().filterHandlers.get('message:web_app_data') || [];
+      const ctx = {
+        chat: { id: 999999 }, // not registered
+        from: { id: 99001 },
+        message: {
+          message_id: 1,
+          date: 1700000000,
+          web_app_data: { data: '{"foo":"bar"}' },
+        },
+      };
+
+      await handlers[0](ctx);
+
+      expect(opts.onMessage).not.toHaveBeenCalled();
     });
   });
 });
