@@ -225,8 +225,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (missedMessages.length === 0) return true;
 
   // --- /new command: reset session (host-side, no agent involved) ---
+  const groupTriggerPattern = getTriggerPattern(group.trigger);
   const newCmdMsg = missedMessages.find((m) => {
-    const text = m.content.trim().replace(TRIGGER_PATTERN, '').trim();
+    const text = m.content.trim().replace(groupTriggerPattern, '').trim();
     return text === '/new';
   });
   if (newCmdMsg) {
@@ -234,7 +235,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (isAllowed) {
       delete sessions[group.folder];
       deleteSession(group.folder);
-      lastAgentSeq[chatJid] = newCmdMsg.seq;
+      lastAgentSeq[chatJid] = missedMessages[missedMessages.length - 1].seq;
       saveState();
       await channel.sendMessage(chatJid, 'Session cleared. Starting fresh.');
       logger.info({ group: group.name }, 'Session reset via /new');
@@ -247,7 +248,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     missedMessages,
     isMainGroup,
     groupName: group.name,
-    triggerPattern: TRIGGER_PATTERN,
+    triggerPattern: getTriggerPattern(group.trigger),
     timezone: TIMEZONE,
     deps: {
       sendMessage: (text) => channel.sendMessage(chatJid, text),
@@ -791,6 +792,7 @@ async function main(): Promise<void> {
 
   // Inter-agent message bus
   const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
+  setInterval(() => messageBus.pruneOld(72 * 3600_000), 6 * 3600_000);
 
   // Event router and watchers (Phase 2)
   if (EVENT_ROUTER_ENABLED) {
@@ -981,7 +983,11 @@ async function main(): Promise<void> {
           return;
         }
       }
-      storeMessage(msg);
+      try {
+        storeMessage(msg);
+      } catch (err) {
+        logger.error({ err, chatJid }, 'Failed to store message');
+      }
     },
     onChatMetadata: (
       chatJid: string,
@@ -989,7 +995,13 @@ async function main(): Promise<void> {
       name?: string,
       channel?: string,
       isGroup?: boolean,
-    ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
+    ) => {
+      try {
+        storeChatMetadata(chatJid, timestamp, name, channel, isGroup);
+      } catch (err) {
+        logger.error({ err, chatJid }, 'Failed to store chat metadata');
+      }
+    },
     registeredGroups: () => registeredGroups,
   };
 

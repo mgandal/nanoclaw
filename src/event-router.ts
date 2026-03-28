@@ -149,11 +149,16 @@ export class EventRouter {
     });
 
     if (routing === 'escalate' && this.config.onEscalate) {
-      this.config.onEscalate(classified);
+      Promise.resolve(this.config.onEscalate(classified)).catch(err =>
+        logger.error({ err, eventId: event.id }, 'Escalation callback failed'),
+      );
     }
 
     this.processed++;
     this.latencies.push(latencyMs);
+    if (this.latencies.length > 1000) {
+      this.latencies = this.latencies.slice(-1000);
+    }
     this.routingCounts[routing] = (this.routingCounts[routing] ?? 0) + 1;
 
     logger.info(
