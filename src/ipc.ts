@@ -156,7 +156,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     deps.sendWebAppButton
                   ) {
                     // Telegram Mini App button — delegate to channel
-                    await deps.sendWebAppButton(data.chatJid, data.text, data.webAppUrl);
+                    await deps.sendWebAppButton(
+                      data.chatJid,
+                      data.text,
+                      data.webAppUrl,
+                    );
                     logger.info(
                       { chatJid: data.chatJid, sourceGroup },
                       'IPC WebApp button sent',

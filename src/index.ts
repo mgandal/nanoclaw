@@ -1096,7 +1096,9 @@ async function main(): Promise<void> {
         throw new Error(`No channel for JID: ${jid}`);
       }
       if (!channel.sendWebAppButton) {
-        throw new Error(`Channel for JID ${jid} does not support sendWebAppButton`);
+        throw new Error(
+          `Channel for JID ${jid} does not support sendWebAppButton`,
+        );
       }
       await channel.sendWebAppButton(jid, label, url);
     },

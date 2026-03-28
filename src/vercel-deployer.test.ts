@@ -26,7 +26,13 @@ describe('handleDeployMiniApp', () => {
   });
 
   const readResult = (requestId: string) => {
-    const file = path.join(tmpDir, 'ipc', 'telegram_claire', 'deploy_results', `${requestId}.json`);
+    const file = path.join(
+      tmpDir,
+      'ipc',
+      'telegram_claire',
+      'deploy_results',
+      `${requestId}.json`,
+    );
     return JSON.parse(fs.readFileSync(file, 'utf-8'));
   };
 
@@ -92,7 +98,12 @@ describe('handleDeployMiniApp', () => {
     );
 
     await handleDeployMiniApp(
-      { type: 'deploy_mini_app', requestId: 'req-https', appName: 'quiz', html: '<html></html>' },
+      {
+        type: 'deploy_mini_app',
+        requestId: 'req-https',
+        appName: 'quiz',
+        html: '<html></html>',
+      },
       'telegram_claire',
       true,
       tmpDir,
@@ -112,7 +123,12 @@ describe('handleDeployMiniApp', () => {
     );
 
     await handleDeployMiniApp(
-      { type: 'deploy_mini_app', requestId: 'req-002', appName: 'quiz', html: '<html></html>' },
+      {
+        type: 'deploy_mini_app',
+        requestId: 'req-002',
+        appName: 'quiz',
+        html: '<html></html>',
+      },
       'telegram_claire',
       true,
       tmpDir,
@@ -127,7 +143,12 @@ describe('handleDeployMiniApp', () => {
     delete process.env.VERCEL_TOKEN;
 
     await handleDeployMiniApp(
-      { type: 'deploy_mini_app', requestId: 'req-003', appName: 'quiz', html: '<html></html>' },
+      {
+        type: 'deploy_mini_app',
+        requestId: 'req-003',
+        appName: 'quiz',
+        html: '<html></html>',
+      },
       'telegram_claire',
       true,
       tmpDir,
@@ -147,7 +168,12 @@ describe('handleDeployMiniApp', () => {
     );
 
     await handleDeployMiniApp(
-      { type: 'deploy_mini_app', requestId: 'req-004', appName: 'quiz', html: '<html></html>' },
+      {
+        type: 'deploy_mini_app',
+        requestId: 'req-004',
+        appName: 'quiz',
+        html: '<html></html>',
+      },
       'telegram_claire',
       true,
       tmpDir,
@@ -205,10 +231,18 @@ describe('handleDeployMiniApp', () => {
   });
 
   it('handles fetch/network errors gracefully', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network unreachable')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new Error('Network unreachable')),
+    );
 
     await handleDeployMiniApp(
-      { type: 'deploy_mini_app', requestId: 'req-007', appName: 'quiz', html: '<html></html>' },
+      {
+        type: 'deploy_mini_app',
+        requestId: 'req-007',
+        appName: 'quiz',
+        html: '<html></html>',
+      },
       'telegram_claire',
       true,
       tmpDir,
