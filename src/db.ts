@@ -381,6 +381,22 @@ export function getMessagesSince(
 }
 
 /**
+ * Recover the cursor (rowid) of the last bot reply for a chat.
+ * Used when lastAgentSeq is missing (new group, corrupted state, startup
+ * recovery) to avoid sending the entire message history to the agent.
+ * Returns 0 if no bot message exists.
+ */
+export function getLastBotMessageSeq(chatJid: string): number {
+  const row = db
+    .prepare(
+      `SELECT MAX(rowid) as seq FROM messages
+       WHERE chat_jid = ? AND is_bot_message = 1`,
+    )
+    .get(chatJid) as { seq: number | null } | undefined;
+  return row?.seq ?? 0;
+}
+
+/**
  * Validate a cron expression and ensure it doesn't fire too frequently.
  * Minimum interval: 30 minutes. Rejects expressions that would burn tokens.
  */
