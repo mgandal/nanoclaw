@@ -19,10 +19,7 @@ import {
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
-import {
-  CONTAINER_RUNTIME_BIN,
-  stopContainer,
-} from './container-runtime.js';
+import { CONTAINER_RUNTIME_BIN, stopContainer } from './container-runtime.js';
 
 // ─── 1. stopContainer: command injection via name ───────────────────
 
@@ -135,7 +132,7 @@ describe('IPC register_group preserves isMain', () => {
         requiresTrigger: false,
       },
       'telegram_claire', // sourceGroup = same group (self-registration)
-      true,              // isMain source
+      true, // isMain source
       deps,
     );
 

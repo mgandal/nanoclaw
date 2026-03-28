@@ -55,7 +55,11 @@ export function loadMountAllowlist(): MountAllowlist | null {
 
   // Only cache parse/structural errors — "file not found" should be retried
   // so the allowlist can be created after startup without a restart.
-  if (allowlistLoadError !== null && allowlistLoadError !== 'file_not_found' && now - cacheTimestamp < CACHE_TTL_MS) {
+  if (
+    allowlistLoadError !== null &&
+    allowlistLoadError !== 'file_not_found' &&
+    now - cacheTimestamp < CACHE_TTL_MS
+  ) {
     return null;
   }
 
