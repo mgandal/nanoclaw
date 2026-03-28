@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
-import { Api, Bot } from 'grammy';
+import { Api, Bot, InlineKeyboard } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -593,6 +593,45 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:location', (ctx) => storeNonText(ctx, '[Location]'));
     this.bot.on('message:contact', (ctx) => storeNonText(ctx, '[Contact]'));
 
+    // Handle Mini App data submitted via Telegram.WebApp.sendData()
+    // Note: web_app_data only fires in private (DM) chats with the bot.
+    this.bot.on('message:web_app_data', async (ctx) => {
+      try {
+        const webAppData = ctx.message.web_app_data;
+        if (!webAppData?.data) {
+          logger.warn('Received web_app_data with no data');
+          return;
+        }
+
+        const chatJid = `tg:${ctx.chat.id}`;
+        const group = this.opts.registeredGroups()[chatJid];
+        if (!group) return;
+
+        const timestamp = new Date(ctx.message.date * 1000).toISOString();
+        const senderName =
+          ctx.from?.first_name || ctx.from?.username || ctx.from?.id?.toString() || 'Unknown';
+
+        this.opts.onChatMetadata(chatJid, timestamp, undefined, 'telegram', false);
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          // Prefix so agents can identify Mini App responses
+          content: `[Mini App Data] ${webAppData.data}`,
+          timestamp,
+          is_from_me: false,
+        });
+
+        logger.info(
+          { chatId: ctx.chat.id, dataLength: webAppData.data.length },
+          'Received web_app_data from Mini App',
+        );
+      } catch (err) {
+        logger.error({ err }, 'Error handling web_app_data');
+      }
+    });
+
     // Handle errors gracefully
     this.bot.catch((err) => {
       logger.error({ err: err.message }, 'Telegram bot error');
@@ -641,6 +680,26 @@ export class TelegramChannel implements Channel {
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  /**
+   * Send a Telegram Mini App button via an inline keyboard.
+   * When the user taps the button, Telegram opens the given HTTPS URL as a WebApp.
+   * The URL must be HTTPS (Vercel deployments always are).
+   */
+  async sendWebAppButton(jid: string, label: string, url: string): Promise<void> {
+    if (!this.bot) {
+      throw new Error('Telegram bot not initialized — cannot send WebApp button');
+    }
+    const chatId = jid.replace(/^tg:/, '');
+    const keyboard = new InlineKeyboard().webApp(label, url);
+    try {
+      await this.bot.api.sendMessage(chatId, label, { reply_markup: keyboard });
+      logger.info({ chatId, label, url }, 'Telegram WebApp button sent');
+    } catch (err) {
+      logger.error({ chatId, label, url, err }, 'Failed to send Telegram WebApp button');
+      throw err;
     }
   }
 
