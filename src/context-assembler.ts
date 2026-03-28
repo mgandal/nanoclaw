@@ -214,7 +214,7 @@ export async function assembleContextPacket(
     // DB not initialized, skip
   }
 
-  // 7. Message bus items pending for this group
+  // Read bus queue once for sections 7 and 8
   const busQueuePath = path.join(
     DATA_DIR,
     'bus',
@@ -222,52 +222,49 @@ export async function assembleContextPacket(
     groupFolder,
     'queue.json',
   );
+  let busQueue: unknown[] = [];
   if (fs.existsSync(busQueuePath)) {
     try {
-      const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
-      if (Array.isArray(queue) && queue.length > 0) {
-        const formatted = queue
-          .slice(0, 5)
-          .map(
-            (item: { from: string; finding: string }) =>
-              `- From ${item.from}: ${(item.finding || '').slice(0, 150)}`,
-          )
-          .join('\n');
-        sections.push(
-          `\n--- Pending items from other agents ---\n${formatted}`,
-        );
-      }
-    } catch {
-      // Malformed queue, skip
-    }
+      const parsed = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
+      if (Array.isArray(parsed)) busQueue = parsed;
+    } catch { /* skip */ }
+  }
+
+  // 7. Message bus items pending for this group
+  if (busQueue.length > 0) {
+    const formatted = busQueue
+      .slice(0, 5)
+      .map(
+        (item: unknown) => {
+          const i = item as { from: string; finding: string };
+          return `- From ${i.from}: ${(i.finding || '').slice(0, 150)}`;
+        },
+      )
+      .join('\n');
+    sections.push(
+      `\n--- Pending items from other agents ---\n${formatted}`,
+    );
   }
 
   // 8. Classified events (from message bus)
-  if (fs.existsSync(busQueuePath)) {
-    try {
-      const queue = JSON.parse(fs.readFileSync(busQueuePath, 'utf-8'));
-      const classified = queue.filter(
-        (m: { topic: string }) => m.topic === 'classified_event',
-      );
-      if (classified.length > 0) {
-        const formatted = classified
-          .slice(0, 10)
-          .map(
-            (e: {
-              payload?: {
-                classification?: { urgency?: string; summary?: string };
-              };
-              from?: string;
-              finding?: string;
-            }) =>
-              `[${e.payload?.classification?.urgency || 'medium'}] ${e.payload?.classification?.summary || e.finding || 'No summary'} (from: ${e.from || 'unknown'})`,
-          )
-          .join('\n');
-        sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
-      }
-    } catch {
-      // Already read above or malformed, skip
-    }
+  const classified = busQueue.filter(
+    (m: unknown) => (m as { topic: string }).topic === 'classified_event',
+  );
+  if (classified.length > 0) {
+    const formatted = classified
+      .slice(0, 10)
+      .map(
+        (e: unknown) => {
+          const ev = e as {
+            classification?: { urgency?: string; summary?: string };
+            from?: string;
+            finding?: string;
+          };
+          return `[${ev.classification?.urgency || 'medium'}] ${ev.classification?.summary || ev.finding || 'No summary'} (from: ${ev.from || 'unknown'})`;
+        },
+      )
+      .join('\n');
+    sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
   }
 
   // Assemble and truncate
@@ -337,8 +334,11 @@ export async function writeContextPacket(
   ipcDir: string,
 ): Promise<void> {
   const packet = await assembleContextPacket(groupFolder, isMain);
+  fs.mkdirSync(ipcDir, { recursive: true });
   const packetPath = path.join(ipcDir, 'context-packet.txt');
-  fs.writeFileSync(packetPath, packet);
+  const tmpPacketPath = `${packetPath}.tmp`;
+  fs.writeFileSync(tmpPacketPath, packet);
+  fs.renameSync(tmpPacketPath, packetPath);
 
   // Also copy bus queue if it exists, then clear it (agent will process)
   const busQueueSrc = path.join(

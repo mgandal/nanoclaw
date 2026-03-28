@@ -745,8 +745,8 @@ export async function runContainerAgent(
       // Legacy mode: parse the last output marker pair from accumulated stdout
       try {
         // Extract JSON between sentinel markers for robust parsing
-        const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
-        const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
+        const endIdx = stdout.lastIndexOf(OUTPUT_END_MARKER);
+        const startIdx = stdout.lastIndexOf(OUTPUT_START_MARKER, endIdx);
 
         let jsonLine: string;
         if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
@@ -830,7 +830,9 @@ export function writeTasksSnapshot(
     : tasks.filter((t) => t.groupFolder === groupFolder);
 
   const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
-  fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
+  const tmpTasksFile = `${tasksFile}.tmp`;
+  fs.writeFileSync(tmpTasksFile, JSON.stringify(filteredTasks, null, 2));
+  fs.renameSync(tmpTasksFile, tasksFile);
 }
 
 export interface AvailableGroup {
@@ -858,8 +860,9 @@ export function writeGroupsSnapshot(
   const visibleGroups = isMain ? groups : [];
 
   const groupsFile = path.join(groupIpcDir, 'available_groups.json');
+  const tmpGroupsFile = `${groupsFile}.tmp`;
   fs.writeFileSync(
-    groupsFile,
+    tmpGroupsFile,
     JSON.stringify(
       {
         groups: visibleGroups,
@@ -869,4 +872,5 @@ export function writeGroupsSnapshot(
       2,
     ),
   );
+  fs.renameSync(tmpGroupsFile, groupsFile);
 }

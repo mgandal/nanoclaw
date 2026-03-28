@@ -317,6 +317,11 @@ export class GroupQueue {
       return;
     }
 
+    // Clean up empty group states to prevent unbounded map growth
+    if (!state.active && !state.pendingMessages && state.pendingTasks.length === 0 && state.retryCount === 0) {
+      this.groups.delete(groupJid);
+    }
+
     // Nothing pending for this group; check if other groups are waiting for a slot
     this.drainWaiting();
   }

@@ -14,6 +14,7 @@ interface RemoteControlSession {
 }
 
 let activeSession: RemoteControlSession | null = null;
+let pendingStart = false;
 
 const URL_REGEX = /https:\/\/claude\.ai\/code\S+/;
 const URL_TIMEOUT_MS = 30_000;
@@ -79,6 +80,7 @@ export function getActiveSession(): RemoteControlSession | null {
 /** @internal — exported for testing only */
 export function _resetForTesting(): void {
   activeSession = null;
+  pendingStart = false;
 }
 
 /** @internal — exported for testing only */
@@ -101,105 +103,114 @@ export async function startRemoteControl(
     clearState();
   }
 
-  // Redirect stdout/stderr to files so the process has no pipes to the parent.
-  // This prevents SIGPIPE when NanoClaw restarts.
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const stdoutFd = fs.openSync(STDOUT_FILE, 'w');
-  const stderrFd = fs.openSync(STDERR_FILE, 'w');
+  if (pendingStart) {
+    return { ok: false, error: 'Remote Control session is already starting' };
+  }
+  pendingStart = true;
 
-  let proc;
   try {
-    proc = spawn('claude', ['remote-control', '--name', 'NanoClaw Remote'], {
-      cwd,
-      stdio: ['pipe', stdoutFd, stderrFd],
-      detached: true,
-    });
-  } catch (err: any) {
+    // Redirect stdout/stderr to files so the process has no pipes to the parent.
+    // This prevents SIGPIPE when NanoClaw restarts.
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const stdoutFd = fs.openSync(STDOUT_FILE, 'w');
+    const stderrFd = fs.openSync(STDERR_FILE, 'w');
+
+    let proc;
+    try {
+      proc = spawn('claude', ['remote-control', '--name', 'NanoClaw Remote'], {
+        cwd,
+        stdio: ['pipe', stdoutFd, stderrFd],
+        detached: true,
+      });
+    } catch (err: any) {
+      fs.closeSync(stdoutFd);
+      fs.closeSync(stderrFd);
+      return { ok: false, error: `Failed to start: ${err.message}` };
+    }
+
+    // Auto-accept the "Enable Remote Control?" prompt
+    if (proc.stdin) {
+      proc.stdin.write('y\n');
+      proc.stdin.end();
+    }
+
+    // Close FDs in the parent — the child inherited copies
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
-    return { ok: false, error: `Failed to start: ${err.message}` };
-  }
 
-  // Auto-accept the "Enable Remote Control?" prompt
-  if (proc.stdin) {
-    proc.stdin.write('y\n');
-    proc.stdin.end();
-  }
+    // Fully detach from parent
+    proc.unref();
 
-  // Close FDs in the parent — the child inherited copies
-  fs.closeSync(stdoutFd);
-  fs.closeSync(stderrFd);
+    const pid = proc.pid;
+    if (!pid) {
+      return { ok: false, error: 'Failed to get process PID' };
+    }
 
-  // Fully detach from parent
-  proc.unref();
+    // Poll the stdout file for the URL
+    return await new Promise<{ ok: true; url: string } | { ok: false; error: string }>((resolve) => {
+      const startTime = Date.now();
 
-  const pid = proc.pid;
-  if (!pid) {
-    return { ok: false, error: 'Failed to get process PID' };
-  }
-
-  // Poll the stdout file for the URL
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-
-    const poll = () => {
-      // Check if process died
-      if (!isProcessAlive(pid)) {
-        resolve({ ok: false, error: 'Process exited before producing URL' });
-        return;
-      }
-
-      // Check for URL in stdout file
-      let content = '';
-      try {
-        content = fs.readFileSync(STDOUT_FILE, 'utf-8');
-      } catch {
-        // File might not have content yet
-      }
-
-      const match = content.match(URL_REGEX);
-      if (match) {
-        const session: RemoteControlSession = {
-          pid,
-          url: match[0],
-          startedBy: sender,
-          startedInChat: chatJid,
-          startedAt: new Date().toISOString(),
-        };
-        activeSession = session;
-        saveState(session);
-
-        logger.info(
-          { url: match[0], pid, sender, chatJid },
-          'Remote Control session started',
-        );
-        resolve({ ok: true, url: match[0] });
-        return;
-      }
-
-      // Timeout check
-      if (Date.now() - startTime >= URL_TIMEOUT_MS) {
-        try {
-          process.kill(-pid, 'SIGTERM');
-        } catch {
-          try {
-            process.kill(pid, 'SIGTERM');
-          } catch {
-            // already dead
-          }
+      const poll = () => {
+        // Check if process died
+        if (!isProcessAlive(pid)) {
+          resolve({ ok: false, error: 'Process exited before producing URL' });
+          return;
         }
-        resolve({
-          ok: false,
-          error: 'Timed out waiting for Remote Control URL',
-        });
-        return;
-      }
 
-      setTimeout(poll, URL_POLL_MS);
-    };
+        // Check for URL in stdout file
+        let content = '';
+        try {
+          content = fs.readFileSync(STDOUT_FILE, 'utf-8');
+        } catch {
+          // File might not have content yet
+        }
 
-    poll();
-  });
+        const match = content.match(URL_REGEX);
+        if (match) {
+          const session: RemoteControlSession = {
+            pid,
+            url: match[0],
+            startedBy: sender,
+            startedInChat: chatJid,
+            startedAt: new Date().toISOString(),
+          };
+          activeSession = session;
+          saveState(session);
+
+          logger.info(
+            { url: match[0], pid, sender, chatJid },
+            'Remote Control session started',
+          );
+          resolve({ ok: true, url: match[0] });
+          return;
+        }
+
+        // Timeout check
+        if (Date.now() - startTime >= URL_TIMEOUT_MS) {
+          try {
+            process.kill(-pid, 'SIGTERM');
+          } catch {
+            try {
+              process.kill(pid, 'SIGTERM');
+            } catch {
+              // already dead
+            }
+          }
+          resolve({
+            ok: false,
+            error: 'Timed out waiting for Remote Control URL',
+          });
+          return;
+        }
+
+        setTimeout(poll, URL_POLL_MS);
+      };
+
+      poll();
+    });
+  } finally {
+    pendingStart = false;
+  }
 }
 
 export function stopRemoteControl():
@@ -213,9 +224,11 @@ export function stopRemoteControl():
 
   const { pid } = activeSession;
   try {
-    process.kill(pid, 'SIGTERM');
+    process.kill(-pid, 'SIGTERM');
   } catch {
-    // already dead
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch { /* already dead */ }
   }
   activeSession = null;
   clearState();
