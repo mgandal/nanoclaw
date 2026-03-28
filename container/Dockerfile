@@ -32,6 +32,26 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Install agent-reach: gives agents read/search access to 15+ platforms
+# (Twitter/X, YouTube, Reddit, GitHub, RSS, web, Bilibili, Weibo, Douyin, etc.)
+RUN apt-get update && apt-get install -y     python3     python3-pip     pipx     && rm -rf /var/lib/apt/lists/*
+
+# Install gh CLI (GitHub)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install agent-reach + mcporter (MCP bridge for XiaoHongShu, Douyin, LinkedIn, Weibo)
+RUN pip3 install agent-reach --break-system-packages && \
+    npm install -g mcporter
+
+# Pre-configure agent-reach for the node user's home directory
+RUN mkdir -p /home/node/.agent-reach && \
+    agent-reach install --env=auto --safe 2>/dev/null || true
+
 # Create app directory
 WORKDIR /app
 
