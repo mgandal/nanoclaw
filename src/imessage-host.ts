@@ -47,11 +47,44 @@ interface ConversationResult {
   }>;
 }
 
-function openChatDb(): Database {
+const DB_IDLE_CLOSE_MS = 30_000;
+let cachedDb: Database | null = null;
+let dbIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function getChatDb(): Database {
+  if (cachedDb) {
+    if (dbIdleTimer) clearTimeout(dbIdleTimer);
+    dbIdleTimer = setTimeout(closeCachedDb, DB_IDLE_CLOSE_MS);
+    return cachedDb;
+  }
+
   if (!fs.existsSync(CHAT_DB_PATH)) {
     throw new Error(`iMessage database not found at ${CHAT_DB_PATH}`);
   }
-  return new Database(CHAT_DB_PATH, { readonly: true });
+
+  cachedDb = new Database(CHAT_DB_PATH, { readonly: true });
+  dbIdleTimer = setTimeout(closeCachedDb, DB_IDLE_CLOSE_MS);
+  return cachedDb;
+}
+
+function closeCachedDb(): void {
+  if (cachedDb) {
+    try {
+      cachedDb.close();
+    } catch {
+      /* ignore */
+    }
+    cachedDb = null;
+  }
+  if (dbIdleTimer) {
+    clearTimeout(dbIdleTimer);
+    dbIdleTimer = null;
+  }
+}
+
+/** @internal - for tests only */
+export function _closeCachedDbForTests(): void {
+  closeCachedDb();
 }
 
 function appleTimestampToISO(appleNs: number): string {
@@ -65,52 +98,48 @@ export function imessageSearch(params: {
   since_days?: number;
   limit?: number;
 }): SearchResult[] {
-  const db = openChatDb();
-  try {
-    const limit = Math.min(params.limit || 50, 200);
-    const sinceDays = params.since_days || 30;
-    const cutoffNs =
-      (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
-      NANOSECOND_DIVISOR;
+  const db = getChatDb();
+  const limit = Math.min(params.limit || 50, 200);
+  const sinceDays = params.since_days || 30;
+  const cutoffNs =
+    (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
+    NANOSECOND_DIVISOR;
 
-    let sql = `
-      SELECT m.rowid, m.date, m.text, m.is_from_me,
-             h.id as handle_id, m.cache_roomnames
-      FROM message m
-      LEFT JOIN handle h ON m.handle_id = h.rowid
-      WHERE m.text IS NOT NULL
-        AND m.date > ?
-    `;
-    const sqlParams: (string | number)[] = [cutoffNs];
+  let sql = `
+    SELECT m.rowid, m.date, m.text, m.is_from_me,
+           h.id as handle_id, m.cache_roomnames
+    FROM message m
+    LEFT JOIN handle h ON m.handle_id = h.rowid
+    WHERE m.text IS NOT NULL
+      AND m.date > ?
+  `;
+  const sqlParams: (string | number)[] = [cutoffNs];
 
-    if (params.contact) {
-      sql += ` AND h.id LIKE ?`;
-      sqlParams.push(`%${params.contact}%`);
-    }
-    if (params.query) {
-      sql += ` AND m.text LIKE ?`;
-      sqlParams.push(`%${params.query}%`);
-    }
-
-    sql += ` ORDER BY m.date DESC LIMIT ?`;
-    sqlParams.push(limit);
-
-    const rows = db.prepare(sql).all(...sqlParams) as MessageRow[];
-
-    return rows.map((row) => ({
-      id: row.rowid,
-      timestamp: appleTimestampToISO(row.date),
-      contact: row.handle_id || 'unknown',
-      is_from_me: row.is_from_me === 1,
-      text:
-        row.text && row.text.length > 200
-          ? row.text.slice(0, 200) + '...'
-          : row.text || '',
-      group_chat: row.cache_roomnames || null,
-    }));
-  } finally {
-    db.close();
+  if (params.contact) {
+    sql += ` AND h.id LIKE ?`;
+    sqlParams.push(`%${params.contact}%`);
   }
+  if (params.query) {
+    sql += ` AND m.text LIKE ?`;
+    sqlParams.push(`%${params.query}%`);
+  }
+
+  sql += ` ORDER BY m.date DESC LIMIT ?`;
+  sqlParams.push(limit);
+
+  const rows = db.prepare(sql).all(...sqlParams) as MessageRow[];
+
+  return rows.map((row) => ({
+    id: row.rowid,
+    timestamp: appleTimestampToISO(row.date),
+    contact: row.handle_id || 'unknown',
+    is_from_me: row.is_from_me === 1,
+    text:
+      row.text && row.text.length > 200
+        ? row.text.slice(0, 200) + '...'
+        : row.text || '',
+    group_chat: row.cache_roomnames || null,
+  }));
 }
 
 export function imessageRead(params: {
@@ -118,40 +147,36 @@ export function imessageRead(params: {
   limit?: number;
   since_days?: number;
 }): ConversationResult {
-  const db = openChatDb();
-  try {
-    const limit = Math.min(params.limit || 50, 200);
-    const sinceDays = params.since_days || 7;
-    const cutoffNs =
-      (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
-      NANOSECOND_DIVISOR;
+  const db = getChatDb();
+  const limit = Math.min(params.limit || 50, 200);
+  const sinceDays = params.since_days || 7;
+  const cutoffNs =
+    (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
+    NANOSECOND_DIVISOR;
 
-    const rows = db
-      .prepare(
-        `
-      SELECT m.date, m.text, m.is_from_me, h.id as handle_id
-      FROM message m
-      LEFT JOIN handle h ON m.handle_id = h.rowid
-      WHERE m.text IS NOT NULL
-        AND m.date > ?
-        AND h.id LIKE ?
-      ORDER BY m.date ASC
-      LIMIT ?
-    `,
-      )
-      .all(cutoffNs, `%${params.contact}%`, limit) as MessageRow[];
+  const rows = db
+    .prepare(
+      `
+    SELECT m.date, m.text, m.is_from_me, h.id as handle_id
+    FROM message m
+    LEFT JOIN handle h ON m.handle_id = h.rowid
+    WHERE m.text IS NOT NULL
+      AND m.date > ?
+      AND h.id LIKE ?
+    ORDER BY m.date ASC
+    LIMIT ?
+  `,
+    )
+    .all(cutoffNs, `%${params.contact}%`, limit) as MessageRow[];
 
-    return {
-      contact: params.contact,
-      messages: rows.map((row) => ({
-        timestamp: appleTimestampToISO(row.date),
-        is_from_me: row.is_from_me === 1,
-        text: row.text || '',
-      })),
-    };
-  } finally {
-    db.close();
-  }
+  return {
+    contact: params.contact,
+    messages: rows.map((row) => ({
+      timestamp: appleTimestampToISO(row.date),
+      is_from_me: row.is_from_me === 1,
+      text: row.text || '',
+    })),
+  };
 }
 
 export async function imessageSend(params: {
@@ -207,38 +232,34 @@ export function imessageListContacts(params: {
   since_days?: number;
   limit?: number;
 }): Array<{ contact: string; message_count: number; last_message: string }> {
-  const db = openChatDb();
-  try {
-    const sinceDays = params.since_days || 30;
-    const limit = Math.min(params.limit || 30, 100);
-    const cutoffNs =
-      (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
-      NANOSECOND_DIVISOR;
+  const db = getChatDb();
+  const sinceDays = params.since_days || 30;
+  const limit = Math.min(params.limit || 30, 100);
+  const cutoffNs =
+    (Date.now() / 1000 - APPLE_EPOCH_OFFSET - sinceDays * 86400) *
+    NANOSECOND_DIVISOR;
 
-    const rows = db
-      .prepare(
-        `
-      SELECT h.id as contact, COUNT(*) as message_count, MAX(m.date) as last_date
-      FROM message m
-      JOIN handle h ON m.handle_id = h.rowid
-      WHERE m.text IS NOT NULL AND m.date > ?
-      GROUP BY h.id
-      ORDER BY last_date DESC
-      LIMIT ?
-    `,
-      )
-      .all(cutoffNs, limit) as Array<{
-      contact: string;
-      message_count: number;
-      last_date: number;
-    }>;
+  const rows = db
+    .prepare(
+      `
+    SELECT h.id as contact, COUNT(*) as message_count, MAX(m.date) as last_date
+    FROM message m
+    JOIN handle h ON m.handle_id = h.rowid
+    WHERE m.text IS NOT NULL AND m.date > ?
+    GROUP BY h.id
+    ORDER BY last_date DESC
+    LIMIT ?
+  `,
+    )
+    .all(cutoffNs, limit) as Array<{
+    contact: string;
+    message_count: number;
+    last_date: number;
+  }>;
 
-    return rows.map((row) => ({
-      contact: row.contact,
-      message_count: row.message_count,
-      last_message: appleTimestampToISO(row.last_date),
-    }));
-  } finally {
-    db.close();
-  }
+  return rows.map((row) => ({
+    contact: row.contact,
+    message_count: row.message_count,
+    last_message: appleTimestampToISO(row.last_date),
+  }));
 }

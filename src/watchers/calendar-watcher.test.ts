@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { CalendarWatcher, type CalendarEvent } from './calendar-watcher.js';
 
@@ -67,5 +67,49 @@ describe('CalendarWatcher.detectConflicts', () => {
       },
     ];
     expect(CalendarWatcher.detectConflicts(events)).toEqual([]);
+  });
+});
+
+describe('CalendarWatcher.detectNewConflicts', () => {
+  it('reports conflict when a new event overlaps an existing one', () => {
+    const newEvents: CalendarEvent[] = [
+      { title: 'New', start: '2026-03-26 10:30', end: '2026-03-26 11:30' },
+    ];
+    const allEvents: CalendarEvent[] = [
+      { title: 'Existing', start: '2026-03-26 10:00', end: '2026-03-26 11:00' },
+      { title: 'New', start: '2026-03-26 10:30', end: '2026-03-26 11:30' },
+    ];
+    const conflicts = CalendarWatcher.detectNewConflicts(newEvents, allEvents);
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].changeType).toBe('conflict');
+  });
+
+  it('does NOT report conflicts between two existing (non-new) events', () => {
+    const newEvents: CalendarEvent[] = [
+      {
+        title: 'Unrelated',
+        start: '2026-03-26 15:00',
+        end: '2026-03-26 16:00',
+      },
+    ];
+    const allEvents: CalendarEvent[] = [
+      { title: 'A', start: '2026-03-26 10:00', end: '2026-03-26 11:00' },
+      { title: 'B', start: '2026-03-26 10:30', end: '2026-03-26 11:30' },
+      {
+        title: 'Unrelated',
+        start: '2026-03-26 15:00',
+        end: '2026-03-26 16:00',
+      },
+    ];
+    const conflicts = CalendarWatcher.detectNewConflicts(newEvents, allEvents);
+    expect(conflicts).toHaveLength(0);
+  });
+
+  it('returns empty when no new events', () => {
+    const conflicts = CalendarWatcher.detectNewConflicts(
+      [],
+      [{ title: 'A', start: '2026-03-26 10:00', end: '2026-03-26 11:00' }],
+    );
+    expect(conflicts).toHaveLength(0);
   });
 });

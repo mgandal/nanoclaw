@@ -277,6 +277,14 @@ export class GmailChannel implements Channel {
       messageId: rfc2822MessageId,
     });
 
+    // Cap threadMeta to prevent unbounded memory growth
+    if (this.threadMeta.size > 5000) {
+      const keys = [...this.threadMeta.keys()];
+      for (const key of keys.slice(0, keys.length - 2500)) {
+        this.threadMeta.delete(key);
+      }
+    }
+
     // Store chat metadata for group discovery
     this.opts.onChatMetadata(chatJid, timestamp, subject, 'gmail', false);
 
@@ -297,7 +305,7 @@ export class GmailChannel implements Channel {
 
     this.opts.onMessage(mainJid, {
       id: messageId,
-      chat_jid: mainJid,
+      chat_jid: chatJid,
       sender: senderEmail,
       sender_name: senderName,
       content,
