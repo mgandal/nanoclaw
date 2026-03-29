@@ -26,102 +26,122 @@ import { logger } from './logger.js';
  * Query QMD for relevant knowledge based on the latest message.
  * Returns formatted snippets or empty string if QMD is unreachable.
  */
-async function queryQmdForContext(query: string): Promise<string> {
-  const QMD_URL = 'http://localhost:8181/mcp';
-  const TIMEOUT_MS = 3000;
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(''), TIMEOUT_MS);
-
-    try {
-      const body = JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: {
-          name: 'query',
-          arguments: {
-            searches: [{ type: 'vec', query }],
-            intent: query,
-            minScore: 0.5,
-            limit: 3,
-          },
+/**
+ * Send a JSON-RPC request to QMD's Streamable HTTP MCP endpoint.
+ * Handles chunked transfer encoding by collecting the full response body.
+ */
+function qmdRequest(
+  body: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<{ body: string; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: 8181,
+        path: '/mcp',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'Content-Length': Buffer.byteLength(body),
+          ...headers,
         },
-      });
-
-      const req = http.request(
-        {
-          hostname: '127.0.0.1',
-          port: 8181,
-          path: '/mcp',
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json, text/event-stream',
-            'Content-Length': Buffer.byteLength(body),
-          },
-          timeout: TIMEOUT_MS,
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () => {
-            clearTimeout(timer);
-            try {
-              const text = Buffer.concat(chunks).toString();
-              const parsed = JSON.parse(text);
-              const content = parsed?.result?.content;
-              if (!Array.isArray(content) || content.length === 0) {
-                resolve('');
-                return;
-              }
-              // Extract text from MCP response
-              const resultText = content
-                .filter((c: { type: string }) => c.type === 'text')
-                .map((c: { text: string }) => c.text)
-                .join('\n');
-
-              if (!resultText.trim()) {
-                resolve('');
-                return;
-              }
-
-              // Parse QMD results and format as snippets
-              const lines = resultText
-                .split('\n')
-                .filter((l: string) => l.trim());
-              const snippets = lines
-                .slice(0, 6) // title + snippet pairs
-                .map((l: string) => l.slice(0, 200))
-                .join('\n');
-
-              resolve(
-                snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '',
-              );
-            } catch {
-              resolve('');
-            }
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            body: Buffer.concat(chunks).toString(),
+            headers: res.headers,
           });
-        },
-      );
-
-      req.on('error', () => {
-        clearTimeout(timer);
-        resolve('');
-      });
-      req.on('timeout', () => {
-        req.destroy();
-        clearTimeout(timer);
-        resolve('');
-      });
-
-      req.write(body);
-      req.end();
-    } catch {
-      clearTimeout(timer);
-      resolve('');
-    }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('QMD request timed out'));
+    });
+    req.write(body);
+    req.end();
   });
+}
+
+async function queryQmdForContext(query: string): Promise<string> {
+  const TIMEOUT_MS = 20_000; // QMD vec search can take 10-15s with embedding
+
+  try {
+    // Step 1: Initialize MCP session (required by Streamable HTTP protocol)
+    const initBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'nanoclaw-context', version: '1.0' },
+      },
+    });
+    const initRes = await qmdRequest(initBody, {}, TIMEOUT_MS);
+    const sessionId =
+      initRes.headers['mcp-session-id'] as string | undefined;
+    if (!sessionId) {
+      logger.debug('QMD: no Mcp-Session-Id in initialize response, skipping');
+      return '';
+    }
+
+    // Step 2: Query with session ID
+    const queryBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: {
+        name: 'query',
+        arguments: {
+          searches: [{ type: 'vec', query }],
+          intent: query,
+          minScore: 0.5,
+          limit: 3,
+        },
+      },
+    });
+    const queryRes = await qmdRequest(
+      queryBody,
+      { 'Mcp-Session-Id': sessionId },
+      TIMEOUT_MS,
+    );
+
+    const parsed = JSON.parse(queryRes.body);
+    const content = parsed?.result?.content;
+    if (!Array.isArray(content) || content.length === 0) {
+      return '';
+    }
+
+    const resultText = content
+      .filter((c: { type: string }) => c.type === 'text')
+      .map((c: { text: string }) => c.text)
+      .join('\n');
+
+    if (!resultText.trim()) return '';
+
+    const lines = resultText.split('\n').filter((l: string) => l.trim());
+    const snippets = lines
+      .slice(0, 6)
+      .map((l: string) => l.slice(0, 200))
+      .join('\n');
+
+    return snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '';
+  } catch (err) {
+    logger.debug(
+      { err: err instanceof Error ? err.message : String(err) },
+      'QMD context query failed — skipping knowledge snippets',
+    );
+    return '';
+  }
 }
 
 export async function assembleContextPacket(

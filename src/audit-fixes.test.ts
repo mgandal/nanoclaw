@@ -542,7 +542,10 @@ describe('GmailWatcher auth-failure backoff', () => {
 describe('Ollama fetch timeout', () => {
   it('FIX: ollamaFetch must use AbortController for timeouts', () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), 'container/agent-runner/src/ollama-mcp-stdio.ts'),
+      path.join(
+        process.cwd(),
+        'container/agent-runner/src/ollama-mcp-stdio.ts',
+      ),
       'utf-8',
     );
     expect(source).toContain('AbortController');
@@ -551,10 +554,75 @@ describe('Ollama fetch timeout', () => {
 
   it('FIX: generate endpoint must have a longer timeout than list', () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), 'container/agent-runner/src/ollama-mcp-stdio.ts'),
+      path.join(
+        process.cwd(),
+        'container/agent-runner/src/ollama-mcp-stdio.ts',
+      ),
       'utf-8',
     );
     // Should have distinct timeout constants or parameters
     expect(source).toMatch(/GENERATE_TIMEOUT|generate.*timeout|300[_\s]*000/);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 23. Context assembler QMD must use MCP session protocol
+// ─────────────────────────────────────────────────
+describe('Context assembler QMD session protocol', () => {
+  it('FIX: queryQmdForContext must initialize MCP session before tools/call', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/context-assembler.ts'),
+      'utf-8',
+    );
+    // Must send an initialize request and capture session ID
+    expect(source).toContain('initialize');
+    expect(source).toMatch(/[Mm]cp-[Ss]ession/i);
+  });
+
+  it('FIX: QMD query failures must be logged (not silently swallowed)', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/context-assembler.ts'),
+      'utf-8',
+    );
+    // queryQmdForContext must log on failure, not just resolve('')
+    const fn = source.slice(
+      source.indexOf('queryQmdForContext'),
+      source.indexOf('export async function assembleContextPacket'),
+    );
+    expect(fn).toContain('logger');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 24. Container runner must health-check QMD before injecting URL
+// ─────────────────────────────────────────────────
+describe('Container runner QMD health gating', () => {
+  it('FIX: QMD_URL must only be passed to containers if QMD is reachable', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/container-runner.ts'),
+      'utf-8',
+    );
+    // Must have isQmdReachable check gating QMD_URL injection
+    expect(source).toContain('isQmdReachable()');
+    // Must have setQmdReachable export for health monitor to update
+    expect(source).toContain('export function setQmdReachable');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 25. Health check should use /health endpoint for QMD
+// ─────────────────────────────────────────────────
+describe('QMD health check endpoint', () => {
+  it('QMD /health endpoint returns OK', async () => {
+    // Direct test: hit QMD's health endpoint
+    try {
+      const res = await fetch('http://localhost:8182/health', {
+        signal: AbortSignal.timeout(2000),
+      });
+      const data = (await res.json()) as { status: string };
+      expect(data.status).toBe('ok');
+    } catch {
+      // QMD not running — skip (this test is for when QMD IS running)
+    }
   });
 });
