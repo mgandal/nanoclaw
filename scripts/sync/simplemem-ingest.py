@@ -79,12 +79,14 @@ def create_session(base_url, token):
     })
 
     session_id = resp.headers.get("Mcp-Session-Id")
-    return session_id, headers
+    return session_id or "none", headers
 
 
 def call_tool(base_url, headers, session_id, tool_name, arguments, call_id=2):
     """Call a SimpleMem MCP tool."""
-    hdrs = {**headers, "Mcp-Session-Id": session_id}
+    hdrs = {**headers}
+    if session_id and session_id != "none":
+        hdrs["Mcp-Session-Id"] = session_id
     resp = requests.post(base_url, headers=hdrs, json={
         "jsonrpc": "2.0",
         "id": call_id,
@@ -136,13 +138,14 @@ def ingest_emails(summaries_file, base_url, token, source_label):
 
     log.info("Ingesting %d emails from %s into SimpleMem...", len(summaries), source_label)
 
-    session_id, headers = create_session(base_url, token)
-    if not session_id:
-        log.error("Failed to create SimpleMem session")
+    try:
+        session_id, headers = create_session(base_url, token)
+    except Exception as e:
+        log.error("Failed to connect to SimpleMem: %s", e)
         return 0
 
     # Send notifications/initialized
-    call_tool(base_url, {**headers, "Mcp-Session-Id": session_id}, session_id,
+    call_tool(base_url, headers, session_id,
               "memory_stats", {}, call_id=99)
 
     ingested = 0

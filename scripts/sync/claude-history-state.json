@@ -1,0 +1,31 @@
+{
+  "ingested_sessions": [
+    "00381367-c371-43cd-bb6b-25e026879d56",
+    "110445ea-381a-42b6-a031-4c85b85f0aa0",
+    "1682d920-bbb4-45ad-8f8f-336f5a79617f",
+    "18fe5380-bbc1-4c0f-9ed8-f6e056e6494c",
+    "219730b2-6c64-4ec6-a263-77980a58087d",
+    "24878693-80db-4e00-a145-48c5d8296534",
+    "41d84aab-53ba-4569-9197-ba18a041b4dd",
+    "4246f41a-c77a-44e1-813c-2fd7e8487cbe",
+    "4c2284de-a19a-4ee4-aa80-d770a4a99576",
+    "4c2843f7-f08f-476f-a602-d15475b97d2b",
+    "5302d161-c4fb-46d3-9f4b-6ef06086d0d9",
+    "5b3bdecf-80c5-466e-a2d7-dafc97e4dc76",
+    "68c79899-4d7f-4b74-b54c-fedc80e06c3e",
+    "69315d86-484c-497f-aab1-ccb772cfde08",
+    "90505e7b-dd8d-4d9d-addc-00b04612aace",
+    "985b8550-d2d5-4217-ae40-d78c4896a660",
+    "a0f5a355-1bc5-423c-b4c6-2e7b051ba3b2",
+    "b1e1d952-6f7b-403c-a8e9-e741de44150a",
+    "b2f5ff3d-c02b-4ba8-9205-1982e279a6b2",
+    "bb8b60d7-a106-45fd-9641-36d66706dc43",
+    "bdd7255f-1aea-4153-ba19-ff5db99ec31a",
+    "be29c959-a6aa-458b-adfb-690df432fe92",
+    "c41c4baa-9bb9-41b7-b54c-4c3943e788a6",
+    "e2aa8bec-3e92-407c-abe5-ae23e3fadd3a",
+    "ef9852aa-5135-4978-aa9f-b35eb552e60b"
+  ],
+  "last_run": "2026-03-29T08:11:42",
+  "total_ingested": 25
+}
