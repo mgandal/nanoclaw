@@ -8,7 +8,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 
 import { STORE_DIR } from '../src/config.js';
 import { logger } from '../src/logger.js';
@@ -207,8 +207,8 @@ sock.ev.on('connection.update', async (update) => {
         .prepare(
           "SELECT COUNT(*) as count FROM chats WHERE jid LIKE '%@g.us' AND jid <> '__group_sync__'",
         )
-        .get() as { count: number };
-      groupsInDb = row.count;
+        .get() as { count: number } | null;
+      groupsInDb = row?.count ?? 0;
       db.close();
     } catch {
       // DB may not exist yet
