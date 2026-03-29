@@ -42,7 +42,7 @@ const ICALBUDDY_BIN = '/opt/homebrew/bin/icalbuddy';
 
 export class CalendarWatcher {
   private config: CalendarWatcherConfig;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private lastCheck: string | null = null;
   private eventsTracked = 0;
   private changesDetected = 0;
@@ -71,16 +71,14 @@ export class CalendarWatcher {
       'CalendarWatcher starting',
     );
 
-    // Run first poll immediately, then on interval
+    // Run first poll immediately, then chain with setTimeout to avoid pileup
     await this.poll();
-    this.timer = setInterval(() => {
-      void this.poll();
-    }, this.config.pollIntervalMs);
+    this.scheduleNext();
   }
 
   stop(): void {
     if (this.timer !== null) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
     logger.info('CalendarWatcher stopped');
@@ -298,7 +296,57 @@ export class CalendarWatcher {
     return conflicts;
   }
 
+  /**
+   * Only report conflicts where at least one event is newly added.
+   * Prevents re-reporting persistent overlaps every poll cycle.
+   */
+  static detectNewConflicts(
+    newEvents: CalendarEvent[],
+    allEvents: CalendarEvent[],
+  ): CalendarPayload[] {
+    const newKeys = new Set(
+      newEvents.map((e) => `${e.title}|${e.start}|${e.end}`),
+    );
+    const complete = allEvents.filter((e) => e.start && e.end);
+    if (complete.length < 2) return [];
+
+    const sorted = [...complete].sort((a, b) => a.start.localeCompare(b.start));
+    const conflicts: CalendarPayload[] = [];
+
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      for (let j = i + 1; j < sorted.length; j++) {
+        const b = sorted[j];
+        if (b.start >= a.end) break;
+        const aKey = `${a.title}|${a.start}|${a.end}`;
+        const bKey = `${b.title}|${b.start}|${b.end}`;
+        if (newKeys.has(aKey) || newKeys.has(bKey)) {
+          conflicts.push({
+            changeType: 'conflict',
+            event: {
+              title: a.title,
+              start: a.start,
+              end: a.end,
+              location: a.location,
+              calendar: a.calendar,
+              attendees: a.attendees,
+            },
+            conflictsWith: { title: b.title, start: b.start, end: b.end },
+          });
+        }
+      }
+    }
+
+    return conflicts;
+  }
+
   // ─── Private Methods ─────────────────────────────────────────────────────────
+
+  private scheduleNext(): void {
+    this.timer = setTimeout(() => {
+      void this.poll().then(() => this.scheduleNext());
+    }, this.config.pollIntervalMs);
+  }
 
   private async poll(): Promise<void> {
     try {
@@ -326,7 +374,14 @@ export class CalendarWatcher {
       const prev = this.loadSnapshot();
 
       const changes = CalendarWatcher.diffSnapshots(prev, curr);
-      const conflicts = CalendarWatcher.detectConflicts(curr);
+      // Only detect conflicts involving newly-added events (prevents re-reporting)
+      const newEvents = changes
+        .filter((c) => c.changeType === 'new_event')
+        .map((c) => c.event as CalendarEvent);
+      const conflicts =
+        newEvents.length > 0
+          ? CalendarWatcher.detectNewConflicts(newEvents, curr)
+          : [];
 
       this.eventsTracked = curr.length;
       this.lastCheck = new Date().toISOString();

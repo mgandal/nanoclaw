@@ -5,6 +5,7 @@ import path from 'path';
 import { promisify } from 'util';
 
 import { CREDENTIAL_PROXY_PORT } from './config.js';
+import { proxyToken } from './credential-proxy.js';
 import { logger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
@@ -331,7 +332,7 @@ export async function indexPdf(
           env: {
             PATH: process.env.PATH || '/usr/bin:/bin',
             HOME: process.env.HOME || '',
-            ANTHROPIC_BASE_URL: `http://localhost:${CREDENTIAL_PROXY_PORT}`,
+            ANTHROPIC_BASE_URL: `http://localhost:${CREDENTIAL_PROXY_PORT}/${proxyToken}`,
             ANTHROPIC_API_KEY: 'placeholder',
           },
           timeout: ADAPTER_TIMEOUT_MS,

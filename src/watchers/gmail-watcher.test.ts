@@ -243,6 +243,68 @@ describe('GmailWatcher.parseMessage', () => {
 
 // ─── Gmail auth failure backoff ───────────────────────────────────────────────
 
+// ─── Timer management ─────────────────────────────────────────────────────────
+
+describe('GmailWatcher timer management', () => {
+  let stateDir: string;
+  let credDir: string;
+  let credentialsPath: string;
+  let eventRouter: EventRouter;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    stateDir = makeTempDir();
+    credDir = makeTempDir();
+    credentialsPath = makeCredentials(credDir);
+    eventRouter = makeEventRouter();
+    mockMessagesList.mockResolvedValue({ data: { messages: [] } });
+    mockMessagesGet.mockResolvedValue({ data: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(credDir, { recursive: true, force: true });
+  });
+
+  it('does not create double timer when start() poll fails with auth error', async () => {
+    // First poll (called from start()) fails with auth error
+    mockMessagesList.mockRejectedValueOnce(new Error('invalid_grant'));
+    // Second poll (from backoff timer) succeeds
+    mockMessagesList.mockResolvedValueOnce({ data: { messages: [] } });
+
+    const watcher = new GmailWatcher({
+      credentialsPath,
+      account: 'test@example.com',
+      eventRouter,
+      pollIntervalMs: 60_000,
+      stateDir,
+    });
+
+    await watcher.start();
+
+    // After start(), the backoff timer should be set (from the auth error handler).
+    // start() should NOT also call scheduleNext(), so only one timer exists.
+    // If the bug is present, there would be two timers.
+    const status1 = watcher.getStatus();
+    expect(status1.lastCheck).not.toBeNull(); // poll was attempted
+
+    // stop() should clear the single timer — no leaked timers
+    watcher.stop();
+
+    // Advance time well past both backoff and poll interval
+    // If a second timer leaked, the mock would be called again
+    const callCountAfterStop = mockMessagesList.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(AUTH_BACKOFF_SCHEDULE[0] + 120_000);
+
+    // No additional poll calls should have occurred after stop
+    expect(mockMessagesList.mock.calls.length).toBe(callCountAfterStop);
+  });
+});
+
+// ─── Gmail auth failure backoff ───────────────────────────────────────────────
+
 describe('Gmail auth failure backoff', () => {
   it('returns the correct backoff for each failure count', () => {
     expect(computeBackoffMs(0)).toBe(AUTH_BACKOFF_SCHEDULE[0]); // 60_000

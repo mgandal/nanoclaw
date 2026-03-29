@@ -107,7 +107,10 @@ export class GmailWatcher {
     this.auth = await this.authenticate();
     this.loadState();
     await this.poll();
-    this.scheduleNext();
+    // Only schedule if poll didn't already set up its own backoff timer
+    if (this.timer === null) {
+      this.scheduleNext();
+    }
   }
 
   stop(): void {

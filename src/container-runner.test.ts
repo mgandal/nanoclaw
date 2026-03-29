@@ -53,6 +53,11 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
+// Mock context-assembler (writeContextPacket does file I/O)
+vi.mock('./context-assembler.js', () => ({
+  writeContextPacket: vi.fn(async () => {}),
+}));
+
 // Mock OneCLI SDK
 vi.mock('@onecli-sh/sdk', () => ({
   OneCLI: class {
