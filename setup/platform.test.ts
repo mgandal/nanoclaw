@@ -8,8 +8,7 @@ import {
   hasSystemd,
   getServiceManager,
   commandExists,
-  getNodeVersion,
-  getNodeMajorVersion,
+  getBunVersion,
 } from './platform.js';
 
 // --- getPlatform ---
@@ -99,22 +98,12 @@ describe('commandExists', () => {
   });
 });
 
-// --- getNodeVersion ---
+// --- getBunVersion ---
 
-describe('getNodeVersion', () => {
+describe('getBunVersion', () => {
   it('returns a version string', () => {
-    const version = getNodeVersion();
+    const version = getBunVersion();
     expect(version).not.toBeNull();
     expect(version).toMatch(/^\d+\.\d+\.\d+/);
-  });
-});
-
-// --- getNodeMajorVersion ---
-
-describe('getNodeMajorVersion', () => {
-  it('returns at least 20', () => {
-    const major = getNodeMajorVersion();
-    expect(major).not.toBeNull();
-    expect(major!).toBeGreaterThanOrEqual(20);
   });
 });

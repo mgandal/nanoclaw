@@ -8,7 +8,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 
 import { STORE_DIR } from '../src/config.js';
 import { logger } from '../src/logger.js';
@@ -87,7 +87,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   logger.info('Building TypeScript');
   let buildOk = false;
   try {
-    execSync('npm run build', {
+    execSync('bun run build', {
       cwd: projectRoot,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -115,7 +115,7 @@ import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Brows
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 
 const logger = pino({ level: 'silent' });
 const authDir = path.join('store', 'auth');
@@ -127,7 +127,7 @@ if (!fs.existsSync(authDir)) {
 }
 
 const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
+db.exec('PRAGMA journal_mode = WAL');
 db.exec('CREATE TABLE IF NOT EXISTS chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TEXT)');
 
 const upsert = db.prepare(
@@ -179,10 +179,10 @@ sock.ev.on('connection.update', async (update) => {
 });
 `;
 
-    const tmpScript = path.join(projectRoot, '.tmp-group-sync.mjs');
+    const tmpScript = path.join(projectRoot, '.tmp-group-sync.ts');
     fs.writeFileSync(tmpScript, syncScript, 'utf-8');
     try {
-      const output = execSync(`node ${tmpScript}`, {
+      const output = execSync(`bun ${tmpScript}`, {
         cwd: projectRoot,
         encoding: 'utf-8',
         timeout: 45000,
@@ -207,8 +207,8 @@ sock.ev.on('connection.update', async (update) => {
         .prepare(
           "SELECT COUNT(*) as count FROM chats WHERE jid LIKE '%@g.us' AND jid <> '__group_sync__'",
         )
-        .get() as { count: number };
-      groupsInDb = row.count;
+        .get() as { count: number } | null;
+      groupsInDb = row?.count ?? 0;
       db.close();
     } catch {
       // DB may not exist yet

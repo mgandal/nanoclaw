@@ -9,17 +9,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
+      - uses: oven-sh/setup-bun@v2
+
+      - run: bun install
 
       - name: Format check
-        run: npm run format:check
+        run: bun run format:check
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: bun run tsc --noEmit
 
       - name: Tests
-        run: npx vitest run
+        run: bun run test
