@@ -5,7 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 
 import { STORE_DIR } from '../src/config.js';
 import { logger } from '../src/logger.js';
@@ -57,8 +57,8 @@ export async function run(_args: string[]): Promise<void> {
         const db = new Database(dbPath, { readonly: true });
         const row = db
           .prepare('SELECT COUNT(*) as count FROM registered_groups')
-          .get() as { count: number };
-        if (row.count > 0) hasRegisteredGroups = true;
+          .get() as { count: number } | null;
+        if (row && row.count > 0) hasRegisteredGroups = true;
         db.close();
       } catch {
         // Table might not exist yet
