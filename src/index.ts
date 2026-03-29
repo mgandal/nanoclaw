@@ -789,9 +789,19 @@ async function main(): Promise<void> {
   });
 
   // Periodically check health thresholds + MCP endpoints
-  const mcpEndpoints: Array<{ name: string; url: string | undefined }> = [
+  // Each endpoint has an optional healthUrl for services where the MCP URL
+  // isn't suitable for health checks (e.g. SSE endpoints that hang or require auth).
+  const mcpEndpoints: Array<{
+    name: string;
+    url: string | undefined;
+    healthUrl?: string;
+  }> = [
     { name: 'QMD', url: 'http://localhost:8181/mcp' },
-    { name: 'SimpleMem', url: process.env.SIMPLEMEM_URL },
+    {
+      name: 'SimpleMem',
+      url: process.env.SIMPLEMEM_URL,
+      healthUrl: 'http://localhost:8200/api/health',
+    },
     { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
     { name: 'Todoist', url: process.env.TODOIST_URL },
   ];
@@ -815,7 +825,7 @@ async function main(): Promise<void> {
     if (channels.length === 0) return;
     for (const ep of mcpEndpoints) {
       if (!ep.url) continue;
-      const result = await checkMcpEndpoint(ep.url);
+      const result = await checkMcpEndpoint(ep.healthUrl || ep.url);
       if (result.reachable) {
         healthMonitor.clearInfraEvent(`mcp:${ep.name}`);
       } else {
