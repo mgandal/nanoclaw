@@ -21,6 +21,7 @@ groups/telegram_claire/*
 !groups/global/CLAUDE.md
 !groups/telegram_claire/CLAUDE.md
 !groups/telegram_claire/memory_guardian/
+groups/telegram_claire/memory_guardian/**/__pycache__/
 # Secrets
 *.keys.json
 .env
