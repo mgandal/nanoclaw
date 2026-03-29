@@ -6,10 +6,14 @@ Checks all registered NanoClaw groups for memory health:
   2. memory.md exists
   3. memory.md is fresh (modified within max_age_hours)
 
-Usage: python3 integrity_checker.py
+Usage:
+  python3 integrity_checker.py              # check all groups
+  python3 integrity_checker.py --group telegram_claire  # check one group
+
 Output: JSON report to stdout
 """
 
+import argparse
 import json
 import os
 from datetime import datetime, timezone
@@ -20,14 +24,22 @@ GLOBAL_CLAUDE_MD = GROUPS_DIR / "global" / "CLAUDE.md"
 
 DEFAULT_MAX_AGE_HOURS = 96  # 4 days — tolerates quiet weekends
 
-GROUPS = [
-    "telegram_claire",
-    "telegram_lab-claw",
-    "telegram_code-claw",
-    "telegram_science-claw",
-    "telegram_home-claw",
-    "telegram_vault-claw",
-]
+# Directories that are not agent groups
+_SKIP_DIRS = {"global", "main"}
+
+
+def discover_groups() -> list[str]:
+    """Auto-discover group folders by scanning GROUPS_DIR for channel-prefixed directories."""
+    try:
+        return sorted(
+            d.name for d in GROUPS_DIR.iterdir()
+            if d.is_dir() and "_" in d.name and d.name not in _SKIP_DIRS
+        )
+    except OSError:
+        return []
+
+
+GROUPS = discover_groups()
 
 REQUIRED_SECTIONS = [
     "Session Start Protocol",
@@ -137,9 +149,9 @@ def check_memory_freshness(group_folder: str, max_age_hours: int = DEFAULT_MAX_A
     return issues
 
 
-def run_all_checks() -> dict:
+def run_all_checks(groups: list[str] | None = None) -> dict:
     """
-    Run all integrity checks across all groups.
+    Run all integrity checks across all (or specified) groups.
 
     Returns:
     {
@@ -151,10 +163,13 @@ def run_all_checks() -> dict:
       }
     }
     """
+    if groups is None:
+        groups = GROUPS
+
     timestamp = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     group_results = {}
 
-    for group in GROUPS:
+    for group in groups:
         all_issues = []
         all_issues.extend(check_claude_md_sections(group))
 
@@ -183,5 +198,9 @@ def run_all_checks() -> dict:
 
 
 if __name__ == "__main__":
-    report = run_all_checks()
+    parser = argparse.ArgumentParser(description="NanoClaw memory integrity checker")
+    parser.add_argument("--group", help="Check a single group instead of all")
+    args = parser.parse_args()
+
+    report = run_all_checks(groups=[args.group] if args.group else None)
     print(json.dumps(report, indent=2))

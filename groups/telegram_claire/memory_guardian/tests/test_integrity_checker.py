@@ -371,12 +371,11 @@ class TestRunAllChecks(unittest.TestCase):
             now = datetime(2026, 3, 28, 17, 0, 0, tzinfo=timezone.utc)
 
             with patch("integrity_checker.GROUPS_DIR", tmp_path):
-                with patch("integrity_checker.GROUPS", ["telegram_claire"]):
-                    with patch("integrity_checker.datetime") as mock_dt:
-                        mock_dt.now.return_value = now
-                        mock_dt.fromtimestamp = datetime.fromtimestamp
+                with patch("integrity_checker.datetime") as mock_dt:
+                    mock_dt.now.return_value = now
+                    mock_dt.fromtimestamp = datetime.fromtimestamp
 
-                        result = integrity_checker.run_all_checks()
+                    result = integrity_checker.run_all_checks(groups=["telegram_claire"])
 
             self.assertIn("telegram_claire", result["groups"])
             self.assertEqual(result["groups"]["telegram_claire"]["status"], "PASS")
@@ -391,15 +390,14 @@ class TestRunAllChecks(unittest.TestCase):
             group_dir.mkdir(parents=True)
 
             with patch("integrity_checker.GROUPS_DIR", tmp_path):
-                with patch("integrity_checker.GROUPS", ["telegram_claire"]):
-                    result = integrity_checker.run_all_checks()
+                result = integrity_checker.run_all_checks(groups=["telegram_claire"])
 
             self.assertIn("telegram_claire", result["groups"])
             self.assertEqual(result["groups"]["telegram_claire"]["status"], "FAIL")
             self.assertTrue(result["has_failures"])
 
     def test_all_groups_checked(self):
-        """result contains all 6 expected group keys, each with status and issues fields"""
+        """result contains all expected group keys, each with status and issues fields"""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             for group in self.EXPECTED_GROUPS:
@@ -411,7 +409,7 @@ class TestRunAllChecks(unittest.TestCase):
                 with patch("integrity_checker.datetime") as mock_dt:
                     mock_dt.now.return_value = now
                     mock_dt.fromtimestamp = datetime.fromtimestamp
-                    result = integrity_checker.run_all_checks()
+                    result = integrity_checker.run_all_checks(groups=self.EXPECTED_GROUPS)
 
         self.assertEqual(set(result["groups"].keys()), set(self.EXPECTED_GROUPS))
         for group in self.EXPECTED_GROUPS:
@@ -421,6 +419,21 @@ class TestRunAllChecks(unittest.TestCase):
             self.assertIn(entry["status"], ("PASS", "FAIL"), f"{group} invalid status")
             self.assertIsInstance(entry["issues"], list, f"{group} issues not a list")
             self.assertEqual(entry["status"], "PASS", f"{group} should PASS: {entry['issues']}")
+
+    def test_discover_groups(self):
+        """discover_groups() finds channel-prefixed dirs, skips global/main"""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "telegram_claire").mkdir()
+            (tmp_path / "slack_eng").mkdir()
+            (tmp_path / "global").mkdir()
+            (tmp_path / "main").mkdir()
+            (tmp_path / "random_file.txt").touch()
+
+            with patch("integrity_checker.GROUPS_DIR", tmp_path):
+                found = integrity_checker.discover_groups()
+
+        self.assertEqual(found, ["slack_eng", "telegram_claire"])
 
     def test_run_all_checks_global_fallback_integration(self):
         """Integration: group passes when required sections are only in global CLAUDE.md"""
@@ -448,12 +461,13 @@ class TestRunAllChecks(unittest.TestCase):
                 with patch(
                     "integrity_checker.GLOBAL_CLAUDE_MD", global_dir / "CLAUDE.md"
                 ):
-                    with patch("integrity_checker.GROUPS", ["telegram_code-claw"]):
-                        with patch("integrity_checker.datetime") as mock_dt:
-                            mock_dt.now.return_value = now
-                            mock_dt.fromtimestamp = datetime.fromtimestamp
+                    with patch("integrity_checker.datetime") as mock_dt:
+                        mock_dt.now.return_value = now
+                        mock_dt.fromtimestamp = datetime.fromtimestamp
 
-                            result = integrity_checker.run_all_checks()
+                        result = integrity_checker.run_all_checks(
+                            groups=["telegram_code-claw"]
+                        )
 
         self.assertEqual(result["groups"]["telegram_code-claw"]["status"], "PASS")
         self.assertFalse(result["has_failures"])
@@ -466,7 +480,7 @@ class TestRunAllChecks(unittest.TestCase):
                 (tmp_path / group).mkdir(parents=True)
 
             with patch("integrity_checker.GROUPS_DIR", tmp_path):
-                result = integrity_checker.run_all_checks()
+                result = integrity_checker.run_all_checks(groups=self.EXPECTED_GROUPS)
 
         # Should not raise
         serialized = json.dumps(result)
