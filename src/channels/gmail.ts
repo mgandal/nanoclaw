@@ -350,7 +350,10 @@ export class GmailChannel implements Channel {
         }
       }
     } catch (err) {
-      logger.warn({ err }, 'Gmail channel failed to load state — starting fresh');
+      logger.warn(
+        { err },
+        'Gmail channel failed to load state — starting fresh',
+      );
     }
   }
 

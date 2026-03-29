@@ -752,7 +752,10 @@ export async function processTaskIpc(
         data.type === 'save_skill'
       ) {
         if (!isMain) {
-          logger.warn({ sourceGroup }, 'Non-main save_skill IPC attempt blocked');
+          logger.warn(
+            { sourceGroup },
+            'Non-main save_skill IPC attempt blocked',
+          );
           handled = true;
         } else {
           handled = handleSaveSkillIpc(data, sourceGroup);

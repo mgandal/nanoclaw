@@ -342,7 +342,8 @@ export class EventRouter {
       const rawFrom = event.payload['from'] as string | undefined;
       if (!rawFrom) return false;
       // Extract address from optional "Display Name <addr>" format
-      const addrMatch = rawFrom.match(/<([^>]+)>/) || rawFrom.match(/(\S+@\S+)/);
+      const addrMatch =
+        rawFrom.match(/<([^>]+)>/) || rawFrom.match(/(\S+@\S+)/);
       const addr = addrMatch ? addrMatch[1] : rawFrom;
       const domain = addr.includes('@') ? addr.split('@')[1].toLowerCase() : '';
       if (!conditions.sender_domain.includes(domain)) return false;
