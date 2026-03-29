@@ -4,7 +4,7 @@
  * Called by IPC handler when container agents use imessage_* tools.
  */
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -47,7 +47,7 @@ interface ConversationResult {
   }>;
 }
 
-function openChatDb(): Database.Database {
+function openChatDb(): Database {
   if (!fs.existsSync(CHAT_DB_PATH)) {
     throw new Error(`iMessage database not found at ${CHAT_DB_PATH}`);
   }
