@@ -1,0 +1,186 @@
+"""
+NanoClaw Memory Integrity Checker
+
+Checks all registered NanoClaw groups for memory health:
+  1. CLAUDE.md has required section markers
+  2. memory.md exists
+  3. memory.md is fresh (modified within max_age_hours)
+
+Usage: python3 integrity_checker.py
+Output: JSON report to stdout
+"""
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+GROUPS_DIR = Path("/workspace/project/groups")
+GLOBAL_CLAUDE_MD = GROUPS_DIR / "global" / "CLAUDE.md"
+
+DEFAULT_MAX_AGE_HOURS = 96  # 4 days — tolerates quiet weekends
+
+GROUPS = [
+    "telegram_claire",
+    "telegram_lab-claw",
+    "telegram_code-claw",
+    "telegram_science-claw",
+    "telegram_home-claw",
+    "telegram_vault-claw",
+]
+
+REQUIRED_SECTIONS = [
+    "Session Start Protocol",
+    "Research Before Asking",
+]
+
+
+def _read_global_claude_md() -> str:
+    """Return global CLAUDE.md content, or empty string if it does not exist."""
+    try:
+        if GLOBAL_CLAUDE_MD.exists():
+            return GLOBAL_CLAUDE_MD.read_text()
+    except OSError:
+        pass
+    return ""
+
+
+def check_claude_md_sections(group_folder: str) -> list[str]:
+    """
+    Check that CLAUDE.md exists and contains all required section markers.
+
+    A marker is satisfied if it appears in the per-group CLAUDE.md OR in the
+    global CLAUDE.md at GLOBAL_CLAUDE_MD (which the runtime loads for all groups).
+    If the global file does not exist it is treated as empty — the per-group file
+    must then supply all required markers on its own.
+
+    Returns list of issue strings, empty if all good.
+    """
+    issues = []
+    claude_md = GROUPS_DIR / group_folder / "CLAUDE.md"
+
+    try:
+        if not claude_md.exists():
+            issues.append(
+                f"{group_folder}: CLAUDE.md not found at {claude_md}"
+            )
+            return issues
+
+        group_content = claude_md.read_text()
+    except OSError as exc:
+        issues.append(f"{group_folder}: CLAUDE.md could not be read — {exc}")
+        return issues
+
+    global_content = _read_global_claude_md()
+    combined_content = group_content + "\n" + global_content
+
+    for marker in REQUIRED_SECTIONS:
+        if marker not in combined_content:
+            issues.append(
+                f"{group_folder}: CLAUDE.md is missing required section: '{marker}' "
+                f"(checked per-group file and global CLAUDE.md)"
+            )
+
+    return issues
+
+
+def check_memory_exists(group_folder: str) -> list[str]:
+    """
+    Check that memory.md exists for the group.
+    Returns list of issue strings, empty if all good.
+    """
+    issues = []
+    memory_md = GROUPS_DIR / group_folder / "memory.md"
+
+    try:
+        if not memory_md.exists():
+            issues.append(
+                f"{group_folder}: memory.md not found at {memory_md}"
+            )
+    except OSError as exc:
+        issues.append(f"{group_folder}: memory.md could not be checked — {exc}")
+
+    return issues
+
+
+def check_memory_freshness(group_folder: str, max_age_hours: int = DEFAULT_MAX_AGE_HOURS) -> list[str]:
+    """
+    Check that memory.md was modified within max_age_hours.
+    Uses UTC throughout to avoid issues with host timezone changes.
+    Returns list of issue strings, empty if all good.
+    """
+    issues = []
+    memory_md = GROUPS_DIR / group_folder / "memory.md"
+
+    if not memory_md.exists():
+        issues.append(
+            f"{group_folder}: memory.md not found — cannot check freshness"
+        )
+        return issues
+
+    try:
+        stat = memory_md.stat()
+    except OSError as exc:
+        issues.append(f"{group_folder}: memory.md stat failed — {exc}")
+        return issues
+
+    mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+    now = datetime.now(tz=timezone.utc)
+    age_hours = (now - mtime).total_seconds() / 3600
+
+    if age_hours > max_age_hours:
+        issues.append(
+            f"{group_folder}: memory.md is stale — last modified {age_hours:.1f}h ago "
+            f"(max allowed: {max_age_hours}h)"
+        )
+
+    return issues
+
+
+def run_all_checks() -> dict:
+    """
+    Run all integrity checks across all groups.
+
+    Returns:
+    {
+      "timestamp": "2026-03-28T17:00:00+00:00",
+      "has_failures": bool,
+      "groups": {
+        "telegram_claire": {"status": "PASS"|"FAIL", "issues": [...]},
+        ...
+      }
+    }
+    """
+    timestamp = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    group_results = {}
+
+    for group in GROUPS:
+        all_issues = []
+        all_issues.extend(check_claude_md_sections(group))
+
+        memory_issues = check_memory_exists(group)
+        all_issues.extend(memory_issues)
+        # Only run freshness check if memory.md was found — avoids duplicate
+        # "file not found" messages from two separate checks.
+        if not memory_issues:
+            all_issues.extend(check_memory_freshness(group))
+
+        status = "FAIL" if all_issues else "PASS"
+        group_results[group] = {
+            "status": status,
+            "issues": all_issues,
+        }
+
+    has_failures = any(
+        g["status"] == "FAIL" for g in group_results.values()
+    )
+
+    return {
+        "timestamp": timestamp,
+        "has_failures": has_failures,
+        "groups": group_results,
+    }
+
+
+if __name__ == "__main__":
+    report = run_all_checks()
+    print(json.dumps(report, indent=2))
