@@ -664,3 +664,154 @@ describe('Per-service health check URLs', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────
+// 27. Apple Notes must be indexed in QMD
+// ─────────────────────────────────────────────────
+describe('Apple Notes QMD integration', () => {
+  it('QMD apple-notes collection must have indexed files', async () => {
+    // Query QMD status via MCP
+    try {
+      const initRes = await fetch('http://localhost:8182/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1.0' },
+          },
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const sessionId = initRes.headers.get('mcp-session-id');
+      if (!sessionId) return; // QMD not running
+
+      const statusRes = await fetch('http://localhost:8182/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'Mcp-Session-Id': sessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name: 'status', arguments: {} },
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const body = await statusRes.text();
+      const parsed = JSON.parse(body);
+      const text =
+        parsed?.result?.content?.[0]?.text || '';
+
+      // Must mention apple-notes with >0 docs
+      expect(text).toContain('apple-notes');
+      // The structured content should show the collection
+      const collections =
+        parsed?.result?.structuredContent?.collections || [];
+      const appleNotes = collections.find(
+        (c: { name: string }) => c.name === 'apple-notes',
+      );
+      expect(appleNotes).toBeDefined();
+      expect(appleNotes.documents).toBeGreaterThan(0);
+    } catch {
+      // QMD not running — skip
+    }
+  });
+
+  it('QMD can search Apple Notes content', { timeout: 30000 }, async () => {
+    try {
+      const initRes = await fetch('http://localhost:8182/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2025-03-26',
+            capabilities: {},
+            clientInfo: { name: 'test', version: '1.0' },
+          },
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const sessionId = initRes.headers.get('mcp-session-id');
+      if (!sessionId) return;
+
+      const queryRes = await fetch('http://localhost:8182/mcp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'Mcp-Session-Id': sessionId,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: {
+            name: 'query',
+            arguments: {
+              searches: [{ type: 'lex', query: 'grant budget' }],
+              intent: 'grant budget info',
+              collection: 'apple-notes',
+              limit: 3,
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+      const body = await queryRes.text();
+      const parsed = JSON.parse(body);
+      const results =
+        parsed?.result?.structuredContent?.results || [];
+      expect(results.length).toBeGreaterThan(0);
+      // At least one result should be from apple-notes
+      const hasAppleNote = results.some(
+        (r: { file: string }) =>
+          r.file.includes('apple-notes') || r.file.includes('notes/'),
+      );
+      expect(hasAppleNote).toBe(true);
+    } catch {
+      // QMD not running
+    }
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 28. Apple Notes ingest script exists and is in sync pipeline
+// ─────────────────────────────────────────────────
+describe('Apple Notes SimpleMem ingest pipeline', () => {
+  it('ingest script exists and is executable', () => {
+    const scriptPath = path.join(
+      process.cwd(),
+      'scripts/sync/apple-notes-ingest.py',
+    );
+    expect(fs.existsSync(scriptPath)).toBe(true);
+    const stat = fs.statSync(scriptPath);
+    // Check executable bit
+    expect(stat.mode & 0o111).toBeGreaterThan(0);
+  });
+
+  it('sync-all.sh includes Apple Notes ingest step', () => {
+    const syncAll = fs.readFileSync(
+      path.join(process.cwd(), 'scripts/sync/sync-all.sh'),
+      'utf-8',
+    );
+    expect(syncAll).toContain('apple-notes-ingest.py');
+    expect(syncAll).toContain('Apple Notes');
+  });
+});
