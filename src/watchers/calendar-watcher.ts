@@ -59,7 +59,10 @@ export class CalendarWatcher {
         timeout: 5_000,
       });
     } catch (err) {
-      logger.warn({ err, path: ICALBUDDY_BIN }, 'icalbuddy not found — calendar watcher disabled');
+      logger.warn(
+        { err, path: ICALBUDDY_BIN },
+        'icalbuddy not found — calendar watcher disabled',
+      );
       return;
     }
 

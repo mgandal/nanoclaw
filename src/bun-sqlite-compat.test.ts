@@ -103,9 +103,7 @@ describe('bun:sqlite compatibility', () => {
       const jids = ['chat1', 'chat2'];
       const placeholders = jids.map(() => '?').join(',');
       const rows = db
-        .prepare(
-          `SELECT * FROM messages WHERE chat_jid IN (${placeholders})`,
-        )
+        .prepare(`SELECT * FROM messages WHERE chat_jid IN (${placeholders})`)
         .all(...jids) as { id: string }[];
       expect(rows.length).toBe(2);
     });
@@ -220,24 +218,24 @@ describe('bun:sqlite compatibility', () => {
     it('INSERT OR REPLACE works', () => {
       // NanoClaw: setSession(), setRouterState()
       db.run('CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT)');
-      db.prepare(
-        'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
-      ).run('k', 'v1');
-      db.prepare(
-        'INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',
-      ).run('k', 'v2');
+      db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(
+        'k',
+        'v1',
+      );
+      db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(
+        'k',
+        'v2',
+      );
 
-      const row = db
-        .prepare('SELECT value FROM kv WHERE key = ?')
-        .get('k') as { value: string };
+      const row = db.prepare('SELECT value FROM kv WHERE key = ?').get('k') as {
+        value: string;
+      };
       expect(row.value).toBe('v2');
     });
 
     it('ON CONFLICT DO UPDATE works', () => {
       // NanoClaw: storeChatMetadata()
-      db.run(
-        'CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, ts TEXT)',
-      );
+      db.run('CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, ts TEXT)');
       db.prepare(
         `INSERT INTO chats (jid, name, ts) VALUES (?, ?, ?)
          ON CONFLICT(jid) DO UPDATE SET name = excluded.name`,

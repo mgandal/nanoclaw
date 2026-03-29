@@ -710,14 +710,12 @@ describe('Apple Notes QMD integration', () => {
       });
       const body = await statusRes.text();
       const parsed = JSON.parse(body);
-      const text =
-        parsed?.result?.content?.[0]?.text || '';
+      const text = parsed?.result?.content?.[0]?.text || '';
 
       // Must mention apple-notes with >0 docs
       expect(text).toContain('apple-notes');
       // The structured content should show the collection
-      const collections =
-        parsed?.result?.structuredContent?.collections || [];
+      const collections = parsed?.result?.structuredContent?.collections || [];
       const appleNotes = collections.find(
         (c: { name: string }) => c.name === 'apple-notes',
       );
@@ -776,8 +774,7 @@ describe('Apple Notes QMD integration', () => {
       });
       const body = await queryRes.text();
       const parsed = JSON.parse(body);
-      const results =
-        parsed?.result?.structuredContent?.results || [];
+      const results = parsed?.result?.structuredContent?.results || [];
       expect(results.length).toBeGreaterThan(0);
       // At least one result should be from apple-notes
       const hasAppleNote = results.some(

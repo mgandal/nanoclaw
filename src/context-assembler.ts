@@ -87,8 +87,7 @@ async function queryQmdForContext(query: string): Promise<string> {
       },
     });
     const initRes = await qmdRequest(initBody, {}, TIMEOUT_MS);
-    const sessionId =
-      initRes.headers['mcp-session-id'] as string | undefined;
+    const sessionId = initRes.headers['mcp-session-id'] as string | undefined;
     if (!sessionId) {
       logger.debug('QMD: no Mcp-Session-Id in initialize response, skipping');
       return '';
