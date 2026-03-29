@@ -14,6 +14,11 @@ import path from 'path';
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
 const OLLAMA_STATUS_FILE = '/workspace/ipc/ollama_status.json';
 
+/** Timeout for generate requests (model inference can be slow). */
+const GENERATE_TIMEOUT_MS = 300_000; // 5 minutes
+/** Timeout for lightweight requests (list models, tags). */
+const LIST_TIMEOUT_MS = 10_000; // 10 seconds
+
 function log(msg: string): void {
   console.error(`[OLLAMA] ${msg}`);
 }
@@ -28,17 +33,27 @@ function writeStatus(status: string, detail?: string): void {
   } catch { /* best-effort */ }
 }
 
-async function ollamaFetch(path: string, options?: RequestInit): Promise<Response> {
+async function ollamaFetch(path: string, options?: RequestInit, timeoutMs?: number): Promise<Response> {
   const url = `${OLLAMA_HOST}${path}`;
+  const timeout = timeoutMs ?? LIST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const fetchOpts = { ...options, signal: controller.signal };
   try {
-    return await fetch(url, options);
+    const res = await fetch(url, fetchOpts);
+    return res;
   } catch (err) {
-    // Fallback to localhost if host.docker.internal fails
-    if (OLLAMA_HOST.includes('host.docker.internal')) {
+    // Fallback to localhost if host.docker.internal fails (and not a timeout)
+    if (OLLAMA_HOST.includes('host.docker.internal') && !controller.signal.aborted) {
       const fallbackUrl = url.replace('host.docker.internal', 'localhost');
-      return await fetch(fallbackUrl, options);
+      return await fetch(fallbackUrl, fetchOpts);
+    }
+    if (controller.signal.aborted) {
+      throw new Error(`Ollama request timed out after ${timeout}ms`);
     }
     throw err;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -110,7 +125,7 @@ server.tool(
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      }, GENERATE_TIMEOUT_MS);
 
       if (!res.ok) {
         const errorText = await res.text();
