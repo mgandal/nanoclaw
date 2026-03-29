@@ -106,9 +106,9 @@ export class GmailWatcher {
     logger.info({ account: this.config.account }, 'GmailWatcher starting');
     this.auth = await this.authenticate();
     this.loadState();
-    await this.poll();
+    const selfScheduled = await this.poll();
     // Only schedule if poll didn't already set up its own backoff timer
-    if (this.timer === null) {
+    if (!selfScheduled) {
       this.scheduleNext();
     }
   }
@@ -267,12 +267,15 @@ export class GmailWatcher {
 
   private scheduleNext(): void {
     this.timer = setTimeout(() => {
-      void this.poll().then(() => this.scheduleNext());
+      void this.poll().then((selfScheduled) => {
+        if (!selfScheduled) this.scheduleNext();
+      });
     }, this.config.pollIntervalMs);
   }
 
-  private async poll(): Promise<void> {
-    if (!this.auth) return;
+  /** Returns true if poll set up its own backoff timer (caller should not reschedule). */
+  private async poll(): Promise<boolean> {
+    if (!this.auth) return false;
 
     const gmail = google.gmail({ version: 'v1', auth: this.auth });
     this.lastCheck = new Date().toISOString();
@@ -363,7 +366,7 @@ export class GmailWatcher {
             'GmailWatcher stopping after repeated auth failures',
           );
           this.stop();
-          return;
+          return true; // stopped — don't reschedule
         }
 
         logger.error(
@@ -379,9 +382,11 @@ export class GmailWatcher {
         // Override the normal poll interval for backoff
         if (this.timer !== null) clearTimeout(this.timer);
         this.timer = setTimeout(() => {
-          void this.poll().then(() => this.scheduleNext());
+          void this.poll().then((selfScheduled) => {
+            if (!selfScheduled) this.scheduleNext();
+          });
         }, backoff);
-        return;
+        return true; // self-scheduled backoff — caller must not reschedule
       }
 
       logger.warn(
@@ -389,6 +394,7 @@ export class GmailWatcher {
         'GmailWatcher poll failed',
       );
     }
+    return false;
   }
 
   private static detectAttachments(parts: GmailPart[]): boolean {

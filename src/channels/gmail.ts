@@ -6,6 +6,7 @@ import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
 // isMain flag is used instead of MAIN_GROUP_FOLDER constant
+import { DATA_DIR } from '../config.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -37,6 +38,7 @@ export class GmailChannel implements Channel {
   private pollIntervalMs: number;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private processedIds = new Set<string>();
+  private stateFilePath: string;
   private threadMeta = new Map<string, ThreadMeta>();
   private consecutiveErrors = 0;
   private userEmail = '';
@@ -44,6 +46,7 @@ export class GmailChannel implements Channel {
   constructor(opts: GmailChannelOpts, pollIntervalMs = 60000) {
     this.opts = opts;
     this.pollIntervalMs = pollIntervalMs;
+    this.stateFilePath = path.join(DATA_DIR, 'gmail-channel-state.json');
   }
 
   async connect(): Promise<void> {
@@ -83,6 +86,9 @@ export class GmailChannel implements Channel {
     });
 
     this.gmail = google.gmail({ version: 'v1', auth: this.oauth2Client });
+
+    // Load persisted processed IDs before first poll to avoid re-delivery
+    this.loadProcessedIds();
 
     // Verify connection
     const profile = await this.gmail.users.getProfile({ userId: 'me' });
@@ -211,6 +217,7 @@ export class GmailChannel implements Channel {
         this.processedIds = new Set(ids.slice(ids.length - 2500));
       }
 
+      this.saveProcessedIds();
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
@@ -328,6 +335,37 @@ export class GmailChannel implements Channel {
       { mainJid, from: senderName, subject },
       'Gmail email delivered to main group',
     );
+  }
+
+  private loadProcessedIds(): void {
+    try {
+      if (fs.existsSync(this.stateFilePath)) {
+        const raw = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf-8'));
+        if (Array.isArray(raw.processedIds)) {
+          this.processedIds = new Set(raw.processedIds);
+          logger.debug(
+            { count: this.processedIds.size },
+            'Gmail channel loaded persisted processed IDs',
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Gmail channel failed to load state — starting fresh');
+    }
+  }
+
+  private saveProcessedIds(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.stateFilePath), { recursive: true });
+      const tmpPath = `${this.stateFilePath}.tmp`;
+      fs.writeFileSync(
+        tmpPath,
+        JSON.stringify({ processedIds: [...this.processedIds] }),
+      );
+      fs.renameSync(tmpPath, this.stateFilePath);
+    } catch (err) {
+      logger.warn({ err }, 'Gmail channel failed to save state');
+    }
   }
 
   private extractTextBody(

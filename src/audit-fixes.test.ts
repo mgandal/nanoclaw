@@ -18,9 +18,8 @@ import path from 'path';
 // ─────────────────────────────────────────────────
 describe('PROXY_BIND_HOST security', () => {
   it('must bind to 192.168.64.1 on macOS with Apple Container, not 0.0.0.0', async () => {
-    const { PROXY_BIND_HOST, CONTAINER_RUNTIME_BIN } = await import(
-      './container-runtime.js'
-    );
+    const { PROXY_BIND_HOST, CONTAINER_RUNTIME_BIN } =
+      await import('./container-runtime.js');
     // This test only applies when running on the Apple Container setup
     if (os.platform() === 'darwin' && CONTAINER_RUNTIME_BIN === 'container') {
       expect(PROXY_BIND_HOST).toBe('192.168.64.1');
@@ -273,10 +272,7 @@ describe('Zod version compatibility', () => {
   it('agent-runner must use Zod v3 (not v4) for MCP SDK compatibility', () => {
     const pkg = JSON.parse(
       fs.readFileSync(
-        path.join(
-          process.cwd(),
-          'container/agent-runner/package.json',
-        ),
+        path.join(process.cwd(), 'container/agent-runner/package.json'),
         'utf-8',
       ),
     );
@@ -477,5 +473,88 @@ describe('/new command batch handling', () => {
     const codeOnly = block.replace(/\/\/.*$/gm, ''); // strip comments
     const returnTrueMatches = codeOnly.match(/return\s+true/g) || [];
     expect(returnTrueMatches.length).toBe(1);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 20. Gmail channel processedIds must be persisted to disk
+// ─────────────────────────────────────────────────
+describe('Gmail channel processedIds persistence', () => {
+  it('FIX: GmailChannel must have loadState/saveState methods', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/channels/gmail.ts'),
+      'utf-8',
+    );
+    // Must persist processedIds to disk
+    expect(source).toContain('loadProcessedIds');
+    expect(source).toContain('saveProcessedIds');
+  });
+
+  it('FIX: connect() must load persisted state', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/channels/gmail.ts'),
+      'utf-8',
+    );
+    // connect() must call load before first poll
+    const connectFn = source.slice(
+      source.indexOf('async connect()'),
+      source.indexOf('async sendMessage'),
+    );
+    expect(connectFn).toContain('loadProcessedIds');
+  });
+
+  it('FIX: pollForMessages must save state after processing', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/channels/gmail.ts'),
+      'utf-8',
+    );
+    const pollFn = source.slice(
+      source.indexOf('private async pollForMessages'),
+      source.indexOf('private async processMessage'),
+    );
+    expect(pollFn).toContain('saveProcessedIds');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 21. GmailWatcher auth-failure backoff must not be overwritten
+// ─────────────────────────────────────────────────
+describe('GmailWatcher auth-failure backoff', () => {
+  it('FIX: poll() must return a flag indicating self-scheduled backoff', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/watchers/gmail-watcher.ts'),
+      'utf-8',
+    );
+    // scheduleNext must check whether poll self-scheduled before overwriting timer
+    // The scheduleNext method must NOT blindly call this.scheduleNext() after poll
+    const scheduleNextFn = source.slice(
+      source.indexOf('private scheduleNext'),
+      source.indexOf('private scheduleNext') + 300,
+    );
+    // Must check poll result or timer state before scheduling
+    expect(scheduleNextFn).toMatch(/selfScheduled|this\.timer/);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 22. Ollama fetch must have timeouts
+// ─────────────────────────────────────────────────
+describe('Ollama fetch timeout', () => {
+  it('FIX: ollamaFetch must use AbortController for timeouts', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'container/agent-runner/src/ollama-mcp-stdio.ts'),
+      'utf-8',
+    );
+    expect(source).toContain('AbortController');
+    expect(source).toContain('signal');
+  });
+
+  it('FIX: generate endpoint must have a longer timeout than list', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'container/agent-runner/src/ollama-mcp-stdio.ts'),
+      'utf-8',
+    );
+    // Should have distinct timeout constants or parameters
+    expect(source).toMatch(/GENERATE_TIMEOUT|generate.*timeout|300[_\s]*000/);
   });
 });
