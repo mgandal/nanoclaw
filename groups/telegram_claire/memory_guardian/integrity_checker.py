@@ -11,10 +11,11 @@ Output: JSON report to stdout
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-GROUPS_DIR = Path("/workspace/project/groups")
+GROUPS_DIR = Path(os.environ.get("MEMORY_GUARDIAN_GROUPS_DIR", "/workspace/project/groups"))
 GLOBAL_CLAUDE_MD = GROUPS_DIR / "global" / "CLAUDE.md"
 
 DEFAULT_MAX_AGE_HOURS = 96  # 4 days — tolerates quiet weekends
