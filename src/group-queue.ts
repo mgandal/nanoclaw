@@ -325,6 +325,9 @@ export class GroupQueue {
       state.retryCount === 0
     ) {
       this.groups.delete(groupJid);
+      // Purge stale entry from waitingGroups to prevent wasted dequeue slots
+      const idx = this.waitingGroups.indexOf(groupJid);
+      if (idx !== -1) this.waitingGroups.splice(idx, 1);
     }
 
     // Nothing pending for this group; check if other groups are waiting for a slot

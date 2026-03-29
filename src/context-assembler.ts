@@ -347,6 +347,8 @@ export async function writeContextPacket(
   const busQueueDst = path.join(ipcDir, 'bus-queue.json');
   if (fs.existsSync(busQueueSrc)) {
     fs.copyFileSync(busQueueSrc, busQueueDst);
-    fs.writeFileSync(busQueueSrc, '[]');
+    const tmpClear = `${busQueueSrc}.tmp`;
+    fs.writeFileSync(tmpClear, '[]');
+    fs.renameSync(tmpClear, busQueueSrc);
   }
 }

@@ -52,14 +52,14 @@ export class CalendarWatcher {
   }
 
   async start(): Promise<void> {
-    // Verify icalbuddy is available
+    // Verify icalbuddy is available at the hardcoded path
     try {
-      execFileSync('which', ['icalbuddy'], {
+      execFileSync(ICALBUDDY_BIN, ['--version'], {
         encoding: 'utf-8',
         timeout: 5_000,
       });
     } catch (err) {
-      logger.warn({ err }, 'icalbuddy not found — calendar watcher disabled');
+      logger.warn({ err, path: ICALBUDDY_BIN }, 'icalbuddy not found — calendar watcher disabled');
       return;
     }
 

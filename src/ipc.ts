@@ -751,7 +751,12 @@ export async function processTaskIpc(
         typeof data.type === 'string' &&
         data.type === 'save_skill'
       ) {
-        handled = handleSaveSkillIpc(data, sourceGroup);
+        if (!isMain) {
+          logger.warn({ sourceGroup }, 'Non-main save_skill IPC attempt blocked');
+          handled = true;
+        } else {
+          handled = handleSaveSkillIpc(data, sourceGroup);
+        }
       }
       if (!handled) {
         logger.warn({ type: data.type }, 'Unknown IPC task type');

@@ -679,14 +679,17 @@ export function getSession(groupFolder: string): string | undefined {
 
 export function setSession(groupFolder: string, sessionId: string): void {
   const now = new Date().toISOString();
-  // Preserve created_at if session row already exists (session ID changed but session continues)
-  const existing = db
-    .prepare('SELECT created_at FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { created_at: string | null } | undefined;
-  const createdAt = existing?.created_at || now;
-  db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id, last_used, created_at) VALUES (?, ?, ?, ?)',
-  ).run(groupFolder, sessionId, now, createdAt);
+  // Preserve created_at if session row already exists (session ID changed but session continues).
+  // Wrapped in a transaction to prevent read-modify-write race on created_at.
+  db.transaction(() => {
+    const existing = db
+      .prepare('SELECT created_at FROM sessions WHERE group_folder = ?')
+      .get(groupFolder) as { created_at: string | null } | undefined;
+    const createdAt = existing?.created_at || now;
+    db.prepare(
+      'INSERT OR REPLACE INTO sessions (group_folder, session_id, last_used, created_at) VALUES (?, ?, ?, ?)',
+    ).run(groupFolder, sessionId, now, createdAt);
+  })();
 }
 
 export function touchSession(groupFolder: string): void {

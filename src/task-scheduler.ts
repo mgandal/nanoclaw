@@ -82,7 +82,9 @@ export function computeNextRun(task: ScheduledTask): string | null {
     }
     // Anchor to the scheduled time, not now, to prevent drift.
     // Skip past any missed intervals so we always land in the future.
-    let next = new Date(task.next_run!).getTime() + ms;
+    // Guard against null next_run (corrupted DB row) to avoid near-infinite loop.
+    const base = task.next_run ? new Date(task.next_run).getTime() : now;
+    let next = base + ms;
     while (next <= now) {
       next += ms;
     }

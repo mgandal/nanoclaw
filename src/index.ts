@@ -267,8 +267,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       saveState();
       await channel.sendMessage(chatJid, 'Session cleared. Starting fresh.');
       logger.info({ group: group.name }, 'Session reset via /new');
+      return true;
     }
-    return true;
+    // Unauthorized /new — don't return true, let remaining messages be processed
   }
 
   // --- Session command interception (before trigger check) ---
@@ -291,7 +292,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       },
       formatMessages,
       canSenderInteract: (msg) => {
-        const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
+        const hasTrigger = groupTriggerPattern.test(msg.content.trim());
         const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
         return (
           isMainGroup ||
@@ -592,8 +593,9 @@ async function startMessageLoop(): Promise<void> {
 
           // --- Session command interception (message loop) ---
           // Scan ALL messages in the batch for a session command.
+          const groupLoopTrigger = getTriggerPattern(group.trigger);
           const loopCmdMsg = groupMessages.find(
-            (m) => extractSessionCommand(m.content, TRIGGER_PATTERN) !== null,
+            (m) => extractSessionCommand(m.content, groupLoopTrigger) !== null,
           );
 
           if (loopCmdMsg) {
