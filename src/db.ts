@@ -517,7 +517,7 @@ export function updateTask(
   >,
 ): void {
   const fields: string[] = [];
-  const values: unknown[] = [];
+  const values: (string | number | null)[] = [];
 
   if (updates.prompt !== undefined) {
     fields.push('prompt = ?');
