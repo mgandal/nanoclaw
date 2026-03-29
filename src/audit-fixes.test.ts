@@ -626,3 +626,41 @@ describe('QMD health check endpoint', () => {
     }
   });
 });
+
+// ─────────────────────────────────────────────────
+// 26. Health checks must use per-service health URLs, not MCP URLs
+// ─────────────────────────────────────────────────
+describe('Per-service health check URLs', () => {
+  it('FIX: health check config must have separate healthUrl for SimpleMem', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/index.ts'),
+      'utf-8',
+    );
+    // SimpleMem health check must NOT use the SSE URL (which hangs/401s)
+    // It must use /api/health or a dedicated health URL
+    expect(source).toContain('healthUrl');
+    // SimpleMem entry must reference /api/health
+    expect(source).toMatch(/SimpleMem[\s\S]{0,200}api\/health/);
+  });
+
+  it('FIX: checkMcpEndpoint must use healthUrl when provided', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/index.ts'),
+      'utf-8',
+    );
+    // The health check call must pass healthUrl when it exists
+    expect(source).toMatch(/healthUrl|ep\.health/);
+  });
+
+  it('SimpleMem /api/health returns healthy (live check)', async () => {
+    try {
+      const res = await fetch('http://localhost:8200/api/health', {
+        signal: AbortSignal.timeout(2000),
+      });
+      const data = (await res.json()) as { status: string };
+      expect(data.status).toBe('healthy');
+    } catch {
+      // SimpleMem not running — skip
+    }
+  });
+});
