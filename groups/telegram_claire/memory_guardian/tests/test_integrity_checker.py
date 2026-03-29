@@ -4,15 +4,13 @@ Written FIRST per TDD requirements — all tests will fail until implementation 
 """
 
 import json
-import os
-import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Add parent directory so we can import integrity_checker
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import integrity_checker
 
 
 class TestCheckClaudeMdSections(unittest.TestCase):
@@ -20,8 +18,6 @@ class TestCheckClaudeMdSections(unittest.TestCase):
 
     def test_missing_file_returns_error(self):
         """group folder exists but no CLAUDE.md -> issue returned"""
-        import integrity_checker
-
         with patch("integrity_checker.GROUPS_DIR") as mock_dir:
             mock_group_path = MagicMock()
             mock_claude_md = MagicMock()
@@ -29,14 +25,15 @@ class TestCheckClaudeMdSections(unittest.TestCase):
             mock_group_path.__truediv__ = lambda self, other: mock_claude_md
             mock_dir.__truediv__ = lambda self, other: mock_group_path
 
-            issues = integrity_checker.check_claude_md_sections("telegram_claire")
+            with patch("integrity_checker.GLOBAL_CLAUDE_MD") as mock_global:
+                mock_global.exists.return_value = False
+
+                issues = integrity_checker.check_claude_md_sections("telegram_claire")
             self.assertTrue(len(issues) > 0)
             self.assertTrue(any("CLAUDE.md" in issue for issue in issues))
 
     def test_all_sections_present_passes(self):
         """CLAUDE.md contains both required markers -> no issues"""
-        import integrity_checker
-
         content = (
             "# Group Instructions\n\n"
             "## Session Start Protocol\n"
@@ -53,15 +50,16 @@ class TestCheckClaudeMdSections(unittest.TestCase):
             mock_group_path.__truediv__ = lambda self, other: fake_path
             mock_dir.__truediv__ = lambda self, other: mock_group_path
 
-            issues = integrity_checker.check_claude_md_sections("telegram_claire")
+            with patch("integrity_checker.GLOBAL_CLAUDE_MD") as mock_global:
+                mock_global.exists.return_value = False
+
+                issues = integrity_checker.check_claude_md_sections("telegram_claire")
             self.assertEqual(issues, [])
 
     def test_missing_session_start_detected(self):
         """CLAUDE.md has Research Before Asking but not Session Start Protocol -> issue.
         Global CLAUDE.md is patched to empty so it cannot satisfy the missing marker.
         """
-        import integrity_checker
-
         content = (
             "# Group Instructions\n\n"
             "## Research Before Asking\n"
@@ -88,8 +86,6 @@ class TestCheckClaudeMdSections(unittest.TestCase):
         """CLAUDE.md has Session Start Protocol but not Research Before Asking -> issue.
         Global CLAUDE.md is patched to empty so it cannot satisfy the missing marker.
         """
-        import integrity_checker
-
         content = (
             "# Group Instructions\n\n"
             "## Session Start Protocol\n"
@@ -118,10 +114,6 @@ class TestCheckClaudeMdSectionsGlobalFallback(unittest.TestCase):
 
     def test_section_in_global_file_satisfies_check(self):
         """Section missing from per-group CLAUDE.md but present in global -> PASS"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
 
@@ -151,10 +143,6 @@ class TestCheckClaudeMdSectionsGlobalFallback(unittest.TestCase):
 
     def test_section_missing_from_both_files_fails(self):
         """Section absent from both per-group and global CLAUDE.md -> FAIL"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
 
@@ -184,10 +172,6 @@ class TestCheckClaudeMdSectionsGlobalFallback(unittest.TestCase):
 
     def test_missing_global_file_does_not_crash(self):
         """Global CLAUDE.md absent -> no exception, per-group file still checked normally"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
 
@@ -214,10 +198,6 @@ class TestCheckClaudeMdSectionsGlobalFallback(unittest.TestCase):
 
     def test_both_sections_only_in_global_file_passes(self):
         """Per-group CLAUDE.md is a stub; both required sections live in global -> PASS"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
 
@@ -249,8 +229,6 @@ class TestCheckMemoryExists(unittest.TestCase):
 
     def test_missing_memory_md_returns_error(self):
         """no memory.md -> issue returned"""
-        import integrity_checker
-
         with patch("integrity_checker.GROUPS_DIR") as mock_dir:
             fake_path = MagicMock()
             fake_path.exists.return_value = False
@@ -264,8 +242,6 @@ class TestCheckMemoryExists(unittest.TestCase):
 
     def test_existing_memory_md_passes(self):
         """memory.md present -> no issues"""
-        import integrity_checker
-
         with patch("integrity_checker.GROUPS_DIR") as mock_dir:
             fake_path = MagicMock()
             fake_path.exists.return_value = True
@@ -282,8 +258,6 @@ class TestCheckMemoryFreshness(unittest.TestCase):
 
     def test_fresh_memory_passes(self):
         """memory.md mtime = now -> no issues"""
-        import integrity_checker
-
         now = datetime(2026, 3, 28, 17, 0, 0, tzinfo=timezone.utc)
 
         with patch("integrity_checker.GROUPS_DIR") as mock_dir:
@@ -308,8 +282,6 @@ class TestCheckMemoryFreshness(unittest.TestCase):
         Uses 5 days (120h) to exceed the 96h default threshold introduced to
         tolerate quiet weekends.
         """
-        import integrity_checker
-
         now = datetime(2026, 3, 28, 17, 0, 0, tzinfo=timezone.utc)
         five_days_ago = now - timedelta(days=5)
 
@@ -333,8 +305,6 @@ class TestCheckMemoryFreshness(unittest.TestCase):
 
     def test_custom_max_age_respected(self):
         """mtime = 25h ago, max_age_hours=24 -> fails; max_age_hours=48 -> passes"""
-        import integrity_checker
-
         now = datetime(2026, 3, 28, 17, 0, 0, tzinfo=timezone.utc)
         twenty_five_hours_ago = now - timedelta(hours=25)
 
@@ -394,10 +364,6 @@ class TestRunAllChecks(unittest.TestCase):
 
     def test_healthy_group_shows_pass(self):
         """mock a group with good CLAUDE.md and fresh memory.md -> status PASS"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             self._make_good_group_path(tmp_path, "telegram_claire")
@@ -418,10 +384,6 @@ class TestRunAllChecks(unittest.TestCase):
 
     def test_unhealthy_group_shows_fail(self):
         """mock a group with issues -> status FAIL, has_failures=True"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             # Create group dir but no CLAUDE.md and no memory.md
@@ -438,10 +400,6 @@ class TestRunAllChecks(unittest.TestCase):
 
     def test_all_groups_checked(self):
         """result contains all 6 expected group keys, each with status and issues fields"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             for group in self.EXPECTED_GROUPS:
@@ -466,10 +424,6 @@ class TestRunAllChecks(unittest.TestCase):
 
     def test_run_all_checks_global_fallback_integration(self):
         """Integration: group passes when required sections are only in global CLAUDE.md"""
-        import tempfile
-
-        import integrity_checker
-
         now = datetime(2026, 3, 28, 17, 0, 0, tzinfo=timezone.utc)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -506,10 +460,6 @@ class TestRunAllChecks(unittest.TestCase):
 
     def test_output_is_valid_json(self):
         """run_all_checks() produces JSON-serializable output"""
-        import tempfile
-
-        import integrity_checker
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             for group in self.EXPECTED_GROUPS:
