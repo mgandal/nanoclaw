@@ -36,6 +36,19 @@ import { RegisteredGroup } from './types.js';
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
+/**
+ * Cached QMD reachability flag — updated by the health monitor loop
+ * in index.ts every HEALTH_MONITOR_INTERVAL (60s). Avoids blocking
+ * container spawn with a synchronous HTTP call.
+ */
+let qmdReachable = false;
+export function setQmdReachable(reachable: boolean): void {
+  qmdReachable = reachable;
+}
+function isQmdReachable(): boolean {
+  return qmdReachable;
+}
+
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
     /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|SIMPLEMEM_URL)=/i;
@@ -271,9 +284,11 @@ function buildContainerArgs(
     args.push('-e', 'ANTHROPIC_AUTH_TOKEN=placeholder');
   }
 
-  // Pass QMD search endpoint URL if daemon is running
-  const qmdUrl = `http://${CONTAINER_HOST_GATEWAY}:8181/mcp`;
-  args.push('-e', `QMD_URL=${qmdUrl}`);
+  // Pass QMD search endpoint URL only if daemon is reachable
+  if (isQmdReachable()) {
+    const qmdUrl = `http://${CONTAINER_HOST_GATEWAY}:8181/mcp`;
+    args.push('-e', `QMD_URL=${qmdUrl}`);
+  }
 
   // Pass SimpleMem memory URL if configured (read from .env since launchd doesn't set it)
   // Rewrite host to gateway IP; keep token in URL query param (not a separate env var)

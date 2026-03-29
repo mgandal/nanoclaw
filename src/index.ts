@@ -38,6 +38,7 @@ import {
 import {
   ContainerOutput,
   runContainerAgent,
+  setQmdReachable,
   writeGroupsSnapshot,
   writeTasksSnapshot,
 } from './container-runner.js';
@@ -823,8 +824,17 @@ async function main(): Promise<void> {
           `MCP server ${ep.name} is unreachable`,
         );
       }
+      // Update cached QMD reachability for container-runner
+      if (ep.name === 'QMD') {
+        setQmdReachable(result.reachable);
+      }
     }
   }, HEALTH_MONITOR_INTERVAL);
+
+  // Initial QMD health check so first container spawn has accurate state
+  checkMcpEndpoint('http://localhost:8181/mcp').then((r) =>
+    setQmdReachable(r.reachable),
+  );
 
   // Inter-agent message bus
   const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
