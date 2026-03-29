@@ -305,7 +305,7 @@ export class GmailChannel implements Channel {
 
     this.opts.onMessage(mainJid, {
       id: messageId,
-      chat_jid: chatJid,
+      chat_jid: mainJid,
       sender: senderEmail,
       sender_name: senderName,
       content,

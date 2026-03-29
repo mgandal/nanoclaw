@@ -118,6 +118,8 @@ export class HealthMonitor {
           this.recentAlerts.set(alertKey, now);
           this.config.onAlert(alert);
         }
+      } else if (this.isGroupPaused(group)) {
+        this.resumeGroup(group);
       }
     }
 
@@ -139,6 +141,21 @@ export class HealthMonitor {
           this.recentAlerts.set(alertKey, now);
           this.config.onAlert(alert);
         }
+      } else if (this.isGroupPaused(group)) {
+        this.resumeGroup(group);
+      }
+    }
+
+    // Auto-resume paused groups whose counts have fallen below threshold
+    // (covers groups that no longer appear in the log after pruning)
+    for (const group of this.pausedGroups) {
+      const spawns = this.getSpawnCount(group, windowMs);
+      const errors = this.getErrorCount(group, windowMs);
+      if (
+        spawns <= this.config.maxSpawnsPerHour &&
+        errors <= this.config.maxErrorsPerHour
+      ) {
+        this.resumeGroup(group);
       }
     }
 

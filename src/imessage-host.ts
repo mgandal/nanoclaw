@@ -184,7 +184,7 @@ export async function imessageSend(params: {
   text: string;
 }): Promise<{ success: boolean; message: string }> {
   // Validate recipient format (phone or email)
-  if (!/^[+\d][\d\s()-]+$/.test(params.to) && !params.to.includes('@')) {
+  if (!/^[+\d][\d ()-]{1,30}$/.test(params.to) && !params.to.includes('@')) {
     return {
       success: false,
       message: `Invalid recipient: "${params.to}". Must be a phone number or email.`,
@@ -203,7 +203,7 @@ export async function imessageSend(params: {
 tell application "Messages"
   set targetService to 1st account whose service type = iMessage
   set targetBuddy to participant "${params.to}" of targetService
-  send "${params.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}" to targetBuddy
+  send "${params.text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r/g, '').replace(/\n/g, '\\n')}" to targetBuddy
 end tell
 `;
 

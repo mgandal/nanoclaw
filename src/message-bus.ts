@@ -163,6 +163,8 @@ export class MessageBus {
       }
     }
     queue.push(message);
-    fs.writeFileSync(queuePath, JSON.stringify(queue, null, 2));
+    const tmpPath = `${queuePath}.tmp`;
+    fs.writeFileSync(tmpPath, JSON.stringify(queue, null, 2));
+    fs.renameSync(tmpPath, queuePath);
   }
 }

@@ -27,11 +27,11 @@ export const PROXY_BIND_HOST =
   process.env.CREDENTIAL_PROXY_HOST || detectProxyBindHost();
 
 function detectProxyBindHost(): string {
-  // Apple Container VMs cannot reach 127.0.0.1 — bind to 0.0.0.0 so the
-  // gateway IP (192.168.64.1) routes through. Docker Desktop on macOS
-  // handles host.docker.internal via its own VM routing.
+  // Apple Container VMs route traffic through the gateway IP 192.168.64.1.
+  // Bind to this specific interface so only containers can reach the proxy,
+  // not arbitrary host processes or LAN peers (which 0.0.0.0 would allow).
   if (os.platform() === 'darwin' && CONTAINER_RUNTIME_BIN === 'container')
-    return '0.0.0.0';
+    return '192.168.64.1';
   if (os.platform() === 'darwin') return '127.0.0.1';
 
   // WSL uses Docker Desktop (same VM routing as macOS) — loopback is correct.

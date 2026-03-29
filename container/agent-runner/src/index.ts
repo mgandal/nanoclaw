@@ -90,7 +90,11 @@ class MessageStream {
         yield this.queue.shift()!;
       }
       if (this.done) return;
-      await new Promise<void>(r => { this.waiting = r; });
+      await new Promise<void>(r => {
+        this.waiting = r;
+        // Re-check in case push()/end() arrived between the while-check and setting waiting
+        if (this.queue.length > 0 || this.done) r();
+      });
       this.waiting = null;
     }
   }
@@ -562,7 +566,7 @@ async function runScript(script: string): Promise<ScriptResult | null> {
     execFile('bash', [scriptPath], {
       timeout: SCRIPT_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
-      env: process.env,
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, TZ: process.env.TZ || '' },
     }, (error, stdout, stderr) => {
       if (stderr) {
         log(`Script stderr: ${stderr.slice(0, 500)}`);

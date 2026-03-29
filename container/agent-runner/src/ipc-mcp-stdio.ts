@@ -295,6 +295,7 @@ server.tool(
     script: z.string().optional().describe('New script for the task. Set to empty string to remove the script.'),
   },
   async (args) => {
+    const MIN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes minimum
     // Validate schedule_value if provided
     if (args.schedule_type === 'cron' || (!args.schedule_type && args.schedule_value)) {
       if (args.schedule_value) {
@@ -313,6 +314,12 @@ server.tool(
       if (isNaN(ms) || ms <= 0) {
         return {
           content: [{ type: 'text' as const, text: `Invalid interval: "${args.schedule_value}".` }],
+          isError: true,
+        };
+      }
+      if (ms < MIN_INTERVAL_MS) {
+        return {
+          content: [{ type: 'text' as const, text: `REJECTED: Interval ${ms}ms (${Math.round(ms / 60000)} minutes) is too frequent. Minimum allowed is 30 minutes (1800000ms).` }],
           isError: true,
         };
       }
