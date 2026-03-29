@@ -9,7 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import Database from 'better-sqlite3';
+import { Database } from 'bun:sqlite';
 
 import { STORE_DIR } from '../src/config.js';
 import { readEnvFile } from '../src/env.js';
@@ -147,8 +147,8 @@ export async function run(_args: string[]): Promise<void> {
       const db = new Database(dbPath, { readonly: true });
       const row = db
         .prepare('SELECT COUNT(*) as count FROM registered_groups')
-        .get() as { count: number };
-      registeredGroups = row.count;
+        .get() as { count: number } | null;
+      registeredGroups = row?.count ?? 0;
       db.close();
     } catch {
       // Table might not exist

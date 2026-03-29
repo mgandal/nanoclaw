@@ -6,25 +6,23 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx src/index.ts",
+    "start": "bun dist/index.js",
+    "dev": "bun src/index.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.ts\"",
     "format:fix": "prettier --write \"src/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\"",
     "prepare": "husky",
-    "setup": "tsx setup/index.ts",
-    "auth": "tsx src/whatsapp-auth.ts",
+    "setup": "bun setup/index.ts",
+    "auth": "bun src/whatsapp-auth.ts",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "bun --bun vitest run",
+    "test:watch": "bun --bun vitest",
     "setup:pageindex": "cd scripts/pageindex && python3 -m venv venv && venv/bin/pip install -r requirements.txt"
   },
   "dependencies": {
-    "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
-    "dotenv-cli": "^11.0.0",
     "google-auth-library": "^10.6.2",
     "googleapis": "^171.4.0",
     "grammy": "^1.39.3",
@@ -36,7 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
-    "@types/better-sqlite3": "^7.6.12",
+    "@types/bun": "^1.3.11",
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.35.0",
@@ -44,12 +42,11 @@
     "globals": "^15.12.0",
     "husky": "^9.1.7",
     "prettier": "^3.8.1",
-    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.35.0",
     "vitest": "^4.0.18"
   },
   "engines": {
-    "node": ">=20"
+    "bun": ">=1.2"
   }
 }

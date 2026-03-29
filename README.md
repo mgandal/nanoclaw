@@ -123,7 +123,7 @@ Skills we'd like to see:
 ## Requirements
 
 - macOS, Linux, or Windows (via WSL2)
-- Node.js 20+
+- [Bun](https://bun.sh) 1.2+ (host runtime; containers still use Node.js)
 - [Claude Code](https://claude.ai/download)
 - [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
 

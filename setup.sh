@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # setup.sh — Bootstrap script for NanoClaw
-# Handles Node.js/npm setup, then hands off to the Node.js setup modules.
+# Handles Bun setup, then hands off to the setup modules.
 # This is the only bash script in the setup flow.
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,63 +38,42 @@ detect_platform() {
   log "Platform: $PLATFORM, WSL: $IS_WSL, Root: $IS_ROOT"
 }
 
-# --- Node.js check ---
+# --- Bun check ---
 
-check_node() {
-  NODE_OK="false"
-  NODE_VERSION="not_found"
-  NODE_PATH_FOUND=""
+check_bun() {
+  BUN_OK="false"
+  BUN_VERSION="not_found"
+  BUN_PATH_FOUND=""
 
-  if command -v node >/dev/null 2>&1; then
-    NODE_VERSION=$(node --version 2>/dev/null | sed 's/^v//')
-    NODE_PATH_FOUND=$(command -v node)
-    local major
-    major=$(echo "$NODE_VERSION" | cut -d. -f1)
-    if [ "$major" -ge 20 ] 2>/dev/null; then
-      NODE_OK="true"
-    fi
-    log "Node $NODE_VERSION at $NODE_PATH_FOUND (major=$major, ok=$NODE_OK)"
+  if command -v bun >/dev/null 2>&1; then
+    BUN_VERSION=$(bun --version 2>/dev/null)
+    BUN_PATH_FOUND=$(command -v bun)
+    BUN_OK="true"
+    log "Bun $BUN_VERSION at $BUN_PATH_FOUND (ok=$BUN_OK)"
   else
-    log "Node not found"
+    log "Bun not found"
   fi
 }
 
-# --- npm install ---
+# --- Bun install ---
 
 install_deps() {
   DEPS_OK="false"
-  NATIVE_OK="false"
 
-  if [ "$NODE_OK" = "false" ]; then
-    log "Skipping npm install — Node not available"
+  if [ "$BUN_OK" = "false" ]; then
+    log "Skipping bun install — Bun not available"
     return
   fi
 
   cd "$PROJECT_ROOT"
 
-  # npm install with --unsafe-perm if root (needed for native modules)
-  local npm_flags=""
-  if [ "$IS_ROOT" = "true" ]; then
-    npm_flags="--unsafe-perm"
-    log "Running as root, using --unsafe-perm"
-  fi
-
-  log "Running npm ci $npm_flags"
-  if npm ci $npm_flags >> "$LOG_FILE" 2>&1; then
+  log "Running bun install"
+  if bun install >> "$LOG_FILE" 2>&1; then
     DEPS_OK="true"
-    log "npm install succeeded"
+    log "bun install succeeded"
   else
-    log "npm install failed"
+    log "bun install failed"
     return
-  fi
-
-  # Verify native module (better-sqlite3)
-  log "Verifying native modules"
-  if node -e "require('better-sqlite3')" >> "$LOG_FILE" 2>&1; then
-    NATIVE_OK="true"
-    log "better-sqlite3 loads OK"
-  else
-    log "better-sqlite3 failed to load"
   fi
 }
 
@@ -121,18 +100,16 @@ check_build_tools() {
 log "=== Bootstrap started ==="
 
 detect_platform
-check_node
+check_bun
 install_deps
 check_build_tools
 
 # Emit status block
 STATUS="success"
-if [ "$NODE_OK" = "false" ]; then
-  STATUS="node_missing"
+if [ "$BUN_OK" = "false" ]; then
+  STATUS="bun_missing"
 elif [ "$DEPS_OK" = "false" ]; then
   STATUS="deps_failed"
-elif [ "$NATIVE_OK" = "false" ]; then
-  STATUS="native_failed"
 fi
 
 cat <<EOF
@@ -140,11 +117,10 @@ cat <<EOF
 PLATFORM: $PLATFORM
 IS_WSL: $IS_WSL
 IS_ROOT: $IS_ROOT
-NODE_VERSION: $NODE_VERSION
-NODE_OK: $NODE_OK
-NODE_PATH: ${NODE_PATH_FOUND:-not_found}
+BUN_VERSION: $BUN_VERSION
+BUN_OK: $BUN_OK
+BUN_PATH: ${BUN_PATH_FOUND:-not_found}
 DEPS_OK: $DEPS_OK
-NATIVE_OK: $NATIVE_OK
 HAS_BUILD_TOOLS: $HAS_BUILD_TOOLS
 STATUS: $STATUS
 LOG: logs/setup.log
@@ -153,9 +129,9 @@ EOF
 
 log "=== Bootstrap completed: $STATUS ==="
 
-if [ "$NODE_OK" = "false" ]; then
+if [ "$BUN_OK" = "false" ]; then
   exit 2
 fi
-if [ "$DEPS_OK" = "false" ] || [ "$NATIVE_OK" = "false" ]; then
+if [ "$DEPS_OK" = "false" ]; then
   exit 1
 fi
