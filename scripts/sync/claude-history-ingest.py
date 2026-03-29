@@ -31,11 +31,11 @@ CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 # Max characters per message content to avoid overwhelming SimpleMem's LLM
 MAX_CONTENT_LENGTH = 2000
 # How many dialogues per memory_add_batch call (LLM processes each ~20-25s)
-BATCH_SIZE = 5
+BATCH_SIZE = 3
 # Sleep between batches (seconds) — let SimpleMem's LLM catch up
 BATCH_DELAY = 1.0
-# HTTP request timeout (seconds) — batch of 5 takes ~2 min with LLM processing
-REQUEST_TIMEOUT = 180
+# HTTP request timeout (seconds) — batch of 3 takes ~2min, can be slower under load
+REQUEST_TIMEOUT = 300
 # Minimum messages in a session to bother ingesting
 MIN_SESSION_MESSAGES = 3
 

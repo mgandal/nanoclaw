@@ -41,9 +41,9 @@ CHAT_NAMES = {
     "tg:-5135739930": "Claire-scholar",
 }
 
-BATCH_SIZE = 5
+BATCH_SIZE = 3
 BATCH_DELAY = 1.0
-REQUEST_TIMEOUT = 180
+REQUEST_TIMEOUT = 300
 
 logging.basicConfig(
     level=logging.INFO,
