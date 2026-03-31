@@ -132,7 +132,6 @@ function loadState(): void {
   );
 }
 
-
 function saveState(): void {
   setRouterState('last_seq', String(lastSeq));
   setRouterState('last_agent_seq', JSON.stringify(lastAgentSeq));
