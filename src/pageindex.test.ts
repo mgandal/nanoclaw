@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import path from 'path';
 import crypto from 'crypto';
 
@@ -54,7 +54,6 @@ import {
   indexPdf,
   type PageIndexNode,
   type MountMapping,
-  type IndexResult,
 } from './pageindex.js';
 
 // ---------- helpers ----------
@@ -361,11 +360,10 @@ describe('indexPdf', () => {
 
   it('returns flat text fallback for PDFs with <=20 pages', async () => {
     // First call: pdfinfo
-    let callCount = 0;
     mockExecFile.mockImplementation(
       (
         cmd: string,
-        args: string[],
+        _args: string[],
         optsOrCb: unknown,
         maybeCb?: (
           err: Error | null,
@@ -373,7 +371,6 @@ describe('indexPdf', () => {
         ) => void,
       ) => {
         const cb = typeof optsOrCb === 'function' ? optsOrCb : maybeCb;
-        callCount++;
         if (cmd.includes('pdfinfo')) {
           if (cb) cb(null, { stdout: 'Pages:          15\n', stderr: '' });
         } else if (cmd.includes('pdftotext')) {
@@ -474,7 +471,7 @@ describe('indexPdf', () => {
     mockExecFile.mockImplementation(
       (
         cmd: string,
-        args: string[],
+        _args: string[],
         optsOrCb: unknown,
         maybeCb?: (
           err: Error | null,

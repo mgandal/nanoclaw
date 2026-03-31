@@ -3,6 +3,22 @@ import fs from 'fs';
 import { assembleContextPacket } from './context-assembler.js';
 import { getRecentMessages, getAllTasks } from './db.js';
 
+vi.mock('http', () => {
+  const mockReq = {
+    on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+      if (event === 'error') setTimeout(() => cb(new Error('ECONNREFUSED')), 0);
+      return mockReq;
+    }),
+    write: vi.fn(),
+    end: vi.fn(),
+    destroy: vi.fn(),
+  };
+  return {
+    default: { request: vi.fn(() => mockReq) },
+    request: vi.fn(() => mockReq),
+  };
+});
+
 vi.mock('fs', () => ({
   default: {
     existsSync: vi.fn(() => false),
@@ -85,7 +101,7 @@ describe('assembleContextPacket', () => {
 
   it('truncates to max size', async () => {
     vi.mocked(getRecentMessages).mockReturnValue(
-      Array.from({ length: 200 }, (_, i) => ({
+      Array.from({ length: 200 }, () => ({
         sender: 'user',
         content: 'x'.repeat(100),
         timestamp: '2026-03-20T10:00:00Z',

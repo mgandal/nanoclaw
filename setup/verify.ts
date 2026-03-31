@@ -17,14 +17,13 @@ import { logger } from '../src/logger.js';
 import {
   getPlatform,
   getServiceManager,
-  hasSystemd,
   isRoot,
 } from './platform.js';
 import { emitStatus } from './status.js';
 
 export async function run(_args: string[]): Promise<void> {
   const projectRoot = process.cwd();
-  const platform = getPlatform();
+  const _platform = getPlatform();
   const homeDir = os.homedir();
 
   logger.info('Starting verification');

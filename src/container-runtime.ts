@@ -142,7 +142,7 @@ export function cleanupOrphans(): void {
       .map((c) => c.configuration.id);
     for (const name of orphans) {
       try {
-        execSync(stopContainer(name), { stdio: 'pipe' });
+        stopContainer(name);
       } catch {
         /* already stopped */
       }

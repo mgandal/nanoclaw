@@ -49,7 +49,7 @@ export function cleanupLockFiles(): void {
   for (const lockFile of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
     const lockPath = path.join(config.browserDataDir, lockFile);
     if (fs.existsSync(lockPath)) {
-      try { fs.unlinkSync(lockPath); } catch {}
+      try { fs.unlinkSync(lockPath); } catch { /* ignore cleanup errors */ }
     }
   }
 }

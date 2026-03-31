@@ -14,9 +14,7 @@ import {
   getPlatform,
   getBunPath,
   getServiceManager,
-  hasSystemd,
   isRoot,
-  isWSL,
 } from './platform.js';
 import { emitStatus } from './status.js';
 
@@ -324,7 +322,7 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
 function setupNohupFallback(
   projectRoot: string,
   bunPath: string,
-  homeDir: string,
+  _homeDir: string,
 ): void {
   logger.warn('No systemd detected — generating nohup wrapper script');
 

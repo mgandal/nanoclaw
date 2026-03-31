@@ -8,6 +8,8 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getConsecutiveFailures,
+  getLastBotMessageSeq,
+  getLastBotMessageTimestamp,
   getMessagesSince,
   getNewMessages,
   getTaskById,
@@ -19,6 +21,7 @@ import {
   storeMessage,
   updateTask,
 } from './db.js';
+import { formatMessages } from './router.js';
 
 beforeEach(() => {
   _initTestDatabase();
@@ -191,6 +194,78 @@ describe('getMessagesSince', () => {
     const msgs = getMessagesSince('group@g.us', 0, 'Andy');
     // 3 user messages (bot message excluded)
     expect(msgs).toHaveLength(3);
+  });
+
+  it('recovers cursor from last bot reply when lastAgentSeq is missing', () => {
+    // beforeEach already inserts m1 (user), m2 (user), m3 (bot), m4 (user)
+    // Add a new message after all existing ones
+    store({
+      id: 'new-1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'new message after bot reply',
+      timestamp: '2024-01-02T00:00:00.000Z',
+    });
+
+    // Recover cursor from the last bot message seq (m3 from beforeEach)
+    const recoveredSeq = getLastBotMessageSeq('group@g.us');
+    expect(recoveredSeq).toBeGreaterThan(0);
+
+    // Using recovered seq cursor: get messages after the bot reply's rowid
+    // m3 (bot) was inserted before m4, so m4 and new-1 have higher rowids
+    const msgs = getMessagesSince('group@g.us', recoveredSeq, 'Andy', 10);
+    // m4 (third) + new-1 — skips m1/m2 (before bot) and m3 (bot, filtered)
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].content).toBe('third');
+    expect(msgs[1].content).toBe('new message after bot reply');
+  });
+
+  it('caps messages to configured limit even with recovered cursor', () => {
+    // beforeEach inserts m3 (bot at 00:00:03). Add 30 messages after it.
+    for (let i = 1; i <= 30; i++) {
+      store({
+        id: `pending-${i}`,
+        chat_jid: 'group@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: `pending message ${i}`,
+        timestamp: `2024-02-${String(i).padStart(2, '0')}T12:00:00.000Z`,
+      });
+    }
+
+    // With limit=10, only the 10 most recent are returned
+    const msgs = getMessagesSince('group@g.us', 0, 'Andy', 10);
+    expect(msgs).toHaveLength(10);
+    // Most recent 10: pending-21 through pending-30
+    expect(msgs[0].content).toBe('pending message 21');
+    expect(msgs[9].content).toBe('pending message 30');
+  });
+
+  it('returns last N messages when no bot reply and no cursor exist', () => {
+    // Use a fresh group with no bot messages
+    storeChatMetadata('fresh@g.us', '2024-01-01T00:00:00.000Z');
+    for (let i = 1; i <= 20; i++) {
+      store({
+        id: `fresh-${i}`,
+        chat_jid: 'fresh@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: `message ${i}`,
+        timestamp: `2024-02-${String(i).padStart(2, '0')}T12:00:00.000Z`,
+      });
+    }
+
+    const recovered = getLastBotMessageTimestamp('fresh@g.us', 'Andy');
+    expect(recovered).toBeUndefined();
+
+    // No cursor → sinceSeq = 0 but limit caps the result
+    const msgs = getMessagesSince('fresh@g.us', 0, 'Andy', 10);
+    expect(msgs).toHaveLength(10);
+
+    const prompt = formatMessages(msgs, 'Asia/Jerusalem');
+    const messageTagCount = (prompt.match(/<message /g) || []).length;
+    expect(messageTagCount).toBe(10);
   });
 
   it('filters pre-migration bot messages via content prefix backstop', () => {

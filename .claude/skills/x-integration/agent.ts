@@ -8,7 +8,7 @@
  * The @ts-ignore is needed because the SDK is only available in the container.
  */
 
-// @ts-ignore - SDK available in container environment only
+// @ts-expect-error - SDK available in container environment only
 import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import fs from 'fs';

@@ -8,7 +8,6 @@ import {
   logTaskRun,
   createTask,
   setRegisteredGroup,
-  setSession,
 } from './db.js';
 import { handleDashboardIpc } from './dashboard-ipc.js';
 

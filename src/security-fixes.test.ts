@@ -5,7 +5,7 @@
  * Phase 2: After fixes are applied, these same tests prove the fixes work.
  * Phase 3: Guardrail tests that prevent regressions.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
   _initTestDatabase,
@@ -67,7 +67,7 @@ describe('stopContainer security', () => {
 // ─── 2. mount-security: colon in container path ─────────────────────
 
 // isValidContainerPath is not exported, so we test through validateMount
-import { validateMount, loadMountAllowlist } from './mount-security.js';
+import { validateMount } from './mount-security.js';
 
 describe('mount-security: container path validation', () => {
   // BUG: Colons in container paths can override Docker -v readonly flags
