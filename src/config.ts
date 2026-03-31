@@ -157,6 +157,8 @@ export const GMAIL_CREDENTIALS_PATH =
 export const GMAIL_ACCOUNT = process.env.GMAIL_ACCOUNT || 'mgandal@gmail.com';
 
 // Calendar watcher
+export const CALENDAR_WATCHER_ENABLED =
+  (process.env.CALENDAR_WATCHER_ENABLED || 'false').toLowerCase() === 'true';
 export const CALENDAR_POLL_INTERVAL = parseInt(
   process.env.CALENDAR_POLL_INTERVAL || '60000',
   10,
