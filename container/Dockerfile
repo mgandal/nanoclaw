@@ -34,7 +34,7 @@ RUN npm install -g agent-browser @anthropic-ai/claude-code
 
 # Install agent-reach: gives agents read/search access to 15+ platforms
 # (Twitter/X, YouTube, Reddit, GitHub, RSS, web, Bilibili, Weibo, Douyin, etc.)
-RUN apt-get update && apt-get install -y     python3     python3-pip     pipx     && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
 
 # Install gh CLI (GitHub)
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -44,13 +44,15 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg    
     apt-get update && apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
-# Install agent-reach + mcporter (MCP bridge for XiaoHongShu, Douyin, LinkedIn, Weibo)
-RUN pip3 install agent-reach --break-system-packages && \
-    npm install -g mcporter
+# Install agent-reach + yt-dlp + mcporter
+# Version-pinned for reproducibility; --break-system-packages is safe in containers
+RUN pip3 install 'agent-reach>=0.1,<1' 'yt-dlp>=2024.0,<2026' --break-system-packages && \
+    npm install -g mcporter@latest
 
 # Pre-configure agent-reach for the node user's home directory
 RUN mkdir -p /home/node/.agent-reach && \
-    agent-reach install --env=auto --safe 2>/dev/null || true
+    agent-reach install --env=auto --safe && \
+    chown -R node:node /home/node/.agent-reach
 
 # Create app directory
 WORKDIR /app
