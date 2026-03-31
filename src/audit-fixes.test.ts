@@ -726,7 +726,7 @@ describe('Apple Notes QMD integration', () => {
     }
   });
 
-  it('QMD can search Apple Notes content', { timeout: 30000 }, async () => {
+  it('QMD can search Apple Notes content', async () => {
     try {
       const initRes = await fetch('http://localhost:8182/mcp', {
         method: 'POST',

@@ -5,6 +5,7 @@ import { CronExpressionParser } from 'cron-parser';
 
 import {
   DATA_DIR,
+  GROUPS_DIR,
   IPC_POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
@@ -28,6 +29,7 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile?: (jid: string, filePath: string, caption?: string) => Promise<void>;
   sendWebAppButton?: (jid: string, label: string, url: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
@@ -80,6 +82,55 @@ function cleanupStaleProcessing(ipcBaseDir: string): void {
   } catch {
     // Non-fatal: best-effort cleanup
   }
+}
+
+/**
+ * Resolve a container file path to the host filesystem.
+ * Only resolves known mount prefixes — returns null for unknown paths.
+ */
+function resolveContainerFilePathToHost(
+  containerFilePath: string,
+  sourceGroup: string,
+  registeredGroups: Record<string, RegisteredGroup>,
+): string | null {
+  if (containerFilePath.includes('..')) return null;
+
+  const projectRoot = path.resolve(GROUPS_DIR, '..');
+
+  // /workspace/group/... → groups/{sourceGroup}/...
+  if (containerFilePath.startsWith('/workspace/group/')) {
+    const rel = containerFilePath.slice('/workspace/group/'.length);
+    return path.join(GROUPS_DIR, sourceGroup, rel);
+  }
+
+  // /workspace/project/... → project root/...
+  if (containerFilePath.startsWith('/workspace/project/')) {
+    const rel = containerFilePath.slice('/workspace/project/'.length);
+    return path.join(projectRoot, rel);
+  }
+
+  // /workspace/extra/{name}/... → resolve from group's containerConfig
+  if (containerFilePath.startsWith('/workspace/extra/')) {
+    const rest = containerFilePath.slice('/workspace/extra/'.length);
+    const slashIdx = rest.indexOf('/');
+    const mountName = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest;
+    const rel = slashIdx >= 0 ? rest.slice(slashIdx + 1) : '';
+
+    // Find the group's container config to resolve the mount
+    for (const group of Object.values(registeredGroups)) {
+      if (group.folder !== sourceGroup) continue;
+      const mounts = group.containerConfig?.additionalMounts;
+      if (!mounts) break;
+      for (const m of mounts) {
+        if (m.containerPath === mountName) {
+          return path.join(m.hostPath, rel);
+        }
+      }
+      break;
+    }
+  }
+
+  return null;
 }
 
 export function startIpcWatcher(deps: IpcDeps): void {
@@ -193,6 +244,54 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (
+                data.type === 'send_file' &&
+                data.chatJid &&
+                data.filePath &&
+                deps.sendFile
+              ) {
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  // Resolve container path to host path
+                  const hostFilePath = resolveContainerFilePathToHost(
+                    data.filePath,
+                    sourceGroup,
+                    registeredGroups,
+                  );
+                  if (!hostFilePath || !fs.existsSync(hostFilePath)) {
+                    logger.warn(
+                      {
+                        chatJid: data.chatJid,
+                        sourceGroup,
+                        containerPath: data.filePath,
+                        hostFilePath,
+                      },
+                      'IPC send_file: file not found or path not resolvable',
+                    );
+                  } else {
+                    await deps.sendFile(
+                      data.chatJid,
+                      hostFilePath,
+                      data.caption,
+                    );
+                    logger.info(
+                      {
+                        chatJid: data.chatJid,
+                        sourceGroup,
+                        hostFilePath,
+                      },
+                      'IPC file sent',
+                    );
+                  }
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC send_file attempt blocked',
                   );
                 }
               }
