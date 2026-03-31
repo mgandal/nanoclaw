@@ -84,6 +84,86 @@ describe('HealthMonitor', () => {
   });
 });
 
+describe('HealthMonitor infra alerts (consecutive failures)', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 30,
+      maxErrorsPerHour: 20,
+      onAlert: alertFn,
+    });
+  });
+
+  it('does not alert on a single transient failure', () => {
+    monitor.recordInfraEvent('mcp:QMD', 'MCP server QMD is unreachable');
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(0);
+  });
+
+  it('does not alert on two consecutive failures', () => {
+    monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(0);
+  });
+
+  it('alerts after 3 consecutive failures', () => {
+    for (let i = 0; i < 3; i++) {
+      monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    }
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(1);
+    expect(infraAlerts[0]).toMatchObject({
+      type: 'infra_error',
+      group: 'mcp:QMD',
+    });
+  });
+
+  it('resets failure count on clearInfraEvent (success)', () => {
+    monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    // A successful check clears the counter
+    monitor.clearInfraEvent('mcp:QMD');
+    // Next failure starts from 0 again
+    monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(0);
+  });
+
+  it('clears alert when service recovers after threshold was reached', () => {
+    for (let i = 0; i < 3; i++) {
+      monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    }
+    expect(
+      monitor.checkThresholds().filter((a) => a.type === 'infra_error'),
+    ).toHaveLength(1);
+    // Service recovers
+    monitor.clearInfraEvent('mcp:QMD');
+    expect(
+      monitor.checkThresholds().filter((a) => a.type === 'infra_error'),
+    ).toHaveLength(0);
+  });
+
+  it('tracks multiple services independently', () => {
+    for (let i = 0; i < 3; i++) {
+      monitor.recordInfraEvent('mcp:QMD', 'unreachable');
+    }
+    monitor.recordInfraEvent('mcp:SimpleMem', 'unreachable'); // only 1 failure
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(1);
+    expect(infraAlerts[0].group).toBe('mcp:QMD');
+  });
+});
+
 describe('HealthMonitor Ollama tracking', () => {
   let monitor: HealthMonitor;
 
