@@ -87,13 +87,15 @@ def create_session(base_url, token):
         },
     )
 
-    session_id = resp.headers.get("Mcp-Session-Id")
+    session_id = resp.headers.get("Mcp-Session-Id", "none")
     return session_id, headers
 
 
 def call_tool(base_url, headers, session_id, tool_name, arguments, call_id=2):
     """Call a SimpleMem MCP tool."""
-    hdrs = {**headers, "Mcp-Session-Id": session_id}
+    hdrs = {**headers}
+    if session_id and session_id != "none":
+        hdrs["Mcp-Session-Id"] = session_id
     resp = requests.post(
         base_url,
         headers=hdrs,
@@ -225,9 +227,7 @@ def main():
 
     # Create SimpleMem session
     session_id, headers = create_session(base_url, token)
-    if not session_id:
-        log.error("Failed to create SimpleMem session")
-        return
+    log.info("Connected to SimpleMem (session: %s)", session_id)
 
     ingested = 0
     for i, (filepath, mtime) in enumerate(to_ingest):

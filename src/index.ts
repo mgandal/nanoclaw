@@ -6,6 +6,7 @@ import {
   CALENDAR_LOOKAHEAD_DAYS,
   CALENDAR_NAMES,
   CALENDAR_POLL_INTERVAL,
+  CALENDAR_WATCHER_ENABLED,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   DEFAULT_TRIGGER,
@@ -914,19 +915,23 @@ async function main(): Promise<void> {
       logger.info('Gmail credentials not found, Gmail watcher disabled');
     }
 
-    // Calendar watcher
-    const calendarWatcher = new CalendarWatcher({
-      calendars: CALENDAR_NAMES,
-      eventRouter,
-      pollIntervalMs: CALENDAR_POLL_INTERVAL,
-      lookAheadDays: CALENDAR_LOOKAHEAD_DAYS,
-      stateDir: watcherStateDir,
-    });
-    calendarWatcher
-      .start()
-      .catch((err) =>
-        logger.error({ err }, 'Calendar watcher failed to start'),
-      );
+    // Calendar watcher (requires macOS Calendar TCC permission for the runtime binary)
+    if (CALENDAR_WATCHER_ENABLED) {
+      const calendarWatcher = new CalendarWatcher({
+        calendars: CALENDAR_NAMES,
+        eventRouter,
+        pollIntervalMs: CALENDAR_POLL_INTERVAL,
+        lookAheadDays: CALENDAR_LOOKAHEAD_DAYS,
+        stateDir: watcherStateDir,
+      });
+      calendarWatcher
+        .start()
+        .catch((err) =>
+          logger.error({ err }, 'Calendar watcher failed to start'),
+        );
+    } else {
+      logger.info('Calendar watcher disabled (set CALENDAR_WATCHER_ENABLED=true to enable)');
+    }
 
     logger.info('Event router and watchers initialized');
   }
@@ -1111,6 +1116,14 @@ async function main(): Promise<void> {
       const text = formatOutbound(rawText, channel.name as ChannelType);
       if (!text) return Promise.resolve();
       return channel.sendMessage(jid, text);
+    },
+    sendFile: async (jid, filePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel) throw new Error(`No channel for JID: ${jid}`);
+      if (!channel.sendFile) {
+        throw new Error(`Channel for JID ${jid} does not support sendFile`);
+      }
+      await channel.sendFile(jid, filePath, caption);
     },
     sendWebAppButton: async (jid, label, url) => {
       const channel = findChannel(channels, jid);
