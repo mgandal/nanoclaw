@@ -65,6 +65,31 @@ server.tool(
 );
 
 server.tool(
+  'send_file',
+  'Send a file (PDF, image, document, etc.) to the user or group. The file must exist at the given path inside the container. Use this to share generated files, research papers, or any binary content.',
+  {
+    file_path: z.string().describe('Absolute path to the file inside the container (e.g., /workspace/group/report.pdf)'),
+    caption: z.string().optional().describe('Optional caption/message to send with the file'),
+  },
+  async (args) => {
+    if (!fs.existsSync(args.file_path)) {
+      return { content: [{ type: 'text' as const, text: `Error: File not found: ${args.file_path}` }], isError: true };
+    }
+
+    writeIpcFile(MESSAGES_DIR, {
+      type: 'send_file',
+      chatJid,
+      filePath: args.file_path,
+      caption: args.caption || undefined,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return { content: [{ type: 'text' as const, text: `File sent: ${path.basename(args.file_path)}` }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

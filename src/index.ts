@@ -930,7 +930,9 @@ async function main(): Promise<void> {
           logger.error({ err }, 'Calendar watcher failed to start'),
         );
     } else {
-      logger.info('Calendar watcher disabled (set CALENDAR_WATCHER_ENABLED=true to enable)');
+      logger.info(
+        'Calendar watcher disabled (set CALENDAR_WATCHER_ENABLED=true to enable)',
+      );
     }
 
     logger.info('Event router and watchers initialized');

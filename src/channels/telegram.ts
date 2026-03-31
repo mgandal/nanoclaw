@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
-import { Api, Bot, InlineKeyboard } from 'grammy';
+import { Api, Bot, InlineKeyboard, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -689,6 +689,29 @@ export class TelegramChannel implements Channel {
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  async sendFile(
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    try {
+      const chatId = jid.replace(/^tg:/, '');
+      const inputFile = new InputFile(filePath);
+      await this.bot.api.sendDocument(chatId, inputFile, {
+        caption,
+        parse_mode: caption ? 'Markdown' : undefined,
+      });
+      logger.info({ jid, filePath }, 'Telegram file sent');
+    } catch (err) {
+      logger.error({ jid, filePath, err }, 'Failed to send Telegram file');
     }
   }
 
