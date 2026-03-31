@@ -61,19 +61,18 @@ export function startCredentialProxy(
   host = '127.0.0.1',
   onAuthFailure?: (statusCode: number) => void,
 ): Promise<Server> {
-  const secrets = readEnvFile([
+  // Read once at startup for auth mode detection and upstream URL (these rarely change)
+  const initialSecrets = readEnvFile([
     'ANTHROPIC_API_KEY',
     'CLAUDE_CODE_OAUTH_TOKEN',
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
   ]);
 
-  const authMode: AuthMode = secrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
-  const oauthToken =
-    secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.ANTHROPIC_AUTH_TOKEN;
+  const authMode: AuthMode = initialSecrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
 
   const upstreamUrl = new URL(
-    secrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
+    initialSecrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
   );
   const isHttps = upstreamUrl.protocol === 'https:';
   const makeRequest = isHttps ? httpsRequest : httpRequest;
@@ -81,11 +80,28 @@ export function startCredentialProxy(
   let consecutiveAuthFailures = 0;
   const AUTH_FAILURE_THRESHOLD = 3;
 
-  if (authMode === 'oauth' && !oauthToken) {
-    logger.error(
-      { tag: 'SYSTEM_ALERT' },
-      'Credential proxy: no OAuth token found (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN both missing)',
-    );
+  // Helper: re-read credentials from .env on each request so token refreshes
+  // are picked up without a full restart.
+  function freshCredentials() {
+    const s = readEnvFile([
+      'ANTHROPIC_API_KEY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+    ]);
+    return {
+      apiKey: s.ANTHROPIC_API_KEY,
+      oauthToken: s.CLAUDE_CODE_OAUTH_TOKEN || s.ANTHROPIC_AUTH_TOKEN,
+    };
+  }
+
+  if (authMode === 'oauth') {
+    const { oauthToken } = freshCredentials();
+    if (!oauthToken) {
+      logger.error(
+        { tag: 'SYSTEM_ALERT' },
+        'Credential proxy: no OAuth token found (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN both missing)',
+      );
+    }
   }
 
   return new Promise((resolve, reject) => {
@@ -130,17 +146,20 @@ export function startCredentialProxy(
         delete headers['keep-alive'];
         delete headers['transfer-encoding'];
 
+        // Re-read credentials per request so token refreshes take effect immediately
+        const creds = freshCredentials();
+
         if (authMode === 'api-key') {
           // API key mode: inject x-api-key on every request
           delete headers['x-api-key'];
-          headers['x-api-key'] = secrets.ANTHROPIC_API_KEY;
+          headers['x-api-key'] = creds.apiKey;
         } else {
           // OAuth mode: inject real Bearer token on EVERY request
           // and add required beta headers for OAuth access
           delete headers['authorization'];
           delete headers['x-api-key'];
-          if (oauthToken) {
-            headers['authorization'] = `Bearer ${oauthToken}`;
+          if (creds.oauthToken) {
+            headers['authorization'] = `Bearer ${creds.oauthToken}`;
             ensureOAuthBeta(headers);
           }
 

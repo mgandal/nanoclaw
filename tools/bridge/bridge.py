@@ -58,10 +58,13 @@ class BridgeHandler(BaseHTTPRequestHandler):
         pass
 
     def _send_json(self, status, data):
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # Client disconnected before we could respond
 
     def _read_json_body(self):
         length = int(self.headers.get("Content-Length", 0))

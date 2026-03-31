@@ -110,9 +110,19 @@ if [ -f /tmp/nanoclaw-refreshed-key ]; then
 
     log "OAuth token refreshed successfully (prefix: ${NEW_KEY:0:15}...)"
 
-    # Restart NanoClaw to pick up the new key
-    launchctl kickstart -k "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
-    log "NanoClaw restarted"
+    # Graceful restart: bootout+bootstrap instead of kickstart -k (which SIGKILLs)
+    # With per-request credential re-read, restart may not even be needed,
+    # but we do it to pick up any other config changes.
+    PLIST="$HOME/Library/LaunchAgents/com.nanoclaw.plist"
+    if [ -f "$PLIST" ]; then
+        launchctl bootout "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
+        sleep 2
+        launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
+        log "NanoClaw gracefully restarted"
+    else
+        launchctl kickstart -k "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
+        log "NanoClaw restarted (kickstart fallback — plist not found)"
+    fi
 else
     log "ERROR: Failed to capture API key from claude CLI"
     exit 1
