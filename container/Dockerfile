@@ -32,6 +32,30 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
 
+# Install agent-reach: gives agents read/search access to 15+ platforms
+# (Twitter/X, YouTube, Reddit, GitHub, RSS, web, Bilibili, Weibo, Douyin, etc.)
+RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
+
+# Install gh CLI (GitHub)
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg     | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && apt-get install -y gh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install agent-reach (from GitHub — not on PyPI) + yt-dlp + mcporter + bird
+# --break-system-packages is safe in containers (no venv needed)
+# agent-reach pinned: v1.4.0, 2026-03-28, commit e178470
+RUN pip3 install \
+    'git+https://github.com/Panniantong/Agent-Reach.git@e178470320a4c61017c961902a84d83441f6acb0' \
+    'yt-dlp==2025.12.8' \
+    --break-system-packages && \
+    npm install -g mcporter@0.8.1 @steipete/bird@0.8.0
+
+# Pre-configure agent-reach as the node user (so config lands in /home/node/)
+RUN su node -c "HOME=/home/node agent-reach install --env=auto"
+
 # Create app directory
 WORKDIR /app
 
