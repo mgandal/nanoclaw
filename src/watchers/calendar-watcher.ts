@@ -57,6 +57,7 @@ export class CalendarWatcher {
       execFileSync(ICALBUDDY_BIN, ['--version'], {
         encoding: 'utf-8',
         timeout: 5_000,
+        stdio: ['pipe', 'pipe', 'ignore'],
       });
     } catch (err) {
       logger.warn(
@@ -370,7 +371,7 @@ export class CalendarWatcher {
           'eventsFrom:today',
           `to:+${this.config.lookAheadDays}d`,
         ],
-        { encoding: 'utf-8', timeout: 10_000 },
+        { encoding: 'utf-8', timeout: 10_000, stdio: ['pipe', 'pipe', 'ignore'] },
       );
 
       const curr = CalendarWatcher.parseIcalbuddyOutput(output);

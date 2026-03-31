@@ -43,6 +43,8 @@ export class HealthMonitor {
   private ollamaLatencyLog: Array<{ latencyMs: number; timestamp: number }> =
     [];
   private infraAlerts: Map<string, string> = new Map(); // service → message
+  private infraFailureCounts: Map<string, number> = new Map(); // service → consecutive failures
+  private static readonly INFRA_FAILURE_THRESHOLD = 3; // consecutive failures before alerting
 
   constructor(config: HealthMonitorConfig) {
     this.config = config;
@@ -59,10 +61,15 @@ export class HealthMonitor {
   }
 
   recordInfraEvent(service: string, message: string): void {
-    this.infraAlerts.set(service, message);
+    const count = (this.infraFailureCounts.get(service) ?? 0) + 1;
+    this.infraFailureCounts.set(service, count);
+    if (count >= HealthMonitor.INFRA_FAILURE_THRESHOLD) {
+      this.infraAlerts.set(service, message);
+    }
   }
 
   clearInfraEvent(service: string): void {
+    this.infraFailureCounts.delete(service);
     this.infraAlerts.delete(service);
   }
 
