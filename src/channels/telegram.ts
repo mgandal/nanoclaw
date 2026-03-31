@@ -731,7 +731,8 @@ export class TelegramChannel implements Channel {
       );
     }
     const chatId = jid.replace(/^tg:/, '');
-    const keyboard = new InlineKeyboard().webApp(label, url);
+    // Use url() not webApp() — webApp buttons require BotFather domain registration
+    const keyboard = new InlineKeyboard().url(label, url);
     try {
       await this.bot.api.sendMessage(chatId, label, { reply_markup: keyboard });
       logger.info({ chatId, label, url }, 'Telegram WebApp button sent');
