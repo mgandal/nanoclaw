@@ -28,7 +28,6 @@ import {
   SESSION_MAX_AGE_MS,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
-  TRIGGER_PATTERN,
   TRUST_MATRIX_PATH,
 } from './config.js';
 import './channels/index.js';
@@ -132,6 +131,7 @@ function loadState(): void {
     'State loaded',
   );
 }
+
 
 function saveState(): void {
   setRouterState('last_seq', String(lastSeq));
@@ -469,6 +469,7 @@ async function runAgent(
       id: t.id,
       groupFolder: t.group_folder,
       prompt: t.prompt,
+      script: t.script || undefined,
       schedule_type: t.schedule_type,
       schedule_value: t.schedule_value,
       status: t.status,
@@ -1157,6 +1158,7 @@ async function main(): Promise<void> {
         id: t.id,
         groupFolder: t.group_folder,
         prompt: t.prompt,
+        script: t.script || undefined,
         schedule_type: t.schedule_type,
         schedule_value: t.schedule_value,
         status: t.status,

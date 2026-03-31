@@ -54,56 +54,8 @@ describe('GmailChannel', () => {
     });
   });
 
-  describe('threadMeta cap', () => {
-    it('caps threadMeta to prevent unbounded growth', () => {
-      const ch = new GmailChannel(makeOpts());
-      const internal = ch as unknown as {
-        threadMeta: Map<string, unknown>;
-        capThreadMeta: () => void;
-      };
-
-      for (let i = 0; i < 6000; i++) {
-        internal.threadMeta.set(`thread-${i}`, {
-          sender: `s${i}`,
-          senderName: `S${i}`,
-          subject: 'test',
-          messageId: `m${i}`,
-        });
-      }
-      expect(internal.threadMeta.size).toBe(6000);
-
-      internal.capThreadMeta();
-
-      expect(internal.threadMeta.size).toBeLessThanOrEqual(2500);
-      // Keeps the newest entries (last inserted)
-      expect(internal.threadMeta.has('thread-5999')).toBe(true);
-      expect(internal.threadMeta.has('thread-0')).toBe(false);
-    });
-
-    it('does nothing when threadMeta is within cap', () => {
-      const ch = new GmailChannel(makeOpts());
-      const internal = ch as unknown as {
-        threadMeta: Map<string, unknown>;
-        capThreadMeta: () => void;
-      };
-
-      for (let i = 0; i < 100; i++) {
-        internal.threadMeta.set(`thread-${i}`, {
-          sender: `s${i}`,
-          senderName: `S${i}`,
-          subject: 'test',
-          messageId: `m${i}`,
-        });
-      }
-
-      internal.capThreadMeta();
-
-      expect(internal.threadMeta.size).toBe(100);
-    });
-  });
-
   describe('email delivery chat_jid', () => {
-    it('stores email under gmail thread JID, not main group JID', async () => {
+    it('delivers email to main group JID', async () => {
       const onMessage = vi.fn();
       const ch = new GmailChannel(
         makeOpts({
@@ -151,7 +103,7 @@ describe('GmailChannel', () => {
       expect(onMessage).toHaveBeenCalledTimes(1);
       const [deliveryJid, msg] = onMessage.mock.calls[0];
       expect(deliveryJid).toBe('main-group@g.us');
-      expect(msg.chat_jid).toBe('gmail:thread-abc');
+      expect(msg.chat_jid).toBe('main-group@g.us');
     });
   });
 

@@ -18,7 +18,7 @@ import {
 export async function handlePageindexIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
-  isMain: boolean,
+  _isMain: boolean,
   dataDir: string,
   mounts: MountMapping[],
 ): Promise<boolean> {

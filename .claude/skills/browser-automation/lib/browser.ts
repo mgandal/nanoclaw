@@ -47,7 +47,7 @@ export function cleanupLockFiles(): void {
     if (fs.existsSync(lockPath)) {
       try {
         fs.unlinkSync(lockPath);
-      } catch {}
+      } catch { /* ignore cleanup errors */ }
     }
   }
 }

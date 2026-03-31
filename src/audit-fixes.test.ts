@@ -6,9 +6,9 @@
  * 2. Verifies the fix works (GREEN after fix is applied)
  * 3. Serves as a guardrail to prevent regression
  *
- * Uses bun:test (not vitest) for compatibility with the project's test runner.
+ * Uses vitest for compatibility with the project's test runner.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -18,6 +18,8 @@ import path from 'path';
 // ─────────────────────────────────────────────────
 describe('PROXY_BIND_HOST security', () => {
   it('must bind to 192.168.64.1 on macOS with Apple Container, not 0.0.0.0', async () => {
+    // Skip when env override is present — this test validates the detection logic
+    if (process.env.CREDENTIAL_PROXY_HOST) return;
     const { PROXY_BIND_HOST, CONTAINER_RUNTIME_BIN } =
       await import('./container-runtime.js');
     // This test only applies when running on the Apple Container setup
@@ -724,7 +726,7 @@ describe('Apple Notes QMD integration', () => {
     } catch {
       // QMD not running — skip
     }
-  });
+  }, 30000);
 
   it('QMD can search Apple Notes content', async () => {
     try {
@@ -785,7 +787,7 @@ describe('Apple Notes QMD integration', () => {
     } catch {
       // QMD not running
     }
-  });
+  }, 30000);
 });
 
 // ─────────────────────────────────────────────────

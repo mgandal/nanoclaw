@@ -371,7 +371,11 @@ export class CalendarWatcher {
           'eventsFrom:today',
           `to:+${this.config.lookAheadDays}d`,
         ],
-        { encoding: 'utf-8', timeout: 10_000, stdio: ['pipe', 'pipe', 'ignore'] },
+        {
+          encoding: 'utf-8',
+          timeout: 10_000,
+          stdio: ['pipe', 'pipe', 'ignore'],
+        },
       );
 
       const curr = CalendarWatcher.parseIcalbuddyOutput(output);

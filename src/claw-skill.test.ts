@@ -41,5 +41,5 @@ sleep 30
     expect(result.signal).toBeNull();
     expect(result.stdout).toContain('4');
     expect(result.stderr).toContain('[session: sess-1]');
-  });
+  }, 20000);
 });

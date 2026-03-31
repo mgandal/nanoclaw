@@ -6,7 +6,7 @@ export const logger = pino(
   PinoPretty({ colorize: true }),
 );
 
-// Route uncaught errors through pino so they get timestamps in stderr
+// Route uncaught errors through logger so they get timestamps in stderr
 process.on('uncaughtException', (err) => {
   logger.fatal({ err }, 'Uncaught exception');
   process.exit(1);

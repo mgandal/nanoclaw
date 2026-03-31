@@ -34,12 +34,14 @@ vi.mock('googleapis', () => ({
 
 const mockGetAccessToken = vi.fn().mockResolvedValue({ token: 'fake-token' });
 
-vi.mock('google-auth-library', () => ({
-  OAuth2Client: vi.fn().mockImplementation(() => ({
-    setCredentials: vi.fn(),
-    getAccessToken: mockGetAccessToken,
-  })),
-}));
+vi.mock('google-auth-library', () => {
+  return {
+    OAuth2Client: class MockOAuth2Client {
+      setCredentials = vi.fn();
+      getAccessToken = mockGetAccessToken;
+    },
+  };
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

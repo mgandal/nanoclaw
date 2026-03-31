@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { CalendarWatcher, type CalendarEvent } from './calendar-watcher.js';
 
