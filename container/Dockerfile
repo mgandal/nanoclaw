@@ -44,15 +44,17 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg    
     apt-get update && apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
-# Install agent-reach + yt-dlp + mcporter
-# Version-pinned for reproducibility; --break-system-packages is safe in containers
-RUN pip3 install 'agent-reach>=0.1,<1' 'yt-dlp>=2024.0,<2026' --break-system-packages && \
-    npm install -g mcporter@latest
+# Install agent-reach (from GitHub — not on PyPI) + yt-dlp + mcporter + bird
+# --break-system-packages is safe in containers (no venv needed)
+# agent-reach pinned: v1.4.0, 2026-03-28, commit e178470
+RUN pip3 install \
+    'git+https://github.com/Panniantong/Agent-Reach.git@e178470320a4c61017c961902a84d83441f6acb0' \
+    'yt-dlp==2025.12.8' \
+    --break-system-packages && \
+    npm install -g mcporter@0.8.1 @steipete/bird@0.8.0
 
-# Pre-configure agent-reach for the node user's home directory
-RUN mkdir -p /home/node/.agent-reach && \
-    agent-reach install --env=auto --safe && \
-    chown -R node:node /home/node/.agent-reach
+# Pre-configure agent-reach as the node user (so config lands in /home/node/)
+RUN su node -c "HOME=/home/node agent-reach install --env=auto"
 
 # Create app directory
 WORKDIR /app

@@ -9,7 +9,7 @@ description: >
   on any supported platform, shares a URL, or asks to search the web.
   Triggers: search twitter, youtube transcript, search reddit, read this link,
   bilibili, web search, research, GitHub search.
-allowed-tools: Bash(curl:*), Bash(yt-dlp:*), Bash(gh:*), Bash(mcporter:*), Bash(python3:*), Bash(agent-reach:*)
+allowed-tools: Bash(curl:*), Bash(yt-dlp:*), Bash(gh:*), Bash(mcporter:*), Bash(python3:*), Bash(agent-reach:*), Bash(bird:*)
 ---
 
 # Agent Reach — Internet Access for Agents
