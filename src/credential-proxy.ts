@@ -69,7 +69,9 @@ export function startCredentialProxy(
     'ANTHROPIC_BASE_URL',
   ]);
 
-  const authMode: AuthMode = initialSecrets.ANTHROPIC_API_KEY ? 'api-key' : 'oauth';
+  const authMode: AuthMode = initialSecrets.ANTHROPIC_API_KEY
+    ? 'api-key'
+    : 'oauth';
 
   const upstreamUrl = new URL(
     initialSecrets.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
