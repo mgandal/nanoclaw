@@ -60,8 +60,8 @@ export function readonlyMountArgs(
 /** Regex for valid container names — blocks shell metacharacters. */
 const VALID_CONTAINER_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 
-/** Returns the shell command to stop a container by name. */
-export function stopContainer(name: string): string {
+/** Stop a container by name. */
+export function stopContainer(name: string): void {
   if (!name || !VALID_CONTAINER_NAME.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
