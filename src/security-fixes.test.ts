@@ -25,7 +25,9 @@ import { CONTAINER_RUNTIME_BIN, stopContainer } from './container-runtime.js';
 
 describe('stopContainer security', () => {
   it('accepts valid container names', () => {
-    expect(() => stopContainer('nanoclaw-telegram_claire-1711500000000')).not.toThrow();
+    expect(() =>
+      stopContainer('nanoclaw-telegram_claire-1711500000000'),
+    ).not.toThrow();
   });
 
   it('accepts names with dots and dashes', () => {
