@@ -12,3 +12,6 @@ import './slack.js';
 // telegram
 
 // whatsapp
+
+// emacs
+import './emacs.js';
