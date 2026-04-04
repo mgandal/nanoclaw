@@ -92,7 +92,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { HealthMonitor } from './health-monitor.js';
+import { HealthMonitor, createDefaultFixActions } from './health-monitor.js';
 import { MessageBus } from './message-bus.js';
 import { EventRouter, TrustConfig } from './event-router.js';
 import { GmailWatcher } from './watchers/gmail-watcher.js';
@@ -809,6 +809,48 @@ async function main(): Promise<void> {
     },
   });
 
+  // Wire watchdog fix handlers
+  const fixScriptsDir = path.join(process.cwd(), 'scripts', 'fixes');
+
+  healthMonitor.addFixHandler({
+    id: 'mcp-simplemem', service: 'mcp:SimpleMem',
+    fixScript: path.join(fixScriptsDir, 'restart-simplemem.sh'),
+    verify: { type: 'http', url: 'http://localhost:8200/api/health', expectStatus: 200 },
+    cooldownMs: 120_000, maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-qmd', service: 'mcp:QMD',
+    fixScript: path.join(fixScriptsDir, 'restart-qmd.sh'),
+    verify: { type: 'http', url: 'http://localhost:8181/health', expectStatus: 200 },
+    cooldownMs: 120_000, maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-apple-notes', service: 'mcp:Apple Notes',
+    fixScript: path.join(fixScriptsDir, 'restart-apple-notes.sh'),
+    verify: { type: 'http', url: 'http://localhost:8184/mcp', expectStatus: 405 },
+    cooldownMs: 120_000, maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-todoist', service: 'mcp:Todoist',
+    fixScript: path.join(fixScriptsDir, 'restart-todoist.sh'),
+    verify: { type: 'http', url: 'http://localhost:8186/mcp', expectStatus: 405 },
+    cooldownMs: 120_000, maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'container-runtime', service: 'container-runtime',
+    fixScript: path.join(fixScriptsDir, 'restart-container-runtime.sh'),
+    verify: { type: 'command', cmd: '/usr/local/bin/container', args: ['system', 'status'] },
+    cooldownMs: 120_000, maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'sqlite-lock', service: 'sqlite-lock',
+    fixScript: path.join(fixScriptsDir, 'kill-sqlite-orphans.sh'),
+    verify: { type: 'command', cmd: '/bin/sh', args: ['-c', 'echo "SELECT 1" | sqlite3 store/messages.db'] },
+    cooldownMs: 60_000, maxAttempts: 2,
+  });
+
+  healthMonitor.setFixActions(createDefaultFixActions());
+
   // Periodically check health thresholds + MCP endpoints
   // Each endpoint has an optional healthUrl for services where the MCP URL
   // isn't suitable for health checks (e.g. SSE endpoints that hang or require auth).
@@ -854,6 +896,11 @@ async function main(): Promise<void> {
           `mcp:${ep.name}`,
           `MCP server ${ep.name} is unreachable`,
         );
+        // Auto-fix: attempt repair if handler registered and threshold met
+        const failCount = healthMonitor.getInfraFailureCount(`mcp:${ep.name}`);
+        if (failCount >= 3) {
+          void healthMonitor.attemptFix(`mcp:${ep.name}`);
+        }
       }
       // Update cached QMD reachability for container-runner
       if (ep.name === 'QMD') {
