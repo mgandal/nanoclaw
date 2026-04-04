@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { createServer } from 'http';
 import path from 'path';
 
 import {
@@ -813,40 +814,76 @@ async function main(): Promise<void> {
   const fixScriptsDir = path.join(process.cwd(), 'scripts', 'fixes');
 
   healthMonitor.addFixHandler({
-    id: 'mcp-simplemem', service: 'mcp:SimpleMem',
+    id: 'mcp-simplemem',
+    service: 'mcp:SimpleMem',
     fixScript: path.join(fixScriptsDir, 'restart-simplemem.sh'),
-    verify: { type: 'http', url: 'http://localhost:8200/api/health', expectStatus: 200 },
-    cooldownMs: 120_000, maxAttempts: 2,
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8200/api/health',
+      expectStatus: 200,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
   });
   healthMonitor.addFixHandler({
-    id: 'mcp-qmd', service: 'mcp:QMD',
+    id: 'mcp-qmd',
+    service: 'mcp:QMD',
     fixScript: path.join(fixScriptsDir, 'restart-qmd.sh'),
-    verify: { type: 'http', url: 'http://localhost:8181/health', expectStatus: 200 },
-    cooldownMs: 120_000, maxAttempts: 2,
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8181/health',
+      expectStatus: 200,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
   });
   healthMonitor.addFixHandler({
-    id: 'mcp-apple-notes', service: 'mcp:Apple Notes',
+    id: 'mcp-apple-notes',
+    service: 'mcp:Apple Notes',
     fixScript: path.join(fixScriptsDir, 'restart-apple-notes.sh'),
-    verify: { type: 'http', url: 'http://localhost:8184/mcp', expectStatus: 405 },
-    cooldownMs: 120_000, maxAttempts: 2,
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8184/mcp',
+      expectStatus: 405,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
   });
   healthMonitor.addFixHandler({
-    id: 'mcp-todoist', service: 'mcp:Todoist',
+    id: 'mcp-todoist',
+    service: 'mcp:Todoist',
     fixScript: path.join(fixScriptsDir, 'restart-todoist.sh'),
-    verify: { type: 'http', url: 'http://localhost:8186/mcp', expectStatus: 405 },
-    cooldownMs: 120_000, maxAttempts: 2,
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8186/mcp',
+      expectStatus: 405,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
   });
   healthMonitor.addFixHandler({
-    id: 'container-runtime', service: 'container-runtime',
+    id: 'container-runtime',
+    service: 'container-runtime',
     fixScript: path.join(fixScriptsDir, 'restart-container-runtime.sh'),
-    verify: { type: 'command', cmd: '/usr/local/bin/container', args: ['system', 'status'] },
-    cooldownMs: 120_000, maxAttempts: 2,
+    verify: {
+      type: 'command',
+      cmd: '/usr/local/bin/container',
+      args: ['system', 'status'],
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
   });
   healthMonitor.addFixHandler({
-    id: 'sqlite-lock', service: 'sqlite-lock',
+    id: 'sqlite-lock',
+    service: 'sqlite-lock',
     fixScript: path.join(fixScriptsDir, 'kill-sqlite-orphans.sh'),
-    verify: { type: 'command', cmd: '/bin/sh', args: ['-c', 'echo "SELECT 1" | sqlite3 store/messages.db'] },
-    cooldownMs: 60_000, maxAttempts: 2,
+    verify: {
+      type: 'command',
+      cmd: '/bin/sh',
+      args: ['-c', 'echo "SELECT 1" | sqlite3 store/messages.db'],
+    },
+    cooldownMs: 60_000,
+    maxAttempts: 2,
   });
 
   healthMonitor.setFixActions(createDefaultFixActions());
@@ -1018,6 +1055,36 @@ async function main(): Promise<void> {
       );
     },
   );
+
+  // Health endpoint for external heartbeat (separate from credential proxy)
+  const startTime = Date.now();
+  let startupComplete = false;
+  const healthServer = createServer((req, res) => {
+    if (req.url === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        startupComplete,
+      }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  const HEALTH_PORT = CREDENTIAL_PROXY_PORT + 1;
+  healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
+    logger.info({ port: HEALTH_PORT }, 'Health endpoint started');
+  });
+
+  // Event loop liveness: if the loop is blocked >30s, exit and let launchd restart
+  let lastEventLoopTick = Date.now();
+  setInterval(() => { lastEventLoopTick = Date.now(); }, 5000);
+  setInterval(() => {
+    if (Date.now() - lastEventLoopTick > 30_000) {
+      logger.fatal('Event loop stalled for >30s, exiting for launchd restart');
+      process.exit(1);
+    }
+  }, 10_000);
 
   restoreRemoteControl();
 
@@ -1242,6 +1309,9 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
   });
+
+  startupComplete = true;
+  logger.info('NanoClaw startup complete');
 }
 
 // Guard: only run when executed directly, not when imported by tests
