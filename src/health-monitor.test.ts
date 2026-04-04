@@ -346,7 +346,7 @@ describe('HealthMonitor fix handlers', () => {
       expect(result).toBe('escalated');
       expect(alertFn).toHaveBeenCalled();
       const call = (alertFn as ReturnType<typeof vi.fn>).mock.calls.find(
-        (c: [HealthAlert]) => c[0].type === 'fix_escalation',
+        (c: unknown[]) => (c[0] as HealthAlert).type === 'fix_escalation',
       );
       expect(call).toBeDefined();
     });
@@ -430,8 +430,12 @@ describe('HealthMonitor fix integration', () => {
       onAlert: alertFn,
     });
     mockActions = {
-      execScript: vi.fn().mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
-      httpCheck: vi.fn().mockResolvedValue({ reachable: true, statusCode: 200 }),
+      execScript: vi
+        .fn()
+        .mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
+      httpCheck: vi
+        .fn()
+        .mockResolvedValue({ reachable: true, statusCode: 200 }),
       acquireLock: vi.fn().mockResolvedValue(true),
       releaseLock: vi.fn().mockResolvedValue(undefined),
     };
@@ -470,7 +474,9 @@ describe('HealthMonitor fix integration', () => {
   });
 
   it('full cycle: detect → fail fix x2 → escalate', async () => {
-    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({ reachable: false });
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: false,
+    });
 
     monitor.addFixHandler({
       id: 'mcp-fail',
@@ -495,8 +501,10 @@ describe('HealthMonitor fix integration', () => {
     expect(r2).toBe('escalated');
 
     // Alert was sent
-    const escalationCalls = (alertFn as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c: [HealthAlert]) => c[0].type === 'fix_escalation',
+    const escalationCalls = (
+      alertFn as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
+      (c: unknown[]) => (c[0] as HealthAlert).type === 'fix_escalation',
     );
     expect(escalationCalls).toHaveLength(1);
     expect(escalationCalls[0][0].group).toBe('mcp:Fail');
@@ -504,7 +512,7 @@ describe('HealthMonitor fix integration', () => {
 
   it('verify with command type', async () => {
     (mockActions.execScript as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ ok: true, stdout: '', stderr: '' })   // fix script
+      .mockResolvedValueOnce({ ok: true, stdout: '', stderr: '' }) // fix script
       .mockResolvedValueOnce({ ok: true, stdout: '1', stderr: '' }); // verify command
 
     monitor.addFixHandler({
