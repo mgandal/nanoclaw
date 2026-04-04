@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HealthMonitor, type HealthAlert } from './health-monitor.js';
+import {
+  HealthMonitor,
+  type HealthAlert,
+  type FixHandler,
+} from './health-monitor.js';
 
 vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -199,5 +203,37 @@ describe('HealthMonitor Ollama tracking', () => {
     });
     for (let i = 0; i < 10; i++) monitor.recordOllamaLatency(100);
     expect(monitor.isOllamaDegraded()).toBe(false);
+  });
+});
+
+describe('HealthMonitor fix handlers', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 30,
+      maxErrorsPerHour: 20,
+      onAlert: alertFn,
+    });
+  });
+
+  it('registers and retrieves fix handlers', () => {
+    const handler: FixHandler = {
+      id: 'mcp-simplemem',
+      service: 'mcp:SimpleMem',
+      fixScript: '/path/to/restart-simplemem.sh',
+      verify: { type: 'http', url: 'http://localhost:8200/api/health', expectStatus: 200 },
+      cooldownMs: 120_000,
+      maxAttempts: 2,
+    };
+    monitor.addFixHandler(handler);
+    expect(monitor.getFixHandler('mcp:SimpleMem')).toBe(handler);
+  });
+
+  it('returns undefined for unknown service', () => {
+    expect(monitor.getFixHandler('mcp:Unknown')).toBeUndefined();
   });
 });
