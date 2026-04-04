@@ -3,6 +3,7 @@ import {
   HealthMonitor,
   type HealthAlert,
   type FixHandler,
+  type FixActions,
 } from './health-monitor.js';
 
 vi.mock('./logger.js', () => ({
@@ -225,7 +226,11 @@ describe('HealthMonitor fix handlers', () => {
       id: 'mcp-simplemem',
       service: 'mcp:SimpleMem',
       fixScript: '/path/to/restart-simplemem.sh',
-      verify: { type: 'http', url: 'http://localhost:8200/api/health', expectStatus: 200 },
+      verify: {
+        type: 'http',
+        url: 'http://localhost:8200/api/health',
+        expectStatus: 200,
+      },
       cooldownMs: 120_000,
       maxAttempts: 2,
     };
@@ -235,5 +240,129 @@ describe('HealthMonitor fix handlers', () => {
 
   it('returns undefined for unknown service', () => {
     expect(monitor.getFixHandler('mcp:Unknown')).toBeUndefined();
+  });
+
+  describe('attemptFix', () => {
+    const mockActions: FixActions = {
+      execScript: vi.fn().mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
+      httpCheck: vi.fn().mockResolvedValue({ reachable: true, statusCode: 200 }),
+      acquireLock: vi.fn().mockResolvedValue(true),
+      releaseLock: vi.fn().mockResolvedValue(undefined),
+    };
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      (mockActions.execScript as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, stdout: '', stderr: '' });
+      (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({ reachable: true, statusCode: 200 });
+      (mockActions.acquireLock as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      monitor.setFixActions(mockActions);
+    });
+
+    it('executes fix script and verifies success', async () => {
+      const handler: FixHandler = {
+        id: 'mcp-simplemem',
+        service: 'mcp:SimpleMem',
+        fixScript: '/scripts/fixes/restart-simplemem.sh',
+        verify: { type: 'http', url: 'http://localhost:8200/api/health', expectStatus: 200 },
+        cooldownMs: 120_000,
+        maxAttempts: 2,
+      };
+      monitor.addFixHandler(handler);
+
+      const result = await monitor.attemptFix('mcp:SimpleMem');
+      expect(result).toBe('fixed');
+      expect(mockActions.execScript).toHaveBeenCalledWith('/scripts/fixes/restart-simplemem.sh', undefined);
+      expect(mockActions.httpCheck).toHaveBeenCalledWith('http://localhost:8200/api/health');
+      expect(mockActions.acquireLock).toHaveBeenCalled();
+      expect(mockActions.releaseLock).toHaveBeenCalled();
+    });
+
+    it('skips fix during cooldown period', async () => {
+      const handler: FixHandler = {
+        id: 'test-service',
+        service: 'mcp:Test',
+        fixScript: '/scripts/fixes/test.sh',
+        verify: { type: 'http', url: 'http://localhost:9999', expectStatus: 200 },
+        cooldownMs: 120_000,
+        maxAttempts: 2,
+      };
+      monitor.addFixHandler(handler);
+
+      // First attempt succeeds
+      await monitor.attemptFix('mcp:Test');
+      // Second attempt within cooldown should be skipped
+      const result = await monitor.attemptFix('mcp:Test');
+      expect(result).toBe('cooldown');
+      expect(mockActions.execScript).toHaveBeenCalledTimes(1);
+    });
+
+    it('escalates after maxAttempts failures', async () => {
+      (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({ reachable: false, statusCode: undefined });
+      const handler: FixHandler = {
+        id: 'fail-service',
+        service: 'mcp:Failing',
+        fixScript: '/scripts/fixes/fail.sh',
+        verify: { type: 'http', url: 'http://localhost:9999', expectStatus: 200 },
+        cooldownMs: 0, // no cooldown for test
+        maxAttempts: 2,
+      };
+      monitor.addFixHandler(handler);
+
+      await monitor.attemptFix('mcp:Failing');
+      const result = await monitor.attemptFix('mcp:Failing');
+      expect(result).toBe('escalated');
+      expect(alertFn).toHaveBeenCalled();
+      const call = (alertFn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: [HealthAlert]) => c[0].type === 'fix_escalation',
+      );
+      expect(call).toBeDefined();
+    });
+
+    it('skips fix if lock cannot be acquired', async () => {
+      (mockActions.acquireLock as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+      const handler: FixHandler = {
+        id: 'locked',
+        service: 'mcp:Locked',
+        fixScript: '/scripts/fixes/test.sh',
+        verify: { type: 'http', url: 'http://localhost:9999', expectStatus: 200 },
+        cooldownMs: 0,
+        maxAttempts: 2,
+      };
+      monitor.addFixHandler(handler);
+
+      const result = await monitor.attemptFix('mcp:Locked');
+      expect(result).toBe('locked');
+      expect(mockActions.execScript).not.toHaveBeenCalled();
+    });
+
+    it('returns no-handler for unknown services', async () => {
+      const result = await monitor.attemptFix('mcp:Unknown');
+      expect(result).toBe('no-handler');
+    });
+
+    it('resets attempt count after successful fix', async () => {
+      const handler: FixHandler = {
+        id: 'reset-test',
+        service: 'mcp:Reset',
+        fixScript: '/scripts/fixes/test.sh',
+        verify: { type: 'http', url: 'http://localhost:9999', expectStatus: 200 },
+        cooldownMs: 0,
+        maxAttempts: 2,
+      };
+      monitor.addFixHandler(handler);
+
+      // Fail once
+      (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ reachable: false });
+      await monitor.attemptFix('mcp:Reset');
+
+      // Succeed
+      (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ reachable: true, statusCode: 200 });
+      await monitor.attemptFix('mcp:Reset');
+
+      // Fail again — should NOT escalate (count was reset)
+      (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({ reachable: false });
+      const result = await monitor.attemptFix('mcp:Reset');
+      expect(result).toBe('verify-failed');
+    });
   });
 });

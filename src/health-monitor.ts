@@ -22,7 +22,7 @@ interface ErrorEvent {
 }
 
 export interface HealthAlert {
-  type: 'excessive_spawns' | 'excessive_errors' | 'infra_error';
+  type: 'excessive_spawns' | 'excessive_errors' | 'infra_error' | 'fix_escalation';
   group: string;
   detail: string;
   timestamp: number;
@@ -36,20 +36,29 @@ export interface HealthMonitorConfig {
 
 export interface FixVerify {
   type: 'http' | 'command';
-  url?: string;           // for type: 'http'
-  expectStatus?: number;  // for type: 'http' (default: 200)
-  cmd?: string;           // for type: 'command' — path to script
-  args?: string[];        // for type: 'command'
+  url?: string; // for type: 'http'
+  expectStatus?: number; // for type: 'http' (default: 200)
+  cmd?: string; // for type: 'command' — path to script
+  args?: string[]; // for type: 'command'
 }
 
 export interface FixHandler {
   id: string;
-  service: string;        // matches the service key used in recordInfraEvent
-  fixScript: string;      // absolute path to fix script
-  fixArgs?: string[];     // optional args for fix script
+  service: string; // matches the service key used in recordInfraEvent
+  fixScript: string; // absolute path to fix script
+  fixArgs?: string[]; // optional args for fix script
   verify: FixVerify;
   cooldownMs: number;
   maxAttempts: number;
+}
+
+export type FixResult = 'fixed' | 'verify-failed' | 'escalated' | 'cooldown' | 'locked' | 'no-handler' | 'script-failed';
+
+export interface FixActions {
+  execScript: (script: string, args?: string[]) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+  httpCheck: (url: string) => Promise<{ reachable: boolean; statusCode?: number }>;
+  acquireLock: (action: string) => Promise<boolean>;
+  releaseLock: () => Promise<void>;
 }
 
 export class HealthMonitor {
@@ -64,6 +73,9 @@ export class HealthMonitor {
   private infraFailureCounts: Map<string, number> = new Map(); // service → consecutive failures
   private static readonly INFRA_FAILURE_THRESHOLD = 3; // consecutive failures before alerting
   private fixHandlers: Map<string, FixHandler> = new Map();
+  private fixActions?: FixActions;
+  private fixAttemptCounts: Map<string, number> = new Map();
+  private fixLastAttempt: Map<string, number> = new Map();
 
   constructor(config: HealthMonitorConfig) {
     this.config = config;
@@ -75,6 +87,101 @@ export class HealthMonitor {
 
   getFixHandler(service: string): FixHandler | undefined {
     return this.fixHandlers.get(service);
+  }
+
+  setFixActions(actions: FixActions): void {
+    this.fixActions = actions;
+  }
+
+  getInfraFailureCount(service: string): number {
+    return this.infraFailureCounts.get(service) ?? 0;
+  }
+
+  async attemptFix(service: string): Promise<FixResult> {
+    const handler = this.fixHandlers.get(service);
+    if (!handler) return 'no-handler';
+    if (!this.fixActions) return 'no-handler';
+
+    // Cooldown check
+    const lastAttempt = this.fixLastAttempt.get(service) ?? 0;
+    if (Date.now() - lastAttempt < handler.cooldownMs) return 'cooldown';
+
+    // Max attempts check — escalate if exceeded
+    const attempts = this.fixAttemptCounts.get(service) ?? 0;
+    if (attempts >= handler.maxAttempts) {
+      this.config.onAlert({
+        type: 'fix_escalation',
+        group: service,
+        detail: `Auto-fix failed after ${attempts} attempts for ${handler.id}`,
+        timestamp: Date.now(),
+      });
+      this.fixAttemptCounts.set(service, 0);
+      this.fixLastAttempt.set(service, Date.now());
+      return 'escalated';
+    }
+
+    // Acquire lock
+    const locked = await this.fixActions.acquireLock(handler.id);
+    if (!locked) return 'locked';
+
+    try {
+      this.fixLastAttempt.set(service, Date.now());
+      logger.info({ service, handler: handler.id }, 'watchdog: attempting fix');
+
+      // Execute fix script
+      const execResult = await this.fixActions.execScript(handler.fixScript, handler.fixArgs);
+      if (!execResult.ok) {
+        this.fixAttemptCounts.set(service, attempts + 1);
+        logger.warn({ service, stderr: execResult.stderr }, 'watchdog: fix script failed');
+        return 'script-failed';
+      }
+
+      // Verify
+      const verified = await this.verifyFix(handler.verify);
+      if (verified) {
+        this.fixAttemptCounts.set(service, 0);
+        this.clearInfraEvent(service);
+        logger.info({ service, handler: handler.id }, 'watchdog: fix verified');
+        return 'fixed';
+      }
+
+      const newAttempts = attempts + 1;
+      this.fixAttemptCounts.set(service, newAttempts);
+
+      if (newAttempts >= handler.maxAttempts) {
+        this.config.onAlert({
+          type: 'fix_escalation',
+          group: service,
+          detail: `Auto-fix failed after ${newAttempts} attempts for ${handler.id}`,
+          timestamp: Date.now(),
+        });
+        this.fixAttemptCounts.set(service, 0);
+        logger.warn({ service, handler: handler.id }, 'watchdog: fix escalated after max attempts');
+        return 'escalated';
+      }
+
+      logger.warn({ service, handler: handler.id }, 'watchdog: fix verification failed');
+      return 'verify-failed';
+    } finally {
+      await this.fixActions.releaseLock();
+    }
+  }
+
+  private async verifyFix(verify: FixVerify): Promise<boolean> {
+    if (!this.fixActions) return false;
+
+    if (verify.type === 'http' && verify.url) {
+      const result = await this.fixActions.httpCheck(verify.url);
+      const expectedStatus = verify.expectStatus ?? 200;
+      return result.reachable && result.statusCode === expectedStatus;
+    }
+
+    if (verify.type === 'command' && verify.cmd) {
+      const result = await this.fixActions.execScript(verify.cmd, verify.args);
+      return result.ok;
+    }
+
+    return false;
   }
 
   recordSpawn(group: string): void {
