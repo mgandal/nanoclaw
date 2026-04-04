@@ -6,4 +6,4 @@ if [ "${1:-}" = "--dry-run" ]; then
   exit 0
 fi
 docker restart simplemem 2>&1
-sleep 3
+sleep 8  # SimpleMem needs ~5-7s to initialize after restart
