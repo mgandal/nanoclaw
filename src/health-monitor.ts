@@ -8,6 +8,11 @@
  * Alerts via callback. In-memory only (resets on restart — acceptable
  * since the 2-hour sliding window means most state rebuilds quickly).
  */
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs/promises';
+import path from 'path';
+import http from 'http';
 import { logger } from './logger.js';
 
 interface SpawnEvent {
@@ -22,7 +27,11 @@ interface ErrorEvent {
 }
 
 export interface HealthAlert {
-  type: 'excessive_spawns' | 'excessive_errors' | 'infra_error' | 'fix_escalation';
+  type:
+    | 'excessive_spawns'
+    | 'excessive_errors'
+    | 'infra_error'
+    | 'fix_escalation';
   group: string;
   detail: string;
   timestamp: number;
@@ -52,11 +61,23 @@ export interface FixHandler {
   maxAttempts: number;
 }
 
-export type FixResult = 'fixed' | 'verify-failed' | 'escalated' | 'cooldown' | 'locked' | 'no-handler' | 'script-failed';
+export type FixResult =
+  | 'fixed'
+  | 'verify-failed'
+  | 'escalated'
+  | 'cooldown'
+  | 'locked'
+  | 'no-handler'
+  | 'script-failed';
 
 export interface FixActions {
-  execScript: (script: string, args?: string[]) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
-  httpCheck: (url: string) => Promise<{ reachable: boolean; statusCode?: number }>;
+  execScript: (
+    script: string,
+    args?: string[],
+  ) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+  httpCheck: (
+    url: string,
+  ) => Promise<{ reachable: boolean; statusCode?: number }>;
   acquireLock: (action: string) => Promise<boolean>;
   releaseLock: () => Promise<void>;
 }
@@ -129,10 +150,16 @@ export class HealthMonitor {
       logger.info({ service, handler: handler.id }, 'watchdog: attempting fix');
 
       // Execute fix script
-      const execResult = await this.fixActions.execScript(handler.fixScript, handler.fixArgs);
+      const execResult = await this.fixActions.execScript(
+        handler.fixScript,
+        handler.fixArgs,
+      );
       if (!execResult.ok) {
         this.fixAttemptCounts.set(service, attempts + 1);
-        logger.warn({ service, stderr: execResult.stderr }, 'watchdog: fix script failed');
+        logger.warn(
+          { service, stderr: execResult.stderr },
+          'watchdog: fix script failed',
+        );
         return 'script-failed';
       }
 
@@ -156,11 +183,17 @@ export class HealthMonitor {
           timestamp: Date.now(),
         });
         this.fixAttemptCounts.set(service, 0);
-        logger.warn({ service, handler: handler.id }, 'watchdog: fix escalated after max attempts');
+        logger.warn(
+          { service, handler: handler.id },
+          'watchdog: fix escalated after max attempts',
+        );
         return 'escalated';
       }
 
-      logger.warn({ service, handler: handler.id }, 'watchdog: fix verification failed');
+      logger.warn(
+        { service, handler: handler.id },
+        'watchdog: fix verification failed',
+      );
       return 'verify-failed';
     } finally {
       await this.fixActions.releaseLock();
@@ -364,4 +397,83 @@ export class HealthMonitor {
     }
     return status;
   }
+}
+
+const execFileAsync = promisify(execFile);
+
+const LOCK_PATH = path.join(
+  process.env.HOME || '/tmp',
+  '.nanoclaw',
+  'watchdog.lock',
+);
+
+export function createDefaultFixActions(): FixActions {
+  return {
+    execScript: async (script: string, args?: string[]) => {
+      try {
+        const { stdout, stderr } = await execFileAsync(script, args ?? [], {
+          timeout: 30_000,
+          env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: process.env.HOME || '' },
+        });
+        return { ok: true, stdout, stderr };
+      } catch (err: unknown) {
+        const e = err as { stdout?: string; stderr?: string; message?: string };
+        return { ok: false, stdout: e.stdout ?? '', stderr: e.stderr ?? e.message ?? '' };
+      }
+    },
+
+    httpCheck: async (url: string) => {
+      return new Promise((resolve) => {
+        try {
+          const parsed = new URL(url);
+          const req = http.request(
+            {
+              hostname: parsed.hostname,
+              port: parsed.port,
+              path: parsed.pathname,
+              method: 'GET',
+              timeout: 5000,
+            },
+            (res) => {
+              res.resume();
+              resolve({ reachable: true, statusCode: res.statusCode });
+            },
+          );
+          req.on('error', () => resolve({ reachable: false }));
+          req.on('timeout', () => { req.destroy(); resolve({ reachable: false }); });
+          req.end();
+        } catch {
+          resolve({ reachable: false });
+        }
+      });
+    },
+
+    acquireLock: async (action: string) => {
+      try {
+        await fs.mkdir(path.dirname(LOCK_PATH), { recursive: true });
+        try {
+          const content = await fs.readFile(LOCK_PATH, 'utf-8');
+          const lock = JSON.parse(content) as { pid: number; started: string };
+          const age = Date.now() - new Date(lock.started).getTime();
+          if (age < 300_000) {
+            try { process.kill(lock.pid, 0); return false; } catch { /* PID dead, take lock */ }
+          }
+        } catch { /* no lock file or invalid, proceed */ }
+        const tmp = LOCK_PATH + '.tmp';
+        await fs.writeFile(tmp, JSON.stringify({
+          pid: process.pid,
+          action,
+          started: new Date().toISOString(),
+        }));
+        await fs.rename(tmp, LOCK_PATH);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    releaseLock: async () => {
+      try { await fs.unlink(LOCK_PATH); } catch { /* ignore */ }
+    },
+  };
 }
