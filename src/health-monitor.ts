@@ -34,6 +34,24 @@ export interface HealthMonitorConfig {
   onAlert: (alert: HealthAlert) => void;
 }
 
+export interface FixVerify {
+  type: 'http' | 'command';
+  url?: string;           // for type: 'http'
+  expectStatus?: number;  // for type: 'http' (default: 200)
+  cmd?: string;           // for type: 'command' — path to script
+  args?: string[];        // for type: 'command'
+}
+
+export interface FixHandler {
+  id: string;
+  service: string;        // matches the service key used in recordInfraEvent
+  fixScript: string;      // absolute path to fix script
+  fixArgs?: string[];     // optional args for fix script
+  verify: FixVerify;
+  cooldownMs: number;
+  maxAttempts: number;
+}
+
 export class HealthMonitor {
   private spawnLog: SpawnEvent[] = [];
   private errorLog: ErrorEvent[] = [];
@@ -45,9 +63,18 @@ export class HealthMonitor {
   private infraAlerts: Map<string, string> = new Map(); // service → message
   private infraFailureCounts: Map<string, number> = new Map(); // service → consecutive failures
   private static readonly INFRA_FAILURE_THRESHOLD = 3; // consecutive failures before alerting
+  private fixHandlers: Map<string, FixHandler> = new Map();
 
   constructor(config: HealthMonitorConfig) {
     this.config = config;
+  }
+
+  addFixHandler(handler: FixHandler): void {
+    this.fixHandlers.set(handler.service, handler);
+  }
+
+  getFixHandler(service: string): FixHandler | undefined {
+    return this.fixHandlers.get(service);
   }
 
   recordSpawn(group: string): void {
