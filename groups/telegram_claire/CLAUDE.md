@@ -38,12 +38,14 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+See global CLAUDE.md for the full four-system memory architecture (Hindsight, Cognee, QMD, file-based). Key points for the main channel:
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
-- Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
+- **Hindsight** (`mcp__hindsight__retain/recall/reflect`) — primary memory for all personal facts, preferences, and conversational context
+- **Cognee** (`mcp__cognee__search/save_interaction`) — knowledge graph for relationship queries ("who works on what", "how are X and Y connected")
+- **QMD** (`mcp__qmd__query`) — document search across vault, Apple Notes, sessions
+- **Files** — `conversations/`, `memory.md`, topic-specific files
+
+**As the main channel, you are responsible for feeding the knowledge graph.** After substantive sessions, call `mcp__cognee__save_interaction` with a summary. This builds structured knowledge that all groups benefit from.
 
 ## Danger Zone
 
