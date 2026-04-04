@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Hermes</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Tab Bar -->
+    <nav class="tab-bar">
+      <button class="tab active" data-tab="command-center">
+        <span class="tab-icon">📋</span>
+        <span class="tab-label">Command Center</span>
+      </button>
+      <button class="tab" data-tab="hermes">
+        <span class="tab-icon">🦞</span>
+        <span class="tab-label">Hermes</span>
+      </button>
+    </nav>
+
+    <!-- Tab 1: Command Center -->
+    <div id="command-center" class="tab-content active">
+      <!-- Calendar Section -->
+      <section class="card" id="calendar-section">
+        <div class="card-header">
+          <h2>📅 Calendar</h2>
+          <span class="badge" id="calendar-count">—</span>
+        </div>
+        <div class="card-body" id="calendar-list">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+
+      <!-- Tasks Section -->
+      <section class="card" id="tasks-section">
+        <div class="card-header">
+          <h2>✅ Tasks</h2>
+          <span class="badge" id="tasks-count">—</span>
+        </div>
+        <div class="card-body" id="tasks-list">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+
+      <!-- Deadlines Section -->
+      <section class="card" id="deadlines-section">
+        <div class="card-header">
+          <h2>⏰ Upcoming Deadlines</h2>
+        </div>
+        <div class="card-body" id="deadlines-list">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+
+      <!-- Open Threads Section -->
+      <section class="card" id="threads-section">
+        <div class="card-header">
+          <h2>💬 Open Threads</h2>
+          <span class="badge" id="threads-count">—</span>
+        </div>
+        <div class="card-body" id="threads-list">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Tab 2: Hermes -->
+    <div id="hermes" class="tab-content">
+      <!-- System Status Section -->
+      <section class="card" id="status-section">
+        <div class="card-header">
+          <h2>🔧 System Status</h2>
+          <span class="status-dot" id="system-health"></span>
+        </div>
+        <div class="card-body" id="status-body">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+
+      <!-- Cron Jobs Section -->
+      <section class="card" id="cron-section">
+        <div class="card-header">
+          <h2>⏱️ Cron Jobs</h2>
+          <span class="badge" id="cron-count">—</span>
+        </div>
+        <div class="card-body" id="cron-list">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+
+      <!-- Memory Section -->
+      <section class="card" id="memory-section">
+        <div class="card-header">
+          <h2>🧠 Memory</h2>
+        </div>
+        <div class="card-body" id="memory-body">
+          <div class="skeleton-loader"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

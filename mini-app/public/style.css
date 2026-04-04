@@ -1,0 +1,511 @@
+/* Telegram Mini App — Hermes Dashboard */
+:root {
+  /* Telegram theme variables — overridden by SDK */
+  --tg-theme-bg-color: #1a1a2e;
+  --tg-theme-text-color: #e0e0e0;
+  --tg-theme-hint-color: #8a8a9a;
+  --tg-theme-link-color: #6c9bd2;
+  --tg-theme-button-color: #5288c1;
+  --tg-theme-button-text-color: #ffffff;
+  --tg-theme-secondary-bg-color: #232340;
+
+  /* App custom vars */
+  --card-bg: rgba(255, 255, 255, 0.05);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --card-radius: 14px;
+  --danger: #e74c3c;
+  --warning: #f39c12;
+  --success: #2ecc71;
+  --accent: #6c9bd2;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--tg-theme-bg-color);
+  color: var(--tg-theme-text-color);
+  min-height: 100vh;
+  padding-bottom: 72px;
+  overflow-x: hidden;
+}
+
+#app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+/* ── Tab Bar ── */
+.tab-bar {
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--tg-theme-secondary-bg-color);
+  border-top: 1px solid var(--card-border);
+  padding: 8px 0;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  z-index: 100;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  background: none;
+  border: none;
+  color: var(--tg-theme-hint-color);
+  font-size: 11px;
+  padding: 6px 0;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.tab.active {
+  color: var(--tg-theme-button-color);
+}
+
+.tab-icon {
+  font-size: 22px;
+}
+
+.tab-label {
+  font-weight: 500;
+}
+
+/* ── Cards ── */
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px 10px;
+}
+
+.card-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card-body {
+  padding: 0 16px 14px;
+}
+
+/* ── Badges ── */
+.badge {
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--tg-theme-button-color);
+  color: var(--tg-theme-button-text-color);
+  padding: 2px 8px;
+  border-radius: 10px;
+  min-width: 22px;
+  text-align: center;
+}
+
+.badge.warning {
+  background: var(--warning);
+}
+
+.badge.danger {
+  background: var(--danger);
+}
+
+/* ── Status Dot ── */
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+}
+
+.status-dot.degraded { background: var(--warning); }
+.status-dot.down { background: var(--danger); }
+
+/* ── Tab Content ── */
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* ── Event Items ── */
+.event-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.event-item:last-child {
+  border-bottom: none;
+}
+
+.event-time {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 52px;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.event-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.event-meta {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+/* ── Task Items ── */
+.task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.task-item:last-child {
+  border-bottom: none;
+}
+
+.task-priority {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.task-priority.p1 { background: var(--danger); }
+.task-priority.p2 { background: var(--warning); }
+.task-priority.p3 { background: var(--accent); }
+.task-priority.p4 { background: var(--tg-theme-hint-color); }
+
+.task-text {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.task-due {
+  font-size: 11px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+.task-due.overdue {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ── Deadline Items ── */
+.deadline-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.deadline-item:last-child {
+  border-bottom: none;
+}
+
+.deadline-label {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.deadline-date {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+}
+
+.deadline-days {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+}
+
+.deadline-days.urgent {
+  background: rgba(231, 76, 60, 0.2);
+  color: var(--danger);
+}
+
+.deadline-days.soon {
+  background: rgba(243, 156, 18, 0.2);
+  color: var(--warning);
+}
+
+.deadline-days.ok {
+  background: rgba(46, 204, 113, 0.2);
+  color: var(--success);
+}
+
+/* ── Thread Items ── */
+.thread-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.thread-item:last-child {
+  border-bottom: none;
+}
+
+.thread-source {
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.thread-subject {
+  font-size: 14px;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.thread-preview {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.thread-age {
+  font-size: 11px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 4px;
+}
+
+/* ── Cron Items ── */
+.cron-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--card-border);
+}
+
+.cron-item:last-child {
+  border-bottom: none;
+}
+
+.cron-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cron-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cron-status {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.cron-status.active {
+  background: rgba(46, 204, 113, 0.2);
+  color: var(--success);
+}
+
+.cron-status.paused {
+  background: rgba(243, 156, 18, 0.2);
+  color: var(--warning);
+}
+
+.cron-schedule {
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+.cron-next {
+  font-size: 11px;
+  color: var(--tg-theme-hint-color);
+  margin-top: 2px;
+}
+
+/* ── System Status ── */
+.status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.status-item {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.status-label {
+  font-size: 11px;
+  color: var(--tg-theme-hint-color);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-value {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* ── Memory Section ── */
+.memory-store {
+  margin-bottom: 12px;
+}
+
+.memory-store:last-child {
+  margin-bottom: 0;
+}
+
+.memory-store-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+
+.memory-entry {
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--card-border);
+  color: var(--tg-theme-hint-color);
+}
+
+.memory-entry:last-child {
+  border-bottom: none;
+}
+
+.memory-usage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.memory-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.memory-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+
+.memory-bar-fill.high {
+  background: var(--warning);
+}
+
+.memory-bar-fill.full {
+  background: var(--danger);
+}
+
+.memory-pct {
+  font-size: 11px;
+  color: var(--tg-theme-hint-color);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ── Skeleton Loader ── */
+.skeleton-loader {
+  height: 60px;
+  background: linear-gradient(90deg, 
+    rgba(255,255,255,0.03) 25%, 
+    rgba(255,255,255,0.08) 50%, 
+    rgba(255,255,255,0.03) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ── Empty State ── */
+.empty-state {
+  text-align: center;
+  padding: 20px;
+  color: var(--tg-theme-hint-color);
+  font-size: 13px;
+}
+
+/* ── Pull to Refresh indicator ── */
+.refresh-indicator {
+  text-align: center;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--tg-theme-hint-color);
+  display: none;
+}
+
+.refresh-indicator.visible {
+  display: block;
+}
+
+/* ── Error State ── */
+.error-state {
+  text-align: center;
+  padding: 16px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.error-state .retry-btn {
+  margin-top: 8px;
+  background: var(--tg-theme-button-color);
+  color: var(--tg-theme-button-text-color);
+  border: none;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
