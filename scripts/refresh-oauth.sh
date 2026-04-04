@@ -6,6 +6,8 @@
 # Runs via launchd every 4 hours (token expires ~24h, so plenty of margin).
 
 set -euo pipefail
+exec 200>/tmp/nanoclaw-oauth.lock
+flock -n 200 || { echo "Another OAuth refresh is running, skipping"; exit 0; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../.env"
