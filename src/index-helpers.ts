@@ -59,21 +59,3 @@ export function isStaleSessionError(error: string | null | undefined): boolean {
   );
 }
 
-/**
- * Pure version of getOrRecoverSeq for testing.
- * Returns the sequence number and whether recovery was needed.
- */
-export function getOrRecoverSeqPure(
-  chatJid: string,
-  lastAgentSeq: Record<string, number>,
-  getLastBotSeq: (jid: string) => number,
-): { seq: number; recovered: boolean } {
-  const cached = lastAgentSeq[chatJid];
-  if (cached && cached > 0) return { seq: cached, recovered: false };
-
-  const recovered = getLastBotSeq(chatJid);
-  if (recovered > 0) {
-    return { seq: recovered, recovered: true };
-  }
-  return { seq: recovered, recovered: false };
-}
