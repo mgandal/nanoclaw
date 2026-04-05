@@ -47,7 +47,7 @@ Small local models (via Ollama — Llama 3.1 8B, Phi-3, Mistral 7B, glm-4.7-flas
 - **Memory tagging**: Classifying and indexing new information into the knowledge graph
 - **Event detection**: Did something change that matters? New email, calendar update, file change, Slack mention
 - **Summarization**: Condensing low-stakes content into structured JSON for upstream consumption
-- **Embedding**: Vector embeddings for QMD and SimpleMem (already running via qwen3-embedding)
+- **Embedding**: Vector embeddings for QMD and SimpleMem (already running via nomic-embed-text)
 
 These run continuously. They consume local GPU/CPU but zero API tokens. They're wrong sometimes — and that's fine, because they're triaging and extracting, not deciding. Everything above their confidence threshold gets queued for Claude.
 
@@ -142,7 +142,7 @@ Agents write to the vault when producing documents meant for human review or lon
 
 QMD is the search layer — a hybrid BM25 + vector embedding + LLM reranking engine that indexes the entire vault (800+ documents), Apple Notes (864+ notes), session transcripts, group memories, research docs, state files, and conversation archives. When an agent needs to *find* something but doesn't know where it is, QMD is the first query.
 
-QMD runs locally as an HTTP daemon (port 8181), accessed by agents via MCP. Collections are continuously re-indexed as content changes. Embeddings are generated locally via Ollama (qwen3-embedding), keeping everything on-device.
+QMD runs locally as an HTTP daemon (port 8181), accessed by agents via MCP. Collections are continuously re-indexed as content changes. Embeddings are generated locally via Ollama (nomic-embed-text), keeping everything on-device.
 
 In the optimal version, QMD evolves beyond document search into **entity-aware retrieval**. A query for "Rachel Smith BrainGO" doesn't just find documents containing those words — it traverses the entity graph to also surface: Rachel's collaborator profile, the BrainGO grant aims, the LDSC results Sep ran last month, and the meeting note from January where the project direction was decided.
 
