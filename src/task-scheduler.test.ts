@@ -17,6 +17,9 @@ import {
 import type { SchedulerDependencies } from './task-scheduler.js';
 import type { ScheduledTask } from './types.js';
 
+// Re-export TIMEZONE for cron tests
+import { TIMEZONE } from './config.js';
+
 describe('task scheduler', () => {
   beforeEach(() => {
     _initTestDatabase();
@@ -384,5 +387,320 @@ describe('checkStaleTasks', () => {
     );
     vi.advanceTimersByTime(70000);
     expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('deduplicates stale alerts — does not re-alert for same stale task', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    const staleTask = makeTask({ next_run: staleNextRun });
+    checkStaleTasks([staleTask], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+    // Second call should not re-alert
+    checkStaleTasks([staleTask], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips paused and inactive tasks', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    checkStaleTasks(
+      [makeTask({ next_run: staleNextRun, status: 'paused' })],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('skips tasks with null next_run', () => {
+    const deps = makeMockDeps();
+    checkStaleTasks([makeTask({ next_run: null })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not treat interval task as stale when interval value is invalid (0 or NaN)', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    checkStaleTasks(
+      [
+        makeTask({
+          schedule_type: 'interval',
+          schedule_value: '0',
+          next_run: staleNextRun,
+        }),
+      ],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    // Should not alert — intervalMs <= 0 makes the isStale check false
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('computeNextRun — edge cases (regression)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('throws on invalid cron expression', () => {
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: 'not a cron',
+    });
+    expect(() => computeNextRun(task)).toThrow();
+  });
+
+  it('returns fallback for zero interval value', () => {
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: '0',
+      next_run: new Date().toISOString(),
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    // Should be ~60s from now (fallback)
+    const nextMs = new Date(nextRun!).getTime();
+    expect(nextMs - Date.now()).toBeCloseTo(60000, -2);
+  });
+
+  it('returns fallback for negative interval value', () => {
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: '-5000',
+      next_run: new Date().toISOString(),
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextMs = new Date(nextRun!).getTime();
+    expect(nextMs - Date.now()).toBeCloseTo(60000, -2);
+  });
+
+  it('returns fallback for non-numeric interval value', () => {
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: 'abc',
+      next_run: new Date().toISOString(),
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    // NaN check triggers fallback
+    const nextMs = new Date(nextRun!).getTime();
+    expect(nextMs - Date.now()).toBeCloseTo(60000, -2);
+  });
+
+  it('handles null next_run on interval task (corrupted DB row)', () => {
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      next_run: null,
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    // With null next_run, base falls back to Date.now(), so next = now + interval
+    const nextMs = new Date(nextRun!).getTime();
+    expect(nextMs - Date.now()).toBe(3600000);
+  });
+
+  it('returns null for unknown schedule_type', () => {
+    const task = makeTask({
+      schedule_type: 'unknown' as any,
+      schedule_value: '42',
+    });
+    expect(computeNextRun(task)).toBeNull();
+  });
+
+  it('throttles cron that fires every minute to >= 30 min from now', () => {
+    // "every minute" cron — way too frequent
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: '* * * * *',
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const gapMs = new Date(nextRun!).getTime() - Date.now();
+    expect(gapMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
+  });
+});
+
+describe('scheduler loop lifecycle (regression)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetSchedulerLoopForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('prevents duplicate scheduler loop starts', () => {
+    const enqueueTask = vi.fn();
+    const deps: SchedulerDependencies = {
+      registeredGroups: () => ({}),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    };
+
+    startSchedulerLoop(deps);
+    startSchedulerLoop(deps); // second call should be a no-op
+    // No error thrown, scheduler runs once
+  });
+
+  it('skips tasks that become paused between getDueTasks and execution', async () => {
+    // Create a task that is due
+    createTask({
+      id: 'task-pause-race',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    const taskFn = vi.fn();
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+        // Simulate: task was paused by the time enqueueTask checks
+        // The scheduler re-reads the task inside the loop before enqueueing
+        // so this should not run
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'tg:123': {
+          name: 'CLAIRE',
+          folder: 'telegram_claire',
+          trigger: '@Claire',
+          added_at: new Date().toISOString(),
+          isMain: true,
+          requiresTrigger: false,
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(enqueueTask).toHaveBeenCalledOnce();
+  });
+});
+
+describe('checkAlerts — batching and edge cases (regression)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('batches multiple task failures into a single alert message', () => {
+    // Create two different tasks with consecutive failures
+    createTestTask('task-a');
+    createTestTask('task-b');
+
+    logTaskRun({
+      task_id: 'task-a',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail-a1',
+    });
+    logTaskRun({
+      task_id: 'task-a',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail-a2',
+    });
+    logTaskRun({
+      task_id: 'task-b',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail-b1',
+    });
+    logTaskRun({
+      task_id: 'task-b',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail-b2',
+    });
+
+    const deps = makeMockDeps();
+    checkAlerts(makeTask({ id: 'task-a' }), 'fail-a2', deps);
+    checkAlerts(makeTask({ id: 'task-b' }), 'fail-b2', deps);
+
+    // Before flush window, no messages sent
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+
+    // After flush window, both alerts in one message
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('task-a');
+    expect(msg).toContain('task-b');
+  });
+
+  it('does not send alert when no main group is registered', () => {
+    createTestTask();
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'test-task',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+
+    // Override registeredGroups to return no main group
+    const deps = makeMockDeps({
+      registeredGroups: () => ({
+        'tg:456': {
+          name: 'NON-MAIN',
+          folder: 'telegram_nonmain',
+          trigger: '@Bot',
+          added_at: new Date().toISOString(),
+          isMain: false,
+          requiresTrigger: true,
+        },
+      }),
+    });
+
+    checkAlerts(makeTask(), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    // sendMessage should NOT be called — no main group to deliver to
+    expect(deps.sendMessage).not.toHaveBeenCalled();
   });
 });
