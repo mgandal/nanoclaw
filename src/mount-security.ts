@@ -19,6 +19,13 @@ let cachedAllowlist: MountAllowlist | null = null;
 let allowlistLoadError: string | null = null;
 let cacheTimestamp = 0;
 
+/** Reset the internal cache. Exported for testing only. */
+export function _resetCache(): void {
+  cachedAllowlist = null;
+  allowlistLoadError = null;
+  cacheTimestamp = 0;
+}
+
 /**
  * Default blocked patterns - paths that should never be mounted
  */
@@ -47,15 +54,17 @@ const DEFAULT_BLOCKED_PATTERNS = [
  * Returns null if the file doesn't exist or is invalid.
  * Result is cached in memory for the lifetime of the process.
  */
-export function loadMountAllowlist(): MountAllowlist | null {
+export function loadMountAllowlist(pathOverride?: string): MountAllowlist | null {
+  const allowlistFile = pathOverride ?? MOUNT_ALLOWLIST_PATH;
   const now = Date.now();
-  if (cachedAllowlist !== null && now - cacheTimestamp < CACHE_TTL_MS) {
+  if (!pathOverride && cachedAllowlist !== null && now - cacheTimestamp < CACHE_TTL_MS) {
     return cachedAllowlist;
   }
 
   // Only cache parse/structural errors — "file not found" should be retried
   // so the allowlist can be created after startup without a restart.
   if (
+    !pathOverride &&
     allowlistLoadError !== null &&
     allowlistLoadError !== 'file_not_found' &&
     now - cacheTimestamp < CACHE_TTL_MS
@@ -69,17 +78,17 @@ export function loadMountAllowlist(): MountAllowlist | null {
   cacheTimestamp = now;
 
   try {
-    if (!fs.existsSync(MOUNT_ALLOWLIST_PATH)) {
+    if (!fs.existsSync(allowlistFile)) {
       allowlistLoadError = 'file_not_found';
       logger.warn(
-        { path: MOUNT_ALLOWLIST_PATH },
+        { path: allowlistFile },
         'Mount allowlist not found - additional mounts will be BLOCKED. ' +
           'Create the file to enable additional mounts.',
       );
       return null;
     }
 
-    const content = fs.readFileSync(MOUNT_ALLOWLIST_PATH, 'utf-8');
+    const content = fs.readFileSync(allowlistFile, 'utf-8');
     const allowlist = JSON.parse(content) as MountAllowlist;
 
     // Validate structure
@@ -104,7 +113,7 @@ export function loadMountAllowlist(): MountAllowlist | null {
     cachedAllowlist = allowlist;
     logger.info(
       {
-        path: MOUNT_ALLOWLIST_PATH,
+        path: allowlistFile,
         allowedRoots: allowlist.allowedRoots.length,
         blockedPatterns: allowlist.blockedPatterns.length,
       },
@@ -251,8 +260,9 @@ export interface MountValidationResult {
 export function validateMount(
   mount: AdditionalMount,
   isMain: boolean,
+  _allowlistPathOverride?: string,
 ): MountValidationResult {
-  const allowlist = loadMountAllowlist();
+  const allowlist = loadMountAllowlist(_allowlistPathOverride);
 
   // If no allowlist, block all additional mounts
   if (allowlist === null) {
@@ -355,6 +365,7 @@ export function validateAdditionalMounts(
   mounts: AdditionalMount[],
   groupName: string,
   isMain: boolean,
+  _allowlistPathOverride?: string,
 ): Array<{
   hostPath: string;
   containerPath: string;
@@ -367,7 +378,7 @@ export function validateAdditionalMounts(
   }> = [];
 
   for (const mount of mounts) {
-    const result = validateMount(mount, isMain);
+    const result = validateMount(mount, isMain, _allowlistPathOverride);
 
     if (result.allowed) {
       validatedMounts.push({
