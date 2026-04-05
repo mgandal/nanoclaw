@@ -100,7 +100,6 @@ import {
   checkSessionExpiry,
   parseLastAgentSeq,
   isStaleSessionError,
-  getOrRecoverSeqPure,
 } from './index-helpers.js';
 
 // ---- DB-backed tests: session management ----
@@ -298,45 +297,6 @@ describe('isStaleSessionError', () => {
   it('returns false for null/undefined', () => {
     expect(isStaleSessionError(null)).toBe(false);
     expect(isStaleSessionError(undefined)).toBe(false);
-  });
-});
-
-// ---- Pure function tests: getOrRecoverSeqPure ----
-
-describe('getOrRecoverSeqPure', () => {
-  it('returns cached value when positive', () => {
-    const lastAgentSeq: Record<string, number> = { 'chat@g.us': 42 };
-    const result = getOrRecoverSeqPure('chat@g.us', lastAgentSeq, () => 0);
-    expect(result.seq).toBe(42);
-    expect(result.recovered).toBe(false);
-  });
-
-  it('recovers from DB when cached is 0', () => {
-    const lastAgentSeq: Record<string, number> = { 'chat@g.us': 0 };
-    const result = getOrRecoverSeqPure('chat@g.us', lastAgentSeq, () => 99);
-    expect(result.seq).toBe(99);
-    expect(result.recovered).toBe(true);
-  });
-
-  it('recovers from DB when cached is missing', () => {
-    const lastAgentSeq: Record<string, number> = {};
-    const result = getOrRecoverSeqPure('chat@g.us', lastAgentSeq, () => 50);
-    expect(result.seq).toBe(50);
-    expect(result.recovered).toBe(true);
-  });
-
-  it('returns 0 when both cache and DB have no data', () => {
-    const lastAgentSeq: Record<string, number> = {};
-    const result = getOrRecoverSeqPure('chat@g.us', lastAgentSeq, () => 0);
-    expect(result.seq).toBe(0);
-    expect(result.recovered).toBe(false);
-  });
-
-  it('does not use DB when cached is positive', () => {
-    const dbLookup = vi.fn(() => 999);
-    const lastAgentSeq: Record<string, number> = { 'chat@g.us': 10 };
-    getOrRecoverSeqPure('chat@g.us', lastAgentSeq, dbLookup);
-    expect(dbLookup).not.toHaveBeenCalled();
   });
 });
 

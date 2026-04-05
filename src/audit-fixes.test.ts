@@ -310,9 +310,10 @@ describe('runScript environment restriction', () => {
       'utf-8',
     );
     // Must use restricted env, not process.env
-    expect(source).toContain(
-      'env: { PATH: process.env.PATH, HOME: process.env.HOME, TZ: process.env.TZ',
-    );
+    // Check each restricted key is present (format-agnostic)
+    expect(source).toMatch(/env:\s*\{[^}]*PATH:\s*process\.env\.PATH/s);
+    expect(source).toMatch(/env:\s*\{[^}]*HOME:\s*process\.env\.HOME/s);
+    expect(source).toMatch(/env:\s*\{[^}]*TZ:\s*process\.env\.TZ/s);
     expect(source).not.toMatch(/env:\s*process\.env\b/);
   });
 });
