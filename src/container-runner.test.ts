@@ -113,8 +113,16 @@ vi.mock('child_process', async () => {
   };
 });
 
-import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import {
+  runContainerAgent,
+  setQmdReachable,
+  ContainerOutput,
+} from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
+import { spawn } from 'child_process';
+import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
+import { stopContainer } from './container-runtime.js';
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -142,6 +150,7 @@ describe('container-runner timeout behavior', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
   });
 
   afterEach(() => {
@@ -233,5 +242,688 @@ describe('container-runner timeout behavior', () => {
     const result = await resultPromise;
     expect(result.status).toBe('success');
     expect(result.newSessionId).toBe('session-456');
+  });
+});
+
+describe('container-runner spawn error handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves with error when spawn emits ENOENT (runtime not found)', async () => {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    // Need to let the event listeners be registered first
+    await vi.advanceTimersByTimeAsync(1);
+
+    // Simulate spawn error: runtime binary not found
+    const error = new Error('spawn container ENOENT') as NodeJS.ErrnoException;
+    error.code = 'ENOENT';
+    fakeProc.emit('error', error);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Container spawn error');
+    expect(result.error).toContain('ENOENT');
+  });
+
+  it('resolves with error when spawn emits EACCES (permission denied)', async () => {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    const error = new Error(
+      'spawn container EACCES',
+    ) as NodeJS.ErrnoException;
+    error.code = 'EACCES';
+    fakeProc.emit('error', error);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Container spawn error');
+    expect(result.error).toContain('EACCES');
+  });
+
+  it('resolves with error on non-zero exit code and includes stderr tail', async () => {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    // Emit some stderr output to verify it's included in the error
+    fakeProc.stderr.push('Error: out of memory\nCannot allocate 4GB\n');
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Non-zero exit
+    fakeProc.emit('close', 137);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Container exited with code 137');
+    expect(result.error).toContain('out of memory');
+  });
+});
+
+describe('container-runner output parsing', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('handles malformed JSON between markers gracefully', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Push malformed JSON between markers
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n{invalid json\n${OUTPUT_END_MARKER}\n`,
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Then push valid output
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Recovery after bad JSON',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    // Should still succeed — the valid marker was processed
+    expect(result.status).toBe('success');
+    // onOutput should have been called only for the valid marker
+    expect(onOutput).toHaveBeenCalledTimes(1);
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ result: 'Recovery after bad JSON' }),
+    );
+  });
+
+  it('legacy mode (no onOutput) parses last marker pair from stdout', async () => {
+    // No onOutput callback — triggers legacy parsing path
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      // no onOutput
+    );
+
+    // Emit two output markers — legacy should pick the last one
+    const firstOutput = JSON.stringify({
+      status: 'success',
+      result: 'first',
+    });
+    const secondOutput = JSON.stringify({
+      status: 'success',
+      result: 'second',
+      newSessionId: 'sess-legacy',
+    });
+    fakeProc.stdout.push(
+      `some noise\n${OUTPUT_START_MARKER}\n${firstOutput}\n${OUTPUT_END_MARKER}\nmore noise\n${OUTPUT_START_MARKER}\n${secondOutput}\n${OUTPUT_END_MARKER}\n`,
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.result).toBe('second');
+    expect(result.newSessionId).toBe('sess-legacy');
+  });
+
+  it('legacy mode returns error on unparseable stdout', async () => {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    // No markers at all — just garbage
+    fakeProc.stdout.push('this is not JSON at all\nreally not\n');
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Failed to parse container output');
+  });
+});
+
+describe('container-runner output truncation', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('truncates stdout when exceeding CONTAINER_MAX_OUTPUT_SIZE', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // CONTAINER_MAX_OUTPUT_SIZE is 10485760 (10MB) in mock config.
+    // Push data that exceeds it. We'll push in chunks to simulate streaming.
+    const chunkSize = 1024 * 1024; // 1MB
+    for (let i = 0; i < 12; i++) {
+      fakeProc.stdout.push('x'.repeat(chunkSize));
+    }
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Now emit proper output and close
+    emitOutputMarker(fakeProc, { status: 'success', result: 'done' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    // Should still succeed — truncation is for logging, not output parsing
+    expect(result.status).toBe('success');
+  });
+
+  it('truncates stderr when exceeding CONTAINER_MAX_OUTPUT_SIZE', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Push stderr exceeding the limit
+    const chunkSize = 1024 * 1024;
+    for (let i = 0; i < 12; i++) {
+      fakeProc.stderr.push('e'.repeat(chunkSize));
+    }
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    emitOutputMarker(fakeProc, { status: 'success', result: 'ok' });
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+  });
+});
+
+describe('container-runner environment variable handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    // Reset mocks to defaults to prevent cross-test contamination
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+    vi.mocked(readEnvFile).mockReturnValue({});
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    // Clean up env vars we set during tests
+    delete process.env.SIMPLEMEM_URL;
+    delete process.env.APPLE_NOTES_URL;
+    delete process.env.TODOIST_URL;
+    delete process.env.HINDSIGHT_URL;
+    delete process.env.COGNEE_URL;
+  });
+
+  it('passes OAuth placeholder when auth mode is oauth', async () => {
+    vi.mocked(detectAuthMode).mockReturnValue('oauth');
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Check the spawn args — env vars are passed as ['-e', 'VAR=value'] pairs
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+
+    // Find env var values (args that follow '-e')
+    const envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+
+    // Should have ANTHROPIC_AUTH_TOKEN=placeholder (not ANTHROPIC_API_KEY)
+    const authTokenVar = envVars.find((a) =>
+      a.startsWith('ANTHROPIC_AUTH_TOKEN='),
+    );
+    expect(authTokenVar).toBe('ANTHROPIC_AUTH_TOKEN=placeholder');
+
+    // Should NOT have ANTHROPIC_API_KEY
+    const apiKeyVar = envVars.find((a) =>
+      a.startsWith('ANTHROPIC_API_KEY='),
+    );
+    expect(apiKeyVar).toBeUndefined();
+
+    // Clean up
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Restore default mock
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+  });
+
+  it('passes API key placeholder when auth mode is api-key', async () => {
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+    const envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+
+    const apiKeyVar = envVars.find((a) =>
+      a.startsWith('ANTHROPIC_API_KEY='),
+    );
+    expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('rewrites localhost to host gateway in SIMPLEMEM_URL', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      SIMPLEMEM_URL:
+        'http://localhost:8200/mcp?token=secret123',
+    });
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+    const envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+
+    const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
+    expect(simpleMemVar).toBeDefined();
+    // localhost should be rewritten to host.docker.internal (the mock gateway)
+    expect(simpleMemVar).toContain('host.docker.internal');
+    expect(simpleMemVar).not.toContain('localhost');
+    // Auth token should be preserved in query params
+    expect(simpleMemVar).toContain('token=secret123');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Reset mock
+    vi.mocked(readEnvFile).mockReturnValue({});
+  });
+
+  it('skips SIMPLEMEM_URL when URL is malformed', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      SIMPLEMEM_URL: 'not-a-valid-url',
+    });
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+    const envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+
+    // Should NOT have SIMPLEMEM_URL in args
+    const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
+    expect(simpleMemVar).toBeUndefined();
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    vi.mocked(readEnvFile).mockReturnValue({});
+  });
+
+  it('includes QMD_URL only when QMD is reachable', async () => {
+    // QMD not reachable (default)
+    setQmdReachable(false);
+
+    const resultPromise1 = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    let spawnCall = vi.mocked(spawn).mock.calls[0];
+    let args = spawnCall[1] as string[];
+    let envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+    let qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
+    expect(qmdVar).toBeUndefined();
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Now set QMD reachable and try again
+    setQmdReachable(true);
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+
+    const resultPromise2 = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    spawnCall = vi.mocked(spawn).mock.calls[1];
+    args = spawnCall[1] as string[];
+    envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+    qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
+    expect(qmdVar).toBeDefined();
+    expect(qmdVar).toContain('host.docker.internal:8181/mcp');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Reset
+    setQmdReachable(false);
+  });
+});
+
+describe('container-runner container name sanitization', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sanitizes special characters in group folder for container name', async () => {
+    const specialGroup: RegisteredGroup = {
+      name: 'Weird/Group',
+      folder: 'telegram_weird-group',
+      trigger: '@Andy',
+      added_at: new Date().toISOString(),
+    };
+
+    const resultPromise = runContainerAgent(
+      specialGroup,
+      { ...testInput, groupFolder: specialGroup.folder },
+      (proc, containerName) => {
+        // Container name should only contain allowed chars
+        // The code replaces [^a-zA-Z0-9-] with '-'
+        expect(containerName).toMatch(/^nanoclaw-[a-zA-Z0-9-]+-\d+$/);
+        // Underscores in folder name should be replaced with hyphens
+        expect(containerName).toContain('telegram-weird-group');
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner timeout reset on activity', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resets timeout when streaming output is received', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Advance close to timeout (within 10s of 1830000ms)
+    await vi.advanceTimersByTimeAsync(1820000);
+
+    // Emit output — should reset the timeout
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Still working...',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Advance another 1820000ms — if timeout wasn't reset, we'd have timed out
+    await vi.advanceTimersByTimeAsync(1820000);
+
+    // Should NOT have timed out yet (timeout was reset)
+    // Emit another output to prove the container is still alive
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Final answer',
+      newSessionId: 'reset-session',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Now close normally
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(onOutput).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reset timeout on stderr output', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Advance close to timeout
+    await vi.advanceTimersByTimeAsync(1829000);
+
+    // Emit stderr (should NOT reset timeout)
+    fakeProc.stderr.push('DEBUG: some debug log\n');
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Advance past the original timeout
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The timeout should have fired — container should be stopped
+    // Container emits close after being stopped
+    fakeProc.emit('close', 137);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('timed out');
+  });
+});
+
+describe('container-runner onOutput chain error handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('continues processing when onOutput callback throws', async () => {
+    let callCount = 0;
+    const onOutput = vi.fn(async (output: ContainerOutput) => {
+      callCount++;
+      if (callCount === 1) {
+        throw new Error('Callback failure on first output');
+      }
+    });
+
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // First output — callback will throw
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'First response',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Second output — callback should still be called
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Second response',
+      newSessionId: 'sess-after-error',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    // Should still succeed — errors in onOutput are caught
+    expect(result.status).toBe('success');
+    expect(onOutput).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('container-runner redacts sensitive args', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not expose real credentials in spawn args', async () => {
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const args = spawnCall[1] as string[];
+    const envVars = args.filter(
+      (a, i) => i > 0 && args[i - 1] === '-e',
+    );
+
+    // The proxy token is embedded in the ANTHROPIC_BASE_URL — verify it
+    // uses the test proxy token, NOT a real API key
+    const baseUrlVar = envVars.find((a) => a.startsWith('ANTHROPIC_BASE_URL='));
+    expect(baseUrlVar).toBeDefined();
+    expect(baseUrlVar).toContain('test-proxy-token');
+
+    // API key should be 'placeholder', never a real key
+    const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
+    if (apiKeyVar) {
+      expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
+    }
+
+    // Should never contain CLAUDE_CODE_OAUTH_TOKEN as env var
+    const oauthTokenVar = envVars.find((a) =>
+      a.startsWith('CLAUDE_CODE_OAUTH_TOKEN='),
+    );
+    expect(oauthTokenVar).toBeUndefined();
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
   });
 });
