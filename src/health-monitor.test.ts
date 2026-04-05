@@ -169,6 +169,225 @@ describe('HealthMonitor infra alerts (consecutive failures)', () => {
   });
 });
 
+describe('HealthMonitor alert dedup cooldown', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 5,
+      maxErrorsPerHour: 5,
+      onAlert: alertFn,
+    });
+  });
+
+  it('suppresses duplicate spawn alerts within 10min cooldown', () => {
+    // Trigger first alert
+    for (let i = 0; i < 6; i++) monitor.recordSpawn('g1');
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1);
+
+    // Second check within cooldown — alert still returned but onAlert NOT called again
+    const alerts2 = monitor.checkThresholds();
+    expect(alerts2.some((a) => a.type === 'excessive_spawns')).toBe(true);
+    expect(alertFn).toHaveBeenCalledTimes(1); // still 1
+  });
+
+  it('suppresses duplicate error alerts within 10min cooldown', () => {
+    for (let i = 0; i < 6; i++) monitor.recordError('g1', 'fail');
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1);
+
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1); // not called again
+  });
+
+  it('suppresses duplicate infra alerts within cooldown', () => {
+    for (let i = 0; i < 3; i++) monitor.recordInfraEvent('mcp:X', 'down');
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1);
+
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1); // deduped
+  });
+
+  it('re-fires alert after cooldown expires', () => {
+    for (let i = 0; i < 6; i++) monitor.recordSpawn('g1');
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(1);
+
+    // Simulate cooldown expiry by backdating the recentAlerts entry
+    const recentAlerts = monitor['recentAlerts'] as Map<string, number>;
+    recentAlerts.set('excessive_spawns:g1', Date.now() - 11 * 60_000);
+
+    monitor.checkThresholds();
+    expect(alertFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('HealthMonitor auto-pause and auto-resume', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 5,
+      maxErrorsPerHour: 5,
+      onAlert: alertFn,
+    });
+  });
+
+  it('auto-pauses group when spawn threshold exceeded', () => {
+    for (let i = 0; i < 6; i++) monitor.recordSpawn('g1');
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+  });
+
+  it('auto-resumes group when spawns drop below threshold', () => {
+    for (let i = 0; i < 6; i++) monitor.recordSpawn('g1');
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+
+    // Clear spawn log to simulate events expiring
+    monitor['spawnLog'] = [];
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(false);
+  });
+
+  it('auto-resumes multiple paused groups in single checkThresholds call', () => {
+    // Pause two groups
+    for (let i = 0; i < 6; i++) {
+      monitor.recordSpawn('g1');
+      monitor.recordSpawn('g2');
+    }
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+    expect(monitor.isGroupPaused('g2')).toBe(true);
+
+    // Clear events so both should resume
+    monitor['spawnLog'] = [];
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(false);
+    expect(monitor.isGroupPaused('g2')).toBe(false);
+  });
+
+  it('does not resume group that still exceeds error threshold', () => {
+    for (let i = 0; i < 6; i++) monitor.recordError('g1', 'fail');
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+
+    // Errors still present, should stay paused
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+  });
+});
+
+describe('HealthMonitor concurrent and mixed scenarios', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 10,
+      maxErrorsPerHour: 10,
+      onAlert: alertFn,
+    });
+  });
+
+  it('handles spawn and error thresholds independently per group', () => {
+    // g1 exceeds spawns, g2 exceeds errors
+    for (let i = 0; i < 11; i++) monitor.recordSpawn('g1');
+    for (let i = 0; i < 11; i++) monitor.recordError('g2', 'fail');
+
+    const alerts = monitor.checkThresholds();
+    const spawnAlerts = alerts.filter((a) => a.type === 'excessive_spawns');
+    const errorAlerts = alerts.filter((a) => a.type === 'excessive_errors');
+    expect(spawnAlerts).toHaveLength(1);
+    expect(spawnAlerts[0].group).toBe('g1');
+    expect(errorAlerts).toHaveLength(1);
+    expect(errorAlerts[0].group).toBe('g2');
+    expect(monitor.isGroupPaused('g1')).toBe(true);
+    expect(monitor.isGroupPaused('g2')).toBe(true);
+  });
+
+  it('getStatus reflects paused state correctly', () => {
+    for (let i = 0; i < 11; i++) monitor.recordSpawn('g1');
+    monitor.checkThresholds();
+
+    const status = monitor.getStatus();
+    expect(status['g1']).toMatchObject({ paused: true });
+  });
+
+  it('getStatus returns empty object when no events recorded', () => {
+    const status = monitor.getStatus();
+    expect(Object.keys(status)).toHaveLength(0);
+  });
+
+  it('infra failure count persists across threshold exactly at boundary', () => {
+    // 2 failures — below threshold
+    monitor.recordInfraEvent('svc', 'down');
+    monitor.recordInfraEvent('svc', 'down');
+    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(0);
+
+    // 3rd failure — hits threshold
+    monitor.recordInfraEvent('svc', 'down');
+    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(1);
+
+    // 4th failure — stays alerting (count > threshold)
+    monitor.recordInfraEvent('svc', 'still down');
+    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(1);
+  });
+});
+
+describe('HealthMonitor pruning and time window edge cases', () => {
+  let monitor: HealthMonitor;
+
+  beforeEach(() => {
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 100,
+      maxErrorsPerHour: 100,
+      onAlert: vi.fn(),
+    });
+  });
+
+  it('prunes events older than 2 hours on recordSpawn', () => {
+    // Inject old events
+    monitor['spawnLog'] = [
+      { group: 'g1', timestamp: Date.now() - 3 * 3600_000 },
+      { group: 'g1', timestamp: Date.now() - 2.5 * 3600_000 },
+    ];
+    // Recording a new spawn triggers pruning
+    monitor.recordSpawn('g1');
+    expect(monitor['spawnLog']).toHaveLength(1);
+    expect(monitor.getSpawnCount('g1', 3600_000)).toBe(1);
+  });
+
+  it('prunes error events older than 2 hours on recordError', () => {
+    monitor['errorLog'] = [
+      { group: 'g1', message: 'old', timestamp: Date.now() - 3 * 3600_000 },
+    ];
+    monitor.recordError('g1', 'new');
+    expect(monitor['errorLog']).toHaveLength(1);
+    expect(monitor.getErrorCount('g1', 3600_000)).toBe(1);
+  });
+
+  it('getSpawnCount with zero window returns 0', () => {
+    monitor.recordSpawn('g1');
+    expect(monitor.getSpawnCount('g1', 0)).toBe(0);
+  });
+
+  it('getErrorCount with zero window returns 0', () => {
+    monitor.recordError('g1', 'x');
+    expect(monitor.getErrorCount('g1', 0)).toBe(0);
+  });
+});
+
 describe('HealthMonitor Ollama tracking', () => {
   let monitor: HealthMonitor;
 
@@ -204,6 +423,26 @@ describe('HealthMonitor Ollama tracking', () => {
     });
     for (let i = 0; i < 10; i++) monitor.recordOllamaLatency(100);
     expect(monitor.isOllamaDegraded()).toBe(false);
+  });
+
+  it('returns 0 for P95 when no latency data exists', () => {
+    expect(monitor.getOllamaP95Latency(3600_000)).toBe(0);
+    expect(monitor.isOllamaDegraded()).toBe(false);
+  });
+
+  it('handles single latency entry correctly', () => {
+    monitor.recordOllamaLatency(5000);
+    const p95 = monitor.getOllamaP95Latency(3600_000);
+    expect(p95).toBe(5000);
+  });
+
+  it('prunes old latency entries on record', () => {
+    monitor['ollamaLatencyLog'] = [
+      { latencyMs: 99999, timestamp: Date.now() - 3 * 3600_000 },
+    ];
+    monitor.recordOllamaLatency(100);
+    expect(monitor['ollamaLatencyLog']).toHaveLength(1);
+    expect(monitor['ollamaLatencyLog'][0].latencyMs).toBe(100);
   });
 });
 
