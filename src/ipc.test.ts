@@ -1,0 +1,657 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+import {
+  _initTestDatabase,
+  createTask,
+  getAllTasks,
+  getTaskById,
+  setRegisteredGroup,
+  updateTask,
+} from './db.js';
+import { processTaskIpc, IpcDeps } from './ipc.js';
+import { RegisteredGroup } from './types.js';
+
+// --- Shared setup ---
+
+const MAIN_GROUP: RegisteredGroup = {
+  name: 'Main',
+  folder: 'telegram_main',
+  trigger: '@Claire',
+  added_at: '2024-01-01T00:00:00.000Z',
+  isMain: true,
+};
+
+const OTHER_GROUP: RegisteredGroup = {
+  name: 'Other',
+  folder: 'telegram_other',
+  trigger: '@Claire',
+  added_at: '2024-01-01T00:00:00.000Z',
+  containerConfig: {
+    additionalMounts: [
+      {
+        hostPath: '/host/vault',
+        containerPath: 'vault',
+        readonly: true,
+      },
+    ],
+  },
+};
+
+let groups: Record<string, RegisteredGroup>;
+let deps: IpcDeps;
+let onTasksChangedSpy: ReturnType<typeof vi.fn>;
+let sendMessageSpy: ReturnType<typeof vi.fn>;
+let registerGroupSpy: ReturnType<typeof vi.fn>;
+let syncGroupsSpy: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  _initTestDatabase();
+
+  groups = {
+    'tg:main123': MAIN_GROUP,
+    'tg:other456': OTHER_GROUP,
+  };
+
+  setRegisteredGroup('tg:main123', MAIN_GROUP);
+  setRegisteredGroup('tg:other456', OTHER_GROUP);
+
+  onTasksChangedSpy = vi.fn();
+  sendMessageSpy = vi.fn().mockResolvedValue(undefined);
+  registerGroupSpy = vi.fn((jid: string, group: RegisteredGroup) => {
+    groups[jid] = group;
+    setRegisteredGroup(jid, group);
+  });
+  syncGroupsSpy = vi.fn().mockResolvedValue(undefined);
+
+  deps = {
+    sendMessage: sendMessageSpy,
+    registeredGroups: () => groups,
+    registerGroup: registerGroupSpy,
+    syncGroups: syncGroupsSpy,
+    getAvailableGroups: () => [],
+    writeGroupsSnapshot: vi.fn(),
+    onTasksChanged: onTasksChangedSpy,
+  };
+});
+
+// --- 1. update_task edge cases ---
+
+describe('update_task', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-update-test',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'original prompt',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * *',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T09:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('updates prompt without changing schedule', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-test',
+        prompt: 'new prompt',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-update-test');
+    expect(task!.prompt).toBe('new prompt');
+    expect(task!.schedule_value).toBe('0 9 * * *');
+    expect(onTasksChangedSpy).toHaveBeenCalled();
+  });
+
+  it('rejects update from non-main group for foreign task', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-test',
+        prompt: 'hacked',
+      },
+      'telegram_main', // sourceGroup is main folder but isMain=false
+      false,
+      deps,
+    );
+
+    const task = getTaskById('task-update-test');
+    expect(task!.prompt).toBe('original prompt');
+  });
+
+  it('rejects update with invalid schedule', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-test',
+        schedule_type: 'cron',
+        schedule_value: 'not-valid-cron',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // Should NOT have called onTasksChanged
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+    const task = getTaskById('task-update-test');
+    expect(task!.schedule_value).toBe('0 9 * * *');
+  });
+
+  it('recomputes next_run when schedule_value changes', async () => {
+    const before = Date.now();
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-update-test',
+        schedule_type: 'interval',
+        schedule_value: '7200000', // 2 hours
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-update-test');
+    expect(task!.schedule_type).toBe('interval');
+    const nextRun = new Date(task!.next_run!).getTime();
+    expect(nextRun).toBeGreaterThanOrEqual(before + 7200000 - 1000);
+    expect(nextRun).toBeLessThanOrEqual(Date.now() + 7200000 + 1000);
+  });
+
+  it('handles update of nonexistent task gracefully', async () => {
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'nonexistent-task',
+        prompt: 'nope',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // Should not crash, should not call onTasksChanged
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 2. resume_task next_run recomputation ---
+
+describe('resume_task next_run recomputation', () => {
+  it('recomputes next_run for interval tasks on resume', async () => {
+    createTask({
+      id: 'task-interval-resume',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'interval task',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      context_mode: 'isolated',
+      next_run: '2020-01-01T00:00:00.000Z', // stale
+      status: 'paused',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const before = Date.now();
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'task-interval-resume' },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    const task = getTaskById('task-interval-resume');
+    expect(task!.status).toBe('active');
+    const nextRun = new Date(task!.next_run!).getTime();
+    // next_run should be ~1 hour from now, not stuck in 2020
+    expect(nextRun).toBeGreaterThanOrEqual(before + 3600000 - 1000);
+  });
+
+  it('bumps past-due once tasks to now + 1 min on resume', async () => {
+    createTask({
+      id: 'task-once-resume',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'once task',
+      schedule_type: 'once',
+      schedule_value: '2020-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2020-01-01T00:00:00.000Z',
+      status: 'paused',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const before = Date.now();
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'task-once-resume' },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    const task = getTaskById('task-once-resume');
+    expect(task!.status).toBe('active');
+    const nextRun = new Date(task!.next_run!).getTime();
+    // Should be bumped to ~now + 60s
+    expect(nextRun).toBeGreaterThanOrEqual(before + 55000);
+    expect(nextRun).toBeLessThanOrEqual(before + 120000);
+  });
+});
+
+// --- 3. register_group preserves isMain flag ---
+
+describe('register_group isMain preservation', () => {
+  it('preserves isMain when re-registering existing group', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:main123',
+        name: 'Main Updated',
+        folder: 'telegram_main',
+        trigger: '@Claire',
+        containerConfig: {
+          additionalMounts: [
+            { hostPath: '/some/path', containerPath: 'extra' },
+          ],
+        },
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // The registered group should still have isMain=true
+    expect(registerGroupSpy).toHaveBeenCalled();
+    const call = registerGroupSpy.mock.calls[0];
+    expect(call[1].isMain).toBe(true);
+  });
+
+  it('does not grant isMain to a new group', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:new999',
+        name: 'New Group',
+        folder: 'telegram_new',
+        trigger: '@Claire',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(registerGroupSpy).toHaveBeenCalled();
+    const call = registerGroupSpy.mock.calls[0];
+    // isMain should be undefined (not set) for new groups
+    expect(call[1].isMain).toBeUndefined();
+  });
+});
+
+// --- 4. bus_publish ---
+
+describe('bus_publish', () => {
+  it('publishes message to bus with correct fields', async () => {
+    const publishSpy = vi.fn();
+    const bussDeps = {
+      ...deps,
+      messageBus: { publish: publishSpy, subscribe: vi.fn() } as any,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'bus_publish',
+        topic: 'status-update',
+        finding: 'System is healthy',
+        priority: 'low',
+      } as any,
+      'telegram_other',
+      false,
+      bussDeps,
+    );
+
+    expect(publishSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: 'telegram_other',
+        topic: 'status-update',
+        finding: 'System is healthy',
+        priority: 'low',
+      }),
+    );
+  });
+
+  it('does nothing when messageBus is not available', async () => {
+    // No messageBus in deps — should not crash
+    await processTaskIpc(
+      {
+        type: 'bus_publish',
+        topic: 'test',
+        finding: 'test',
+      } as any,
+      'telegram_other',
+      false,
+      deps,
+    );
+    // No crash is the test
+  });
+});
+
+// --- 5. Unknown task type handling ---
+
+describe('unknown task type', () => {
+  it('logs warning for completely unknown type', async () => {
+    // This should not crash; it falls through to the default case
+    await processTaskIpc(
+      { type: 'completely_unknown_type_xyz' },
+      'telegram_main',
+      true,
+      deps,
+    );
+    // If we reach here, no crash occurred
+  });
+});
+
+// --- 6. onTasksChanged callback ---
+
+describe('onTasksChanged callback', () => {
+  it('is called after schedule_task', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'test',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(onTasksChangedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('is called after cancel_task', async () => {
+    createTask({
+      id: 'task-to-cancel',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'cancel me',
+      schedule_type: 'once',
+      schedule_value: '2025-12-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-12-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'task-to-cancel' },
+      'telegram_other',
+      false,
+      deps,
+    );
+    expect(onTasksChangedSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('is NOT called when task operation is unauthorized', async () => {
+    createTask({
+      id: 'task-foreign',
+      group_folder: 'telegram_main',
+      chat_jid: 'tg:main123',
+      prompt: 'main only',
+      schedule_type: 'once',
+      schedule_value: '2025-12-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-12-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'task-foreign' },
+      'telegram_other',
+      false,
+      deps,
+    );
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 7. refresh_groups ---
+
+describe('refresh_groups', () => {
+  it('main group triggers syncGroups and writeGroupsSnapshot', async () => {
+    const writeSnapshotSpy = vi.fn();
+    const refreshDeps = { ...deps, writeGroupsSnapshot: writeSnapshotSpy };
+
+    await processTaskIpc(
+      { type: 'refresh_groups' },
+      'telegram_main',
+      true,
+      refreshDeps,
+    );
+
+    expect(syncGroupsSpy).toHaveBeenCalledWith(true);
+    expect(writeSnapshotSpy).toHaveBeenCalled();
+  });
+
+  it('non-main group is blocked from refresh_groups', async () => {
+    await processTaskIpc(
+      { type: 'refresh_groups' },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    expect(syncGroupsSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 8. Missing required fields are handled gracefully ---
+
+describe('missing required fields', () => {
+  it('schedule_task with no prompt does nothing', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+        // prompt is missing
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('schedule_task with no targetJid does nothing', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'test',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        // targetJid is missing
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('pause_task with no taskId does nothing', async () => {
+    await processTaskIpc(
+      { type: 'pause_task' },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('cancel_task with no taskId does nothing', async () => {
+    await processTaskIpc(
+      { type: 'cancel_task' },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('update_task with no taskId does nothing', async () => {
+    await processTaskIpc(
+      { type: 'update_task', prompt: 'nope' },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 9. schedule_task with custom taskId ---
+
+describe('schedule_task custom taskId', () => {
+  it('uses provided taskId instead of generating one', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        taskId: 'my-custom-id',
+        prompt: 'custom id task',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('my-custom-id');
+    expect(task).toBeDefined();
+    expect(task!.prompt).toBe('custom id task');
+  });
+});
+
+// --- 10. save_skill IPC ---
+
+describe('save_skill', () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-skill-test-'));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+    // Create container/skills directory
+    fs.mkdirSync(path.join(tmpDir, 'container', 'skills'), { recursive: true });
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('non-main group cannot save skills', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'evil-skill',
+        skillContent: '# Evil',
+      } as any,
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    // Skill should NOT be saved
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'evil-skill', 'SKILL.md'),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects invalid skill names', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: '../escape',
+        skillContent: '# Bad',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', '../escape', 'SKILL.md'),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects overwriting built-in skills', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'status',
+        skillContent: '# Overwritten',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'status', 'SKILL.md'),
+      ),
+    ).toBe(false);
+  });
+
+  it('main group can save a valid skill', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'my-new-skill',
+        skillContent: '# My New Skill\nDoes something.',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const skillPath = path.join(
+      tmpDir,
+      'container',
+      'skills',
+      'my-new-skill',
+      'SKILL.md',
+    );
+    expect(fs.existsSync(skillPath)).toBe(true);
+    expect(fs.readFileSync(skillPath, 'utf-8')).toBe(
+      '# My New Skill\nDoes something.',
+    );
+  });
+});
