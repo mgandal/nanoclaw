@@ -6,14 +6,14 @@ You maintain a persistent, compounding wiki knowledge base. The wiki sits betwee
 
 Three layers:
 
-1. **Sources** (`sources/`) — immutable raw material. You read but never modify these.
-2. **Wiki** (`wiki/`) — your domain. You create, update, and cross-reference pages here.
+1. **Sources** (`/workspace/extra/claire-vault/98-nanoKB/sources/`) — immutable raw material. You read but never modify these.
+2. **Wiki** (`/workspace/extra/claire-vault/98-nanoKB/wiki/`) — your domain. You create, update, and cross-reference pages here.
 3. **Schema** (this file) — how you maintain the wiki.
 
 Two special files:
 
-- `wiki/index.md` — content catalog. Every page listed with link, one-line summary, category. Update on every ingest.
-- `wiki/log.md` — append-only chronological log. Every operation gets an entry: `## [YYYY-MM-DD] operation | Description`
+- `98-nanoKB/wiki/index.md` — content catalog. Every page listed with link, one-line summary, category. Update on every ingest.
+- `98-nanoKB/wiki/log.md` — append-only chronological log. Every operation gets an entry: `## [YYYY-MM-DD] operation | Description`
 
 ## Wiki Page Conventions
 

@@ -356,13 +356,15 @@ You maintain a persistent, compounding wiki — a structured markdown knowledge 
 
 ### Structure
 
+The wiki lives on the shared vault at `/workspace/extra/claire-vault/98-nanoKB/`.
+
 | Path | Purpose |
 |------|---------|
-| `wiki/` | Your domain — LLM-generated/maintained pages |
-| `wiki/index.md` | Master catalog — read this first for any query |
-| `wiki/log.md` | Append-only operation log |
-| `sources/` | Immutable raw material — read but never modify |
-| `sources/{articles,papers,books,transcripts,media,data,misc}/` | Organized by type |
+| `/workspace/extra/claire-vault/98-nanoKB/wiki/` | Your domain — LLM-generated/maintained pages |
+| `/workspace/extra/claire-vault/98-nanoKB/wiki/index.md` | Master catalog — read this first for any query |
+| `/workspace/extra/claire-vault/98-nanoKB/wiki/log.md` | Append-only operation log |
+| `/workspace/extra/claire-vault/98-nanoKB/sources/` | Immutable raw material — read but never modify |
+| `/workspace/extra/claire-vault/98-nanoKB/sources/{articles,papers,books,transcripts,media,data,misc}/` | Organized by type |
 
 ### How it works
 
