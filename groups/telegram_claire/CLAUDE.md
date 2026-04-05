@@ -350,6 +350,31 @@ When composing daily digests or summaries, check `/workspace/project/data/system
 > **Infrastructure Alert (unresolved):**
 > - Gmail: OAuth token expired — Re-authorize by running the OAuth refresh flow in ~/.gmail-mcp/
 
+## Wiki Knowledge Base
+
+You maintain a persistent, compounding wiki — a structured markdown knowledge base that grows with every source added and question asked. This is NOT RAG. You build and maintain the wiki; queries read from pre-synthesized pages.
+
+### Structure
+
+| Path | Purpose |
+|------|---------|
+| `wiki/` | Your domain — LLM-generated/maintained pages |
+| `wiki/index.md` | Master catalog — read this first for any query |
+| `wiki/log.md` | Append-only operation log |
+| `sources/` | Immutable raw material — read but never modify |
+| `sources/{articles,papers,books,transcripts,media,data,misc}/` | Organized by type |
+
+### How it works
+
+See `container/skills/wiki/SKILL.md` for the full schema. Three operations:
+- **Ingest**: User sends a source → save it, extract knowledge, update 5-15 wiki pages, update index + log
+- **Query**: Read index → find relevant pages → synthesize answer from wiki (not raw sources)
+- **Lint**: Periodic health check for contradictions, orphans, stale claims, gaps
+
+### Triggers
+
+When the user sends a URL, PDF, paper, image, or says "add this to the wiki" — run the ingest workflow. When asking a question that the wiki might answer — check the wiki first. Periodically (or when asked) — run lint.
+
 ## User Preferences
 
 - **Timezone**: America/New_York (EST/EDT) — always display times in this timezone

@@ -9,6 +9,7 @@ import { Api, Bot, InlineKeyboard, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
+import { downloadFile, processImage } from '../image.js';
 import { logger } from '../logger.js';
 import { countPdfPages, indexPdf, computeFileHash } from '../pageindex.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -368,7 +369,60 @@ export class TelegramChannel implements Channel {
       });
     };
 
-    this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
+    this.bot.on('message:photo', async (ctx) => {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+      if (!group) return;
+
+      // Telegram provides multiple sizes; pick the largest
+      const photos = ctx.message.photo;
+      const largest = photos[photos.length - 1];
+
+      try {
+        const file = await ctx.api.getFile(largest.file_id);
+        const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+        const buffer = await downloadFile(url);
+        const image = await processImage(buffer);
+
+        const timestamp = new Date(ctx.message.date * 1000).toISOString();
+        const senderName =
+          ctx.from?.first_name ||
+          ctx.from?.username ||
+          ctx.from?.id?.toString() ||
+          'Unknown';
+        const caption = ctx.message.caption
+          ? ` ${ctx.message.caption}`
+          : '';
+        const isGroup =
+          ctx.chat.type === 'group' || ctx.chat.type === 'supergroup';
+
+        this.opts.onChatMetadata(
+          chatJid,
+          timestamp,
+          undefined,
+          'telegram',
+          isGroup,
+        );
+        this.opts.onMessage(chatJid, {
+          id: ctx.message.message_id.toString(),
+          chat_jid: chatJid,
+          sender: ctx.from?.id?.toString() || '',
+          sender_name: senderName,
+          content: `[Photo]${caption}`,
+          timestamp,
+          is_from_me: false,
+          images: [image],
+        });
+
+        logger.info(
+          { chatJid, sender: senderName, size: buffer.length },
+          'Telegram photo processed for vision',
+        );
+      } catch (err) {
+        logger.warn({ err, chatJid }, 'Failed to process Telegram photo');
+        storeNonText(ctx, '[Photo]'); // graceful fallback
+      }
+    });
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
     this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));

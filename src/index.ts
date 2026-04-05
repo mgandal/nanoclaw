@@ -120,6 +120,11 @@ let healthMonitor: HealthMonitor;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
+// In-memory cache for image attachments (keyed by chat_jid:message_id).
+// Images are too large for SQLite. Populated on message arrival, consumed
+// when processGroupMessages builds the prompt, then cleared.
+const pendingImages = new Map<string, Array<{ base64: string; mediaType: string }>>();
+
 function loadState(): void {
   lastSeq = parseInt(getRouterState('last_seq') || '0', 10);
   const agentSeqStr = getRouterState('last_agent_seq');
@@ -285,7 +290,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) =>
-        runAgent(group, prompt, chatJid, onOutput),
+        runAgent(group, prompt, chatJid, undefined, onOutput),
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (seq) => {
         lastAgentSeq[chatJid] = seq;
@@ -324,6 +329,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
 
+  // Collect images from in-memory cache (populated by onMessage handler)
+  const images: Array<{ base64: string; mediaType: string }> = [];
+  for (const m of missedMessages) {
+    const key = `${chatJid}:${m.id}`;
+    const cached = pendingImages.get(key);
+    if (cached) {
+      images.push(...cached);
+      pendingImages.delete(key);
+    }
+  }
+
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = getOrRecoverSeq(chatJid);
@@ -353,7 +369,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
+  const output = await runAgent(group, prompt, chatJid, images.length > 0 ? images : undefined, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -410,6 +426,7 @@ async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
+  images?: Array<{ base64: string; mediaType: string }>,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
@@ -506,6 +523,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        images,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -1178,6 +1196,11 @@ async function main(): Promise<void> {
           }
           return;
         }
+      }
+      // Cache image attachments in memory (not stored in DB — too large)
+      if (msg.images?.length) {
+        const key = `${chatJid}:${msg.id}`;
+        pendingImages.set(key, msg.images);
       }
       try {
         storeMessage(msg);
