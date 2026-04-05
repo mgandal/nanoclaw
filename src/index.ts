@@ -108,8 +108,6 @@ import {
   parseLastAgentSeq,
 } from './index-helpers.js';
 
-// Re-export for backwards compatibility during refactor
-export { escapeXml, formatMessages } from './router.js';
 
 let lastSeq = 0;
 let sessions: Record<string, string> = {};
@@ -1058,10 +1056,12 @@ async function main(): Promise<void> {
   const healthServer = createServer((req, res) => {
     if (req.url === '/health' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        uptime: Math.floor((Date.now() - startTime) / 1000),
-        startupComplete,
-      }));
+      res.end(
+        JSON.stringify({
+          uptime: Math.floor((Date.now() - startTime) / 1000),
+          startupComplete,
+        }),
+      );
     } else {
       res.writeHead(404);
       res.end();
@@ -1074,7 +1074,9 @@ async function main(): Promise<void> {
 
   // Event loop liveness: if the loop is blocked >30s, exit and let launchd restart
   let lastEventLoopTick = Date.now();
-  setInterval(() => { lastEventLoopTick = Date.now(); }, 5000);
+  setInterval(() => {
+    lastEventLoopTick = Date.now();
+  }, 5000);
   setInterval(() => {
     if (Date.now() - lastEventLoopTick > 30_000) {
       logger.fatal('Event loop stalled for >30s, exiting for launchd restart');
