@@ -2,6 +2,14 @@
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
+## Testing Policy
+
+ALWAYS run tests and verify fixes before declaring them done. Never ship code without confirming it works. Use test-first (TDD) methodology when fixing bugs.
+
+## Scope Discipline
+
+Do NOT make changes beyond what was requested. When asked for status checks, only report status. When fixing one issue, don't refactor adjacent code. Avoid excessive changes.
+
 ## Quick Context
 
 Single Node.js process with skill-based channel system. Currently Telegram-only (WhatsApp is a separate fork). Messages route to Claude Agent SDK running in Apple Container (Linux VMs). Each group has isolated filesystem and memory.
@@ -78,6 +86,20 @@ systemctl --user restart nanoclaw
 ## Troubleshooting
 
 **WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `bun scripts/apply-skill.ts .claude/skills/add-whatsapp && bun run build`) to install it. Existing auth credentials and groups are preserved.
+
+## Infrastructure / Services
+
+- SimpleMem runs in Docker — do NOT try to start it locally or create duplicate configs
+- QMD must bind to IPv4 (0.0.0.0), not just IPv6
+- Cognee uses SQLite — always check for orphaned processes holding DB locks before starting
+- Todoist uses REST API v1 (not v2)
+- When checking service status, report what you find — do NOT attempt to fix services that are already running correctly
+
+## Debugging Rules
+
+- Check for orphaned/stale processes FIRST when hitting database locks or port conflicts
+- When a user provides a new API token, trust it — don't claim it's identical to the old one
+- When hitting auth errors, verify you're using the correct API version before cycling through other hypotheses
 
 ## Container Build Cache
 

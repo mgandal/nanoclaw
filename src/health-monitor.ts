@@ -413,12 +413,19 @@ export function createDefaultFixActions(): FixActions {
       try {
         const { stdout, stderr } = await execFileAsync(script, args ?? [], {
           timeout: 30_000,
-          env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: process.env.HOME || '' },
+          env: {
+            PATH: '/usr/local/bin:/usr/bin:/bin',
+            HOME: process.env.HOME || '',
+          },
         });
         return { ok: true, stdout, stderr };
       } catch (err: unknown) {
         const e = err as { stdout?: string; stderr?: string; message?: string };
-        return { ok: false, stdout: e.stdout ?? '', stderr: e.stderr ?? e.message ?? '' };
+        return {
+          ok: false,
+          stdout: e.stdout ?? '',
+          stderr: e.stderr ?? e.message ?? '',
+        };
       }
     },
 
@@ -440,7 +447,10 @@ export function createDefaultFixActions(): FixActions {
             },
           );
           req.on('error', () => resolve({ reachable: false }));
-          req.on('timeout', () => { req.destroy(); resolve({ reachable: false }); });
+          req.on('timeout', () => {
+            req.destroy();
+            resolve({ reachable: false });
+          });
           req.end();
         } catch {
           resolve({ reachable: false });
@@ -456,15 +466,25 @@ export function createDefaultFixActions(): FixActions {
           const lock = JSON.parse(content) as { pid: number; started: string };
           const age = Date.now() - new Date(lock.started).getTime();
           if (age < 300_000) {
-            try { process.kill(lock.pid, 0); return false; } catch { /* PID dead, take lock */ }
+            try {
+              process.kill(lock.pid, 0);
+              return false;
+            } catch {
+              /* PID dead, take lock */
+            }
           }
-        } catch { /* no lock file or invalid, proceed */ }
+        } catch {
+          /* no lock file or invalid, proceed */
+        }
         const tmp = LOCK_PATH + '.tmp';
-        await fs.writeFile(tmp, JSON.stringify({
-          pid: process.pid,
-          action,
-          started: new Date().toISOString(),
-        }));
+        await fs.writeFile(
+          tmp,
+          JSON.stringify({
+            pid: process.pid,
+            action,
+            started: new Date().toISOString(),
+          }),
+        );
         await fs.rename(tmp, LOCK_PATH);
         return true;
       } catch {
@@ -473,7 +493,11 @@ export function createDefaultFixActions(): FixActions {
     },
 
     releaseLock: async () => {
-      try { await fs.unlink(LOCK_PATH); } catch { /* ignore */ }
+      try {
+        await fs.unlink(LOCK_PATH);
+      } catch {
+        /* ignore */
+      }
     },
   };
 }

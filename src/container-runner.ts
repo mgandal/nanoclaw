@@ -387,7 +387,10 @@ function buildContainerArgs(
         `HINDSIGHT_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
       );
     } catch {
-      logger.warn({ hindsightUrl }, 'Invalid HINDSIGHT_URL, skipping Hindsight');
+      logger.warn(
+        { hindsightUrl },
+        'Invalid HINDSIGHT_URL, skipping Hindsight',
+      );
     }
   }
 
