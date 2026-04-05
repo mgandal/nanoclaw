@@ -887,7 +887,8 @@ describe('NULL and edge-case handling in messages', () => {
   });
 
   it('stores messages with unicode, emoji, and special characters', () => {
-    const specialContent = '🎉 Hello 世界! <script>alert("xss")</script> \n\t\r\0 SELECT * FROM messages; -- \'"; DROP TABLE messages;';
+    const specialContent =
+      '🎉 Hello 世界! <script>alert("xss")</script> \n\t\r\0 SELECT * FROM messages; -- \'"; DROP TABLE messages;';
     store({
       id: 'unicode-1',
       chat_jid: 'group@g.us',
@@ -1088,7 +1089,9 @@ describe('operations on non-existent groups', () => {
   });
 
   it('getLastBotMessageTimestamp returns undefined for non-existent chat', () => {
-    expect(getLastBotMessageTimestamp('nonexistent@g.us', 'Andy')).toBeUndefined();
+    expect(
+      getLastBotMessageTimestamp('nonexistent@g.us', 'Andy'),
+    ).toBeUndefined();
   });
 
   it('getLastSuccessTime returns null for non-existent task', () => {
@@ -1314,20 +1317,32 @@ describe('storeChatMetadata channel classification', () => {
   });
 
   it('stores explicit channel and isGroup', () => {
-    storeChatMetadata('tg:123', '2024-01-01T00:00:00.000Z', 'Test', 'telegram', false);
+    storeChatMetadata(
+      'tg:123',
+      '2024-01-01T00:00:00.000Z',
+      'Test',
+      'telegram',
+      false,
+    );
     const chats = getAllChats();
-    const chat = chats.find(c => c.jid === 'tg:123');
+    const chat = chats.find((c) => c.jid === 'tg:123');
     expect(chat).toBeDefined();
     expect(chat!.channel).toBe('telegram');
     expect(chat!.is_group).toBe(0);
   });
 
   it('COALESCE preserves existing channel when new value is null', () => {
-    storeChatMetadata('tg:123', '2024-01-01T00:00:00.000Z', 'Test', 'telegram', true);
+    storeChatMetadata(
+      'tg:123',
+      '2024-01-01T00:00:00.000Z',
+      'Test',
+      'telegram',
+      true,
+    );
     // Update without channel — should preserve 'telegram'
     storeChatMetadata('tg:123', '2024-01-01T00:00:01.000Z', 'Test Updated');
     const chats = getAllChats();
-    const chat = chats.find(c => c.jid === 'tg:123');
+    const chat = chats.find((c) => c.jid === 'tg:123');
     expect(chat!.channel).toBe('telegram');
     expect(chat!.is_group).toBe(1);
   });
@@ -1336,7 +1351,7 @@ describe('storeChatMetadata channel classification', () => {
     storeChatMetadata('tg:123', '2024-06-01T00:00:00.000Z', 'Old Name');
     updateChatName('tg:123', 'New Name');
     const chats = getAllChats();
-    const chat = chats.find(c => c.jid === 'tg:123');
+    const chat = chats.find((c) => c.jid === 'tg:123');
     expect(chat!.name).toBe('New Name');
     // timestamp should remain the original (updateChatName uses ON CONFLICT DO UPDATE SET name only)
     expect(chat!.last_message_time).toBe('2024-06-01T00:00:00.000Z');

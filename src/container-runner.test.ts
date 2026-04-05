@@ -257,11 +257,7 @@ describe('container-runner spawn error handling', () => {
   });
 
   it('resolves with error when spawn emits ENOENT (runtime not found)', async () => {
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     // Need to let the event listeners be registered first
     await vi.advanceTimersByTimeAsync(1);
@@ -280,17 +276,11 @@ describe('container-runner spawn error handling', () => {
   });
 
   it('resolves with error when spawn emits EACCES (permission denied)', async () => {
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(1);
 
-    const error = new Error(
-      'spawn container EACCES',
-    ) as NodeJS.ErrnoException;
+    const error = new Error('spawn container EACCES') as NodeJS.ErrnoException;
     error.code = 'EACCES';
     fakeProc.emit('error', error);
 
@@ -303,11 +293,7 @@ describe('container-runner spawn error handling', () => {
   });
 
   it('resolves with error on non-zero exit code and includes stderr tail', async () => {
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     // Emit some stderr output to verify it's included in the error
     fakeProc.stderr.push('Error: out of memory\nCannot allocate 4GB\n');
@@ -409,11 +395,7 @@ describe('container-runner output parsing', () => {
   });
 
   it('legacy mode returns error on unparseable stdout', async () => {
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     // No markers at all — just garbage
     fakeProc.stdout.push('this is not JSON at all\nreally not\n');
@@ -522,11 +504,7 @@ describe('container-runner environment variable handling', () => {
   it('passes OAuth placeholder when auth mode is oauth', async () => {
     vi.mocked(detectAuthMode).mockReturnValue('oauth');
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
@@ -535,9 +513,7 @@ describe('container-runner environment variable handling', () => {
     const args = spawnCall[1] as string[];
 
     // Find env var values (args that follow '-e')
-    const envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
     // Should have ANTHROPIC_AUTH_TOKEN=placeholder (not ANTHROPIC_API_KEY)
     const authTokenVar = envVars.find((a) =>
@@ -546,9 +522,7 @@ describe('container-runner environment variable handling', () => {
     expect(authTokenVar).toBe('ANTHROPIC_AUTH_TOKEN=placeholder');
 
     // Should NOT have ANTHROPIC_API_KEY
-    const apiKeyVar = envVars.find((a) =>
-      a.startsWith('ANTHROPIC_API_KEY='),
-    );
+    const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
     expect(apiKeyVar).toBeUndefined();
 
     // Clean up
@@ -562,23 +536,15 @@ describe('container-runner environment variable handling', () => {
   it('passes API key placeholder when auth mode is api-key', async () => {
     vi.mocked(detectAuthMode).mockReturnValue('api-key');
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
-    const apiKeyVar = envVars.find((a) =>
-      a.startsWith('ANTHROPIC_API_KEY='),
-    );
+    const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
     expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
 
     fakeProc.emit('close', 0);
@@ -587,23 +553,16 @@ describe('container-runner environment variable handling', () => {
 
   it('rewrites localhost to host gateway in SIMPLEMEM_URL', async () => {
     vi.mocked(readEnvFile).mockReturnValue({
-      SIMPLEMEM_URL:
-        'http://localhost:8200/mcp?token=secret123',
+      SIMPLEMEM_URL: 'http://localhost:8200/mcp?token=secret123',
     });
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
     const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
     expect(simpleMemVar).toBeDefined();
@@ -625,19 +584,13 @@ describe('container-runner environment variable handling', () => {
       SIMPLEMEM_URL: 'not-a-valid-url',
     });
 
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
     // Should NOT have SIMPLEMEM_URL in args
     const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
@@ -653,19 +606,13 @@ describe('container-runner environment variable handling', () => {
     // QMD not reachable (default)
     setQmdReachable(false);
 
-    const resultPromise1 = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise1 = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     let spawnCall = vi.mocked(spawn).mock.calls[0];
     let args = spawnCall[1] as string[];
-    let envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    let envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
     let qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
     expect(qmdVar).toBeUndefined();
 
@@ -677,19 +624,13 @@ describe('container-runner environment variable handling', () => {
     fakeProc = createFakeProcess();
     vi.mocked(spawn).mockReturnValue(fakeProc as any);
 
-    const resultPromise2 = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise2 = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     spawnCall = vi.mocked(spawn).mock.calls[1];
     args = spawnCall[1] as string[];
-    envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
     qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
     expect(qmdVar).toBeDefined();
     expect(qmdVar).toContain('host.docker.internal:8181/mcp');
@@ -891,19 +832,13 @@ describe('container-runner redacts sensitive args', () => {
   });
 
   it('does not expose real credentials in spawn args', async () => {
-    const resultPromise = runContainerAgent(
-      testGroup,
-      testInput,
-      () => {},
-    );
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter(
-      (a, i) => i > 0 && args[i - 1] === '-e',
-    );
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
     // The proxy token is embedded in the ANTHROPIC_BASE_URL — verify it
     // uses the test proxy token, NOT a real API key

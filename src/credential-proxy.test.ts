@@ -197,11 +197,15 @@ describe('credential-proxy', () => {
   it('rejects requests without valid proxy token (returns 403)', async () => {
     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
 
-    const res = await makeRequest(proxyPort, {
-      method: 'POST',
-      path: '/invalid-token/v1/messages',
-      headers: { 'content-type': 'application/json' },
-    }, '{}');
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: '/invalid-token/v1/messages',
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
 
     expect(res.statusCode).toBe(403);
     expect(res.body).toBe('Forbidden');
@@ -538,6 +542,8 @@ describe('credential-proxy', () => {
     const beta = lastUpstreamHeaders['anthropic-beta'] as string;
     expect(beta).toContain('oauth-2025-04-20');
     expect(beta).toContain('claude-code-20250219');
-    expect(lastUpstreamHeaders['anthropic-dangerous-direct-browser-access']).toBe('true');
+    expect(
+      lastUpstreamHeaders['anthropic-dangerous-direct-browser-access'],
+    ).toBe('true');
   });
 });

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs';
-import { assembleContextPacket, writeContextPacket } from './context-assembler.js';
+import {
+  assembleContextPacket,
+  writeContextPacket,
+} from './context-assembler.js';
 import { getRecentMessages, getAllTasks } from './db.js';
 
 vi.mock('http', () => {
@@ -256,7 +259,9 @@ describe('assembleContextPacket', () => {
     const fourDaysAgo = Date.now() - 4 * 24 * 60 * 60 * 1000;
     vi.mocked(fs.existsSync).mockReturnValue(true);
     vi.mocked(fs.readFileSync).mockReturnValue('some content');
-    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: fourDaysAgo } as fs.Stats);
+    vi.mocked(fs.statSync).mockReturnValue({
+      mtimeMs: fourDaysAgo,
+    } as fs.Stats);
     const packet = await assembleContextPacket('telegram_test', false);
     expect(packet).toContain('Stale Files');
     expect(packet).toContain('days ago');
@@ -287,7 +292,10 @@ describe('assembleContextPacket', () => {
           topic: 'classified_event',
           from: 'inbox-agent',
           finding: 'Urgent email from NIH',
-          classification: { urgency: 'high', summary: 'Grant deadline moved up' },
+          classification: {
+            urgency: 'high',
+            summary: 'Grant deadline moved up',
+          },
         },
       ]),
     );
@@ -313,8 +321,14 @@ describe('writeContextPacket', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('writes context packet atomically via tmp+rename', async () => {
-    const packet = await writeContextPacket('telegram_test', false, '/tmp/test-ipc');
-    expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/test-ipc', { recursive: true });
+    const packet = await writeContextPacket(
+      'telegram_test',
+      false,
+      '/tmp/test-ipc',
+    );
+    expect(fs.mkdirSync).toHaveBeenCalledWith('/tmp/test-ipc', {
+      recursive: true,
+    });
     expect(fs.writeFileSync).toHaveBeenCalledWith(
       '/tmp/test-ipc/context-packet.txt.tmp',
       expect.any(String),
@@ -333,9 +347,11 @@ describe('writeContextPacket', () => {
     await writeContextPacket('telegram_test', false, '/tmp/test-ipc');
     expect(fs.copyFileSync).toHaveBeenCalled();
     // Bus queue should be cleared after copy (atomic write of '[]')
-    const writeCall = vi.mocked(fs.writeFileSync).mock.calls.find(
-      (c) => typeof c[0] === 'string' && c[0].includes('queue.json.tmp'),
-    );
+    const writeCall = vi
+      .mocked(fs.writeFileSync)
+      .mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].includes('queue.json.tmp'),
+      );
     expect(writeCall).toBeDefined();
     expect(writeCall![1]).toBe('[]');
   });

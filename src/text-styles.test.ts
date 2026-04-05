@@ -136,9 +136,7 @@ describe('parseTextStyles — adjacent formatting', () => {
   });
 
   it('handles multiple bold segments on telegram', () => {
-    expect(parseTextStyles('**a** and **b**', 'telegram')).toBe(
-      '*a* and *b*',
-    );
+    expect(parseTextStyles('**a** and **b**', 'telegram')).toBe('*a* and *b*');
   });
 
   it('handles multiple italic segments on slack', () => {

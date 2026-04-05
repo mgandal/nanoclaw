@@ -766,7 +766,7 @@ describe('TelegramChannel', () => {
 
       // First call (Markdown) fails, second call (plain) succeeds
       botRef.apiMock.sendMessage
-        .mockRejectedValueOnce(new Error('Bad Request: can\'t parse entities'))
+        .mockRejectedValueOnce(new Error("Bad Request: can't parse entities"))
         .mockResolvedValueOnce(undefined);
 
       await channel.sendMessage('tg:12345', 'Hello *bad markdown');

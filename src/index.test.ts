@@ -280,9 +280,9 @@ describe('isStaleSessionError', () => {
   });
 
   it('detects ENOENT .jsonl errors', () => {
-    expect(
-      isStaleSessionError('ENOENT: no such file /tmp/session.jsonl'),
-    ).toBe(true);
+    expect(isStaleSessionError('ENOENT: no such file /tmp/session.jsonl')).toBe(
+      true,
+    );
   });
 
   it('detects "session not found" errors', () => {

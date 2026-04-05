@@ -15,7 +15,10 @@ const JPEG_QUALITY = 85;
  */
 export async function processImage(buffer: Buffer): Promise<ImageAttachment> {
   const resized = await sharp(buffer)
-    .resize(MAX_DIMENSION, MAX_DIMENSION, { fit: 'inside', withoutEnlargement: true })
+    .resize(MAX_DIMENSION, MAX_DIMENSION, {
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
     .jpeg({ quality: JPEG_QUALITY })
     .toBuffer();
 
