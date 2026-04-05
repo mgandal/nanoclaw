@@ -102,6 +102,11 @@ import { checkMcpEndpoint } from './health-check.js';
 import { appendAlert } from './system-alerts.js';
 import { readEnvFile } from './env.js';
 import YAML from 'yaml';
+import {
+  checkSessionExpiry,
+  isStaleSessionError,
+  parseLastAgentSeq,
+} from './index-helpers.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -119,12 +124,7 @@ const queue = new GroupQueue();
 function loadState(): void {
   lastSeq = parseInt(getRouterState('last_seq') || '0', 10);
   const agentSeqStr = getRouterState('last_agent_seq');
-  try {
-    lastAgentSeq = agentSeqStr ? JSON.parse(agentSeqStr) : {};
-  } catch {
-    logger.warn('Corrupted last_agent_seq in DB, resetting');
-    lastAgentSeq = {};
-  }
+  lastAgentSeq = parseLastAgentSeq(agentSeqStr);
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
   logger.info(
@@ -432,19 +432,19 @@ async function runAgent(
   let sessionId: string | undefined = sessions[group.folder];
   if (sessionId) {
     const { lastUsed, createdAt } = getSessionTimestamps(group.folder);
-    const idleAge = lastUsed
-      ? Date.now() - new Date(lastUsed).getTime()
-      : Infinity;
-    const totalAge = createdAt
-      ? Date.now() - new Date(createdAt).getTime()
-      : Infinity;
-    const expireReason =
-      totalAge > SESSION_MAX_AGE_MS
-        ? 'max age (4h)'
-        : idleAge > SESSION_IDLE_MS
-          ? 'idle (2h)'
-          : null;
+    const expireReason = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      SESSION_IDLE_MS,
+      SESSION_MAX_AGE_MS,
+    );
     if (expireReason) {
+      const idleAge = lastUsed
+        ? Date.now() - new Date(lastUsed).getTime()
+        : Infinity;
+      const totalAge = createdAt
+        ? Date.now() - new Date(createdAt).getTime()
+        : Infinity;
       logger.info(
         {
           group: group.name,
@@ -529,11 +529,7 @@ async function runAgent(
       // deletion, or disk-full. The existing backoff in group-queue.ts
       // handles the retry; we just need to remove the broken session ID.
       const isStaleSession =
-        sessionId &&
-        output.error &&
-        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
-          output.error,
-        );
+        sessionId && isStaleSessionError(output.error);
 
       if (isStaleSession) {
         logger.warn(
