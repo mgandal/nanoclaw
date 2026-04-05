@@ -469,7 +469,12 @@ describe('validateAdditionalMounts', () => {
       { hostPath: path.join(allowedRoot, 'nonexistent'), readonly: true },
     ];
 
-    const results = validateAdditionalMounts(mounts, 'test-group', true, allowlistPath);
+    const results = validateAdditionalMounts(
+      mounts,
+      'test-group',
+      true,
+      allowlistPath,
+    );
     expect(results).toHaveLength(1);
     expect(results[0].hostPath).toBe(fs.realpathSync(goodDir));
     expect(results[0].containerPath).toBe('/workspace/extra/good');
@@ -489,7 +494,12 @@ describe('validateAdditionalMounts', () => {
     });
 
     const mounts: AdditionalMount[] = [{ hostPath: subdir, readonly: true }];
-    const results = validateAdditionalMounts(mounts, 'test-group', true, allowlistPath);
+    const results = validateAdditionalMounts(
+      mounts,
+      'test-group',
+      true,
+      allowlistPath,
+    );
     expect(results).toHaveLength(1);
     expect(results[0].containerPath).toBe('/workspace/extra/my-repo');
   });
@@ -509,7 +519,12 @@ describe('validateAdditionalMounts', () => {
     const mounts: AdditionalMount[] = [
       { hostPath: subdir, containerPath: 'custom-name', readonly: true },
     ];
-    const results = validateAdditionalMounts(mounts, 'test-group', true, allowlistPath);
+    const results = validateAdditionalMounts(
+      mounts,
+      'test-group',
+      true,
+      allowlistPath,
+    );
     expect(results).toHaveLength(1);
     expect(results[0].containerPath).toBe('/workspace/extra/custom-name');
   });
@@ -578,11 +593,7 @@ describe('validateMount — edge cases', () => {
   it('blocks symlink that resolves outside allowed root', () => {
     const allowedRoot = createTempMountDir('allowed');
     const outsideDir = createTempMountDir('outside');
-    const symlinkPath = path.join(
-      tmpDir,
-      'allowed',
-      'sneaky-link',
-    );
+    const symlinkPath = path.join(tmpDir, 'allowed', 'sneaky-link');
     fs.symlinkSync(outsideDir, symlinkPath);
 
     writeAllowlist({

@@ -299,7 +299,9 @@ describe('TIMEZONE', () => {
   });
 
   it('is a valid IANA timezone (Intl can use it)', () => {
-    expect(() => Intl.DateTimeFormat(undefined, { timeZone: TIMEZONE })).not.toThrow();
+    expect(() =>
+      Intl.DateTimeFormat(undefined, { timeZone: TIMEZONE }),
+    ).not.toThrow();
   });
 });
 

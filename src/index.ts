@@ -109,7 +109,6 @@ import {
   parseLastAgentSeq,
 } from './index-helpers.js';
 
-
 let lastSeq = 0;
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
@@ -123,7 +122,10 @@ const queue = new GroupQueue();
 // In-memory cache for image attachments (keyed by chat_jid:message_id).
 // Images are too large for SQLite. Populated on message arrival, consumed
 // when processGroupMessages builds the prompt, then cleared.
-const pendingImages = new Map<string, Array<{ base64: string; mediaType: string }>>();
+const pendingImages = new Map<
+  string,
+  Array<{ base64: string; mediaType: string }>
+>();
 
 function loadState(): void {
   lastSeq = parseInt(getRouterState('last_seq') || '0', 10);
@@ -369,32 +371,38 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, images.length > 0 ? images : undefined, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    images.length > 0 ? images : undefined,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -545,8 +553,7 @@ async function runAgent(
       // The session .jsonl can go missing after a crash mid-write, manual
       // deletion, or disk-full. The existing backoff in group-queue.ts
       // handles the retry; we just need to remove the broken session ID.
-      const isStaleSession =
-        sessionId && isStaleSessionError(output.error);
+      const isStaleSession = sessionId && isStaleSessionError(output.error);
 
       if (isStaleSession) {
         logger.warn(

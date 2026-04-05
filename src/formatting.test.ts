@@ -11,7 +11,11 @@ import {
   formatOutbound,
   stripInternalTags,
 } from './router.js';
-import { parseTextStyles, parseSignalStyles, ChannelType } from './text-styles.js';
+import {
+  parseTextStyles,
+  parseSignalStyles,
+  ChannelType,
+} from './text-styles.js';
 import { NewMessage } from './types.js';
 
 function makeMsg(overrides: Partial<NewMessage> = {}): NewMessage {
@@ -682,9 +686,7 @@ describe('formatMessages — edge cases', () => {
       [makeMsg({ reply_to_message_id: 'id<with>&"special' })],
       'UTC',
     );
-    expect(result).toContain(
-      'reply_to="id&lt;with&gt;&amp;&quot;special"',
-    );
+    expect(result).toContain('reply_to="id&lt;with&gt;&amp;&quot;special"');
   });
 });
 
@@ -730,7 +732,11 @@ describe('formatOutbound — edge cases', () => {
   });
 
   it('applies formatting for all known channel types', () => {
-    const channels: Array<{ type: ChannelType; input: string; expected: string }> = [
+    const channels: Array<{
+      type: ChannelType;
+      input: string;
+      expected: string;
+    }> = [
       { type: 'whatsapp', input: '**bold**', expected: '*bold*' },
       { type: 'telegram', input: '**bold**', expected: '*bold*' },
       { type: 'slack', input: '**bold**', expected: '*bold*' },

@@ -496,23 +496,13 @@ describe('missing required fields', () => {
   });
 
   it('pause_task with no taskId does nothing', async () => {
-    await processTaskIpc(
-      { type: 'pause_task' },
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc({ type: 'pause_task' }, 'telegram_main', true, deps);
 
     expect(onTasksChangedSpy).not.toHaveBeenCalled();
   });
 
   it('cancel_task with no taskId does nothing', async () => {
-    await processTaskIpc(
-      { type: 'cancel_task' },
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc({ type: 'cancel_task' }, 'telegram_main', true, deps);
 
     expect(onTasksChangedSpy).not.toHaveBeenCalled();
   });

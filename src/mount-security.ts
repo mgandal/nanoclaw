@@ -54,10 +54,16 @@ const DEFAULT_BLOCKED_PATTERNS = [
  * Returns null if the file doesn't exist or is invalid.
  * Result is cached in memory for the lifetime of the process.
  */
-export function loadMountAllowlist(pathOverride?: string): MountAllowlist | null {
+export function loadMountAllowlist(
+  pathOverride?: string,
+): MountAllowlist | null {
   const allowlistFile = pathOverride ?? MOUNT_ALLOWLIST_PATH;
   const now = Date.now();
-  if (!pathOverride && cachedAllowlist !== null && now - cacheTimestamp < CACHE_TTL_MS) {
+  if (
+    !pathOverride &&
+    cachedAllowlist !== null &&
+    now - cacheTimestamp < CACHE_TTL_MS
+  ) {
     return cachedAllowlist;
   }
 

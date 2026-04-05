@@ -333,15 +333,21 @@ describe('HealthMonitor concurrent and mixed scenarios', () => {
     // 2 failures — below threshold
     monitor.recordInfraEvent('svc', 'down');
     monitor.recordInfraEvent('svc', 'down');
-    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(0);
+    expect(
+      monitor.checkThresholds().filter((a) => a.type === 'infra_error'),
+    ).toHaveLength(0);
 
     // 3rd failure — hits threshold
     monitor.recordInfraEvent('svc', 'down');
-    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(1);
+    expect(
+      monitor.checkThresholds().filter((a) => a.type === 'infra_error'),
+    ).toHaveLength(1);
 
     // 4th failure — stays alerting (count > threshold)
     monitor.recordInfraEvent('svc', 'still down');
-    expect(monitor.checkThresholds().filter((a) => a.type === 'infra_error')).toHaveLength(1);
+    expect(
+      monitor.checkThresholds().filter((a) => a.type === 'infra_error'),
+    ).toHaveLength(1);
   });
 });
 

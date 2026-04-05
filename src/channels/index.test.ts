@@ -31,7 +31,10 @@ function mockOpts(): ChannelOpts {
 }
 
 /** Helper: create a minimal Channel implementation for testing */
-function createMockChannel(name: string, overrides: Partial<Channel> = {}): Channel {
+function createMockChannel(
+  name: string,
+  overrides: Partial<Channel> = {},
+): Channel {
   return {
     name,
     connect: vi.fn().mockResolvedValue(undefined),
@@ -141,8 +144,12 @@ describe('channel interface compliance', () => {
 
 describe('duplicate channel registration', () => {
   it('last registration wins (overwrites previous factory)', () => {
-    const factory1 = vi.fn((_opts: ChannelOpts) => createMockChannel('dup', { name: 'dup-v1' }));
-    const factory2 = vi.fn((_opts: ChannelOpts) => createMockChannel('dup', { name: 'dup-v2' }));
+    const factory1 = vi.fn((_opts: ChannelOpts) =>
+      createMockChannel('dup', { name: 'dup-v1' }),
+    );
+    const factory2 = vi.fn((_opts: ChannelOpts) =>
+      createMockChannel('dup', { name: 'dup-v2' }),
+    );
 
     registerChannel('dup-channel', factory1);
     registerChannel('dup-channel', factory2);
@@ -168,7 +175,9 @@ describe('channel connection lifecycle', () => {
   it('connect transitions channel to connected state', async () => {
     let connected = false;
     const channel = createMockChannel('lifecycle', {
-      connect: vi.fn(async () => { connected = true; }),
+      connect: vi.fn(async () => {
+        connected = true;
+      }),
       isConnected: vi.fn(() => connected),
     });
 
@@ -180,8 +189,12 @@ describe('channel connection lifecycle', () => {
   it('disconnect transitions channel away from connected state', async () => {
     let connected = true;
     const channel = createMockChannel('lifecycle-disc', {
-      connect: vi.fn(async () => { connected = true; }),
-      disconnect: vi.fn(async () => { connected = false; }),
+      connect: vi.fn(async () => {
+        connected = true;
+      }),
+      disconnect: vi.fn(async () => {
+        connected = false;
+      }),
       isConnected: vi.fn(() => connected),
     });
 

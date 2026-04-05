@@ -32,12 +32,10 @@ vi.mock('os', async () => {
     default: {
       ...actual,
       platform: (...args: unknown[]) => mockPlatform(...args),
-      networkInterfaces: (...args: unknown[]) =>
-        mockNetworkInterfaces(...args),
+      networkInterfaces: (...args: unknown[]) => mockNetworkInterfaces(...args),
     },
     platform: (...args: unknown[]) => mockPlatform(...args),
-    networkInterfaces: (...args: unknown[]) =>
-      mockNetworkInterfaces(...args),
+    networkInterfaces: (...args: unknown[]) => mockNetworkInterfaces(...args),
   };
 });
 
@@ -312,9 +310,7 @@ describe('stopContainer edge cases', () => {
   });
 
   it('rejects names with newlines (shell injection vector)', () => {
-    expect(() => stopContainer('name\n--rm')).toThrow(
-      'Invalid container name',
-    );
+    expect(() => stopContainer('name\n--rm')).toThrow('Invalid container name');
   });
 });
 
