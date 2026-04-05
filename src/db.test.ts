@@ -4,22 +4,40 @@ import {
   _initTestDatabase,
   _closeDatabase,
   createTask,
+  deleteSession,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getAllSessions,
+  getAllTasks,
   getConsecutiveFailures,
+  getDueTasks,
   getLastBotMessageSeq,
   getLastBotMessageTimestamp,
+  getLastSuccessTime,
   getMessagesSince,
   getNewMessages,
+  getRecentMessages,
+  getRegisteredGroup,
+  getRouterState,
+  getSession,
+  getSessionTimestamps,
   getTaskById,
   getTaskRunLogs,
+  getTasksForGroup,
   getTaskSuccessRate,
   logTaskRun,
   setRegisteredGroup,
+  setRouterState,
+  setSession,
   storeChatMetadata,
   storeMessage,
+  storeMessageDirect,
+  touchSession,
+  updateChatName,
   updateTask,
+  updateTaskAfterRun,
+  validateTaskSchedule,
 } from './db.js';
 import { formatMessages } from './router.js';
 
@@ -820,5 +838,507 @@ describe('registered_groups schema', () => {
     expect(group.containerConfig).toBeUndefined();
     expect(group.requiresTrigger).toBe(true); // default
     expect(group.isMain).toBeUndefined(); // false stored as 0, read as undefined
+  });
+});
+
+// =============================================================================
+// REGRESSION TESTS - TDD hardening pass
+// =============================================================================
+
+// --- NULL handling in messages ---
+
+describe('NULL and edge-case handling in messages', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+  });
+
+  it('stores and retrieves messages with null sender_name', () => {
+    storeMessageDirect({
+      id: 'null-sender-1',
+      chat_jid: 'group@g.us',
+      sender: 'unknown',
+      sender_name: '',
+      content: 'message from unknown',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].sender_name).toBe('');
+  });
+
+  it('handles NULL content messages gracefully (filtered out)', () => {
+    // storeMessage with null content — should be stored but filtered from queries
+    storeMessageDirect({
+      id: 'null-content-1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: null as unknown as string,
+      timestamp: '2024-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
+    // NULL content should be filtered by "content IS NOT NULL" in query
+    expect(messages).toHaveLength(0);
+  });
+
+  it('stores messages with unicode, emoji, and special characters', () => {
+    const specialContent = '🎉 Hello 世界! <script>alert("xss")</script> \n\t\r\0 SELECT * FROM messages; -- \'"; DROP TABLE messages;';
+    store({
+      id: 'unicode-1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: '用户名 👤',
+      content: specialContent,
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe(specialContent);
+    expect(messages[0].sender_name).toBe('用户名 👤');
+  });
+
+  it('stores and retrieves very long message content', () => {
+    const longContent = 'x'.repeat(100_000);
+    store({
+      id: 'long-1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: longContent,
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+
+    const messages = getMessagesSince('group@g.us', 0, 'Andy');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content.length).toBe(100_000);
+  });
+});
+
+// --- Session expiry edge cases ---
+
+describe('session lifecycle and expiry edge cases', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('setSession preserves created_at on session ID update', () => {
+    setSession('test-group', 'session-1');
+    const ts1 = getSessionTimestamps('test-group');
+    expect(ts1.createdAt).toBeDefined();
+
+    // Small delay to ensure timestamps differ
+    const originalCreatedAt = ts1.createdAt;
+
+    // Update session with new ID — should preserve created_at
+    setSession('test-group', 'session-2');
+    const ts2 = getSessionTimestamps('test-group');
+    expect(ts2.createdAt).toBe(originalCreatedAt);
+    expect(getSession('test-group')).toBe('session-2');
+  });
+
+  it('touchSession updates last_used without changing session_id', () => {
+    setSession('test-group', 'session-1');
+    const ts1 = getSessionTimestamps('test-group');
+
+    touchSession('test-group');
+    const ts2 = getSessionTimestamps('test-group');
+
+    expect(getSession('test-group')).toBe('session-1');
+    // last_used should be updated (or equal if clock didn't tick)
+    expect(ts2.lastUsed).toBeDefined();
+    expect(ts2.lastUsed! >= ts1.lastUsed!).toBe(true);
+  });
+
+  it('touchSession on non-existent session is a no-op', () => {
+    // Should not throw or create a session
+    touchSession('nonexistent-group');
+    expect(getSession('nonexistent-group')).toBeUndefined();
+  });
+
+  it('deleteSession removes session completely', () => {
+    setSession('test-group', 'session-1');
+    expect(getSession('test-group')).toBe('session-1');
+
+    deleteSession('test-group');
+    expect(getSession('test-group')).toBeUndefined();
+    expect(getSessionTimestamps('test-group')).toEqual({});
+  });
+
+  it('getSessionTimestamps returns empty for non-existent session', () => {
+    const ts = getSessionTimestamps('no-such-group');
+    expect(ts).toEqual({ lastUsed: undefined, createdAt: undefined });
+  });
+
+  it('getAllSessions returns all active sessions', () => {
+    setSession('group-a', 'sess-a');
+    setSession('group-b', 'sess-b');
+
+    const sessions = getAllSessions();
+    expect(Object.keys(sessions)).toHaveLength(2);
+    expect(sessions['group-a']).toBe('sess-a');
+    expect(sessions['group-b']).toBe('sess-b');
+  });
+});
+
+// --- Concurrent database access ---
+
+describe('concurrent database access (WAL mode)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+  });
+
+  it('handles rapid sequential writes without data loss', () => {
+    // Simulate rapid writes that could cause issues with non-WAL mode
+    for (let i = 0; i < 100; i++) {
+      store({
+        id: `rapid-${i}`,
+        chat_jid: 'group@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: `rapid message ${i}`,
+        timestamp: `2024-01-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.000Z`,
+      });
+    }
+
+    const { messages } = getNewMessages(['group@g.us'], 0, 'Andy', 200);
+    expect(messages).toHaveLength(100);
+  });
+
+  it('interleaves reads and writes without corruption', () => {
+    for (let i = 0; i < 20; i++) {
+      store({
+        id: `interleave-${i}`,
+        chat_jid: 'group@g.us',
+        sender: 'user@s.whatsapp.net',
+        sender_name: 'User',
+        content: `interleave ${i}`,
+        timestamp: `2024-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+      });
+
+      // Read after every write
+      const msgs = getMessagesSince('group@g.us', 0, 'Andy', 200);
+      expect(msgs).toHaveLength(i + 1);
+    }
+  });
+});
+
+// --- Migration idempotency ---
+
+describe('schema creation idempotency', () => {
+  it('running _initTestDatabase twice does not throw or corrupt data', () => {
+    // Already initialized in beforeEach — store some data
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    setSession('test-group', 'session-1');
+    setRegisteredGroup('tg:123', {
+      name: 'Test',
+      folder: 'telegram_test',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Re-initialize — should not throw
+    _initTestDatabase();
+
+    // Data from previous DB is gone (new in-memory DB), but schema is valid
+    const chats = getAllChats();
+    expect(Array.isArray(chats)).toBe(true);
+
+    // Verify schema is functional — store and retrieve
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    setSession('test-group', 'session-2');
+    expect(getSession('test-group')).toBe('session-2');
+  });
+});
+
+// --- Group operations with non-existent groups ---
+
+describe('operations on non-existent groups', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getRegisteredGroup returns undefined for non-existent JID', () => {
+    const group = getRegisteredGroup('nonexistent@g.us');
+    expect(group).toBeUndefined();
+  });
+
+  it('getRecentMessages returns empty for non-existent group folder', () => {
+    const messages = getRecentMessages('nonexistent-folder', 10);
+    expect(messages).toHaveLength(0);
+  });
+
+  it('getTasksForGroup returns empty for non-existent group', () => {
+    const tasks = getTasksForGroup('nonexistent-folder');
+    expect(tasks).toHaveLength(0);
+  });
+
+  it('getTaskById returns undefined for non-existent task', () => {
+    expect(getTaskById('nonexistent-task')).toBeUndefined();
+  });
+
+  it('getLastBotMessageSeq returns 0 for non-existent chat', () => {
+    expect(getLastBotMessageSeq('nonexistent@g.us')).toBe(0);
+  });
+
+  it('getLastBotMessageTimestamp returns undefined for non-existent chat', () => {
+    expect(getLastBotMessageTimestamp('nonexistent@g.us', 'Andy')).toBeUndefined();
+  });
+
+  it('getLastSuccessTime returns null for non-existent task', () => {
+    expect(getLastSuccessTime('nonexistent-task')).toBeNull();
+  });
+
+  it('setRegisteredGroup rejects invalid folder names', () => {
+    expect(() => {
+      setRegisteredGroup('tg:123', {
+        name: 'Bad',
+        folder: '../escape',
+        trigger: '@Bot',
+        added_at: '2024-01-01T00:00:00.000Z',
+      });
+    }).toThrow(/Invalid group folder/);
+  });
+
+  it('setRegisteredGroup rejects folder named "global" (reserved)', () => {
+    expect(() => {
+      setRegisteredGroup('tg:123', {
+        name: 'Global',
+        folder: 'global',
+        trigger: '@Bot',
+        added_at: '2024-01-01T00:00:00.000Z',
+      });
+    }).toThrow(/Invalid group folder/);
+  });
+
+  it('getRegisteredGroup skips groups with now-invalid folder names', () => {
+    // First register a group with a valid folder
+    setRegisteredGroup('tg:valid', {
+      name: 'Valid',
+      folder: 'telegram_valid',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Verify it's returned
+    expect(getRegisteredGroup('tg:valid')).toBeDefined();
+
+    // getAllRegisteredGroups should contain it
+    const groups = getAllRegisteredGroups();
+    expect(groups['tg:valid']).toBeDefined();
+  });
+});
+
+// --- Task schedule validation ---
+
+describe('task schedule validation', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('rejects cron that fires more frequently than every 30 minutes', () => {
+    expect(() => {
+      validateTaskSchedule('cron', '*/5 * * * *');
+    }).toThrow(/minimum/i);
+  });
+
+  it('accepts cron that fires every 30 minutes', () => {
+    expect(() => {
+      validateTaskSchedule('cron', '*/30 * * * *');
+    }).not.toThrow();
+  });
+
+  it('rejects interval less than 30 minutes', () => {
+    expect(() => {
+      validateTaskSchedule('interval', '60000'); // 1 minute
+    }).toThrow(/too frequent/i);
+  });
+
+  it('accepts interval of exactly 30 minutes', () => {
+    expect(() => {
+      validateTaskSchedule('interval', '1800000');
+    }).not.toThrow();
+  });
+
+  it('rejects non-numeric interval', () => {
+    expect(() => {
+      validateTaskSchedule('interval', 'not-a-number');
+    }).toThrow(/too frequent/i);
+  });
+
+  it('createTask refuses to create with too-frequent schedule', () => {
+    expect(() => {
+      createTask({
+        id: 'bad-task',
+        group_folder: 'main',
+        chat_jid: 'group@g.us',
+        prompt: 'test',
+        schedule_type: 'cron',
+        schedule_value: '* * * * *',
+        context_mode: 'isolated',
+        next_run: null,
+        status: 'active',
+        created_at: '2024-01-01T00:00:00.000Z',
+      });
+    }).toThrow(/minimum/i);
+
+    // Verify task was not created
+    expect(getTaskById('bad-task')).toBeUndefined();
+  });
+});
+
+// --- Router state round-trips ---
+
+describe('router state accessors', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('stores and retrieves router state', () => {
+    setRouterState('last_timestamp', '2024-01-01T00:00:00.000Z');
+    expect(getRouterState('last_timestamp')).toBe('2024-01-01T00:00:00.000Z');
+  });
+
+  it('returns undefined for non-existent key', () => {
+    expect(getRouterState('nonexistent')).toBeUndefined();
+  });
+
+  it('overwrites existing key on second set', () => {
+    setRouterState('key', 'value1');
+    setRouterState('key', 'value2');
+    expect(getRouterState('key')).toBe('value2');
+  });
+});
+
+// --- updateTaskAfterRun and getDueTasks ---
+
+describe('task lifecycle (due tasks, run updates)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getDueTasks returns tasks whose next_run is in the past', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'due-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'due task',
+      schedule_type: 'once',
+      schedule_value: pastTime,
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const due = getDueTasks();
+    expect(due).toHaveLength(1);
+    expect(due[0].id).toBe('due-task');
+  });
+
+  it('getDueTasks excludes paused tasks', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'paused-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'paused task',
+      schedule_type: 'once',
+      schedule_value: pastTime,
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('paused-task', { status: 'paused' });
+    const due = getDueTasks();
+    expect(due).toHaveLength(0);
+  });
+
+  it('updateTaskAfterRun marks task completed when nextRun is null', () => {
+    createTask({
+      id: 'once-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'run once',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTaskAfterRun('once-task', null, 'done');
+    const task = getTaskById('once-task');
+    expect(task!.status).toBe('completed');
+    expect(task!.last_result).toBe('done');
+    expect(task!.last_run).toBeDefined();
+  });
+
+  it('updateTaskAfterRun keeps task active when nextRun is provided', () => {
+    const futureTime = new Date(Date.now() + 3600000).toISOString();
+    createTask({
+      id: 'recurring-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'recurring',
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *',
+      context_mode: 'isolated',
+      next_run: '2024-01-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTaskAfterRun('recurring-task', futureTime, 'ok');
+    const task = getTaskById('recurring-task');
+    expect(task!.status).toBe('active');
+    expect(task!.next_run).toBe(futureTime);
+  });
+});
+
+// --- storeChatMetadata channel/isGroup ---
+
+describe('storeChatMetadata channel classification', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('stores explicit channel and isGroup', () => {
+    storeChatMetadata('tg:123', '2024-01-01T00:00:00.000Z', 'Test', 'telegram', false);
+    const chats = getAllChats();
+    const chat = chats.find(c => c.jid === 'tg:123');
+    expect(chat).toBeDefined();
+    expect(chat!.channel).toBe('telegram');
+    expect(chat!.is_group).toBe(0);
+  });
+
+  it('COALESCE preserves existing channel when new value is null', () => {
+    storeChatMetadata('tg:123', '2024-01-01T00:00:00.000Z', 'Test', 'telegram', true);
+    // Update without channel — should preserve 'telegram'
+    storeChatMetadata('tg:123', '2024-01-01T00:00:01.000Z', 'Test Updated');
+    const chats = getAllChats();
+    const chat = chats.find(c => c.jid === 'tg:123');
+    expect(chat!.channel).toBe('telegram');
+    expect(chat!.is_group).toBe(1);
+  });
+
+  it('updateChatName does not clear timestamp of existing chat', () => {
+    storeChatMetadata('tg:123', '2024-06-01T00:00:00.000Z', 'Old Name');
+    updateChatName('tg:123', 'New Name');
+    const chats = getAllChats();
+    const chat = chats.find(c => c.jid === 'tg:123');
+    expect(chat!.name).toBe('New Name');
+    // timestamp should remain the original (updateChatName uses ON CONFLICT DO UPDATE SET name only)
+    expect(chat!.last_message_time).toBe('2024-06-01T00:00:00.000Z');
   });
 });

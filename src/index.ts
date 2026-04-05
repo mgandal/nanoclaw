@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { createServer } from 'http';
 import path from 'path';
 
 import {
@@ -92,7 +93,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { HealthMonitor } from './health-monitor.js';
+import { HealthMonitor, createDefaultFixActions } from './health-monitor.js';
 import { MessageBus } from './message-bus.js';
 import { EventRouter, TrustConfig } from './event-router.js';
 import { GmailWatcher } from './watchers/gmail-watcher.js';
@@ -101,6 +102,11 @@ import { checkMcpEndpoint } from './health-check.js';
 import { appendAlert } from './system-alerts.js';
 import { readEnvFile } from './env.js';
 import YAML from 'yaml';
+import {
+  checkSessionExpiry,
+  isStaleSessionError,
+  parseLastAgentSeq,
+} from './index-helpers.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -118,12 +124,7 @@ const queue = new GroupQueue();
 function loadState(): void {
   lastSeq = parseInt(getRouterState('last_seq') || '0', 10);
   const agentSeqStr = getRouterState('last_agent_seq');
-  try {
-    lastAgentSeq = agentSeqStr ? JSON.parse(agentSeqStr) : {};
-  } catch {
-    logger.warn('Corrupted last_agent_seq in DB, resetting');
-    lastAgentSeq = {};
-  }
+  lastAgentSeq = parseLastAgentSeq(agentSeqStr);
   sessions = getAllSessions();
   registeredGroups = getAllRegisteredGroups();
   logger.info(
@@ -431,19 +432,19 @@ async function runAgent(
   let sessionId: string | undefined = sessions[group.folder];
   if (sessionId) {
     const { lastUsed, createdAt } = getSessionTimestamps(group.folder);
-    const idleAge = lastUsed
-      ? Date.now() - new Date(lastUsed).getTime()
-      : Infinity;
-    const totalAge = createdAt
-      ? Date.now() - new Date(createdAt).getTime()
-      : Infinity;
-    const expireReason =
-      totalAge > SESSION_MAX_AGE_MS
-        ? 'max age (4h)'
-        : idleAge > SESSION_IDLE_MS
-          ? 'idle (2h)'
-          : null;
+    const expireReason = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      SESSION_IDLE_MS,
+      SESSION_MAX_AGE_MS,
+    );
     if (expireReason) {
+      const idleAge = lastUsed
+        ? Date.now() - new Date(lastUsed).getTime()
+        : Infinity;
+      const totalAge = createdAt
+        ? Date.now() - new Date(createdAt).getTime()
+        : Infinity;
       logger.info(
         {
           group: group.name,
@@ -528,11 +529,7 @@ async function runAgent(
       // deletion, or disk-full. The existing backoff in group-queue.ts
       // handles the retry; we just need to remove the broken session ID.
       const isStaleSession =
-        sessionId &&
-        output.error &&
-        /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
-          output.error,
-        );
+        sessionId && isStaleSessionError(output.error);
 
       if (isStaleSession) {
         logger.warn(
@@ -809,6 +806,84 @@ async function main(): Promise<void> {
     },
   });
 
+  // Wire watchdog fix handlers
+  const fixScriptsDir = path.join(process.cwd(), 'scripts', 'fixes');
+
+  healthMonitor.addFixHandler({
+    id: 'mcp-simplemem',
+    service: 'mcp:SimpleMem',
+    fixScript: path.join(fixScriptsDir, 'restart-simplemem.sh'),
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8200/api/health',
+      expectStatus: 200,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-qmd',
+    service: 'mcp:QMD',
+    fixScript: path.join(fixScriptsDir, 'restart-qmd.sh'),
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8181/health',
+      expectStatus: 200,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-apple-notes',
+    service: 'mcp:Apple Notes',
+    fixScript: path.join(fixScriptsDir, 'restart-apple-notes.sh'),
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8184/mcp',
+      expectStatus: 405,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'mcp-todoist',
+    service: 'mcp:Todoist',
+    fixScript: path.join(fixScriptsDir, 'restart-todoist.sh'),
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8186/mcp',
+      expectStatus: 405,
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'container-runtime',
+    service: 'container-runtime',
+    fixScript: path.join(fixScriptsDir, 'restart-container-runtime.sh'),
+    verify: {
+      type: 'command',
+      cmd: '/usr/local/bin/container',
+      args: ['system', 'status'],
+    },
+    cooldownMs: 120_000,
+    maxAttempts: 2,
+  });
+  healthMonitor.addFixHandler({
+    id: 'sqlite-lock',
+    service: 'sqlite-lock',
+    fixScript: path.join(fixScriptsDir, 'kill-sqlite-orphans.sh'),
+    verify: {
+      type: 'command',
+      cmd: '/bin/sh',
+      args: ['-c', 'echo "SELECT 1" | sqlite3 store/messages.db'],
+    },
+    cooldownMs: 60_000,
+    maxAttempts: 2,
+  });
+
+  healthMonitor.setFixActions(createDefaultFixActions());
+
   // Periodically check health thresholds + MCP endpoints
   // Each endpoint has an optional healthUrl for services where the MCP URL
   // isn't suitable for health checks (e.g. SSE endpoints that hang or require auth).
@@ -854,6 +929,11 @@ async function main(): Promise<void> {
           `mcp:${ep.name}`,
           `MCP server ${ep.name} is unreachable`,
         );
+        // Auto-fix: attempt repair if handler registered and threshold met
+        const failCount = healthMonitor.getInfraFailureCount(`mcp:${ep.name}`);
+        if (failCount >= 3) {
+          void healthMonitor.attemptFix(`mcp:${ep.name}`);
+        }
       }
       // Update cached QMD reachability for container-runner
       if (ep.name === 'QMD') {
@@ -971,6 +1051,36 @@ async function main(): Promise<void> {
       );
     },
   );
+
+  // Health endpoint for external heartbeat (separate from credential proxy)
+  const startTime = Date.now();
+  let startupComplete = false;
+  const healthServer = createServer((req, res) => {
+    if (req.url === '/health' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        uptime: Math.floor((Date.now() - startTime) / 1000),
+        startupComplete,
+      }));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  const HEALTH_PORT = CREDENTIAL_PROXY_PORT + 1;
+  healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
+    logger.info({ port: HEALTH_PORT }, 'Health endpoint started');
+  });
+
+  // Event loop liveness: if the loop is blocked >30s, exit and let launchd restart
+  let lastEventLoopTick = Date.now();
+  setInterval(() => { lastEventLoopTick = Date.now(); }, 5000);
+  setInterval(() => {
+    if (Date.now() - lastEventLoopTick > 30_000) {
+      logger.fatal('Event loop stalled for >30s, exiting for launchd restart');
+      process.exit(1);
+    }
+  }, 10_000);
 
   restoreRemoteControl();
 
@@ -1195,6 +1305,9 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
   });
+
+  startupComplete = true;
+  logger.info('NanoClaw startup complete');
 }
 
 // Guard: only run when executed directly, not when imported by tests

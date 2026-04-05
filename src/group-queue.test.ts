@@ -481,4 +481,293 @@ describe('GroupQueue', () => {
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
   });
+
+  // --- Regression: FIFO ordering within a group ---
+
+  it('processes tasks in FIFO order within a group', async () => {
+    const executionOrder: string[] = [];
+    let resolveFirst: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveFirst = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Start a message container to block the group
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Enqueue 3 tasks while group is active
+    for (let i = 1; i <= 3; i++) {
+      const idx = i;
+      queue.enqueueTask('group1@g.us', `task-${idx}`, async () => {
+        executionOrder.push(`task-${idx}`);
+      });
+    }
+
+    // Release the message container — tasks drain in order
+    resolveFirst!();
+    await vi.advanceTimersByTimeAsync(10);
+    // Task 1 runs, completes, drains task 2
+    await vi.advanceTimersByTimeAsync(10);
+    // Task 2 runs, completes, drains task 3
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(executionOrder).toEqual(['task-1', 'task-2', 'task-3']);
+  });
+
+  // --- Regression: parallel processing across groups ---
+
+  it('runs different groups in parallel up to concurrency limit', async () => {
+    const activeGroups = new Set<string>();
+    let maxParallel = 0;
+    const completionCallbacks: Array<() => void> = [];
+
+    const processMessages = vi.fn(async (groupJid: string) => {
+      activeGroups.add(groupJid);
+      maxParallel = Math.max(maxParallel, activeGroups.size);
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      activeGroups.delete(groupJid);
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    queue.enqueueMessageCheck('groupA@g.us');
+    queue.enqueueMessageCheck('groupB@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(maxParallel).toBe(2);
+    expect(activeGroups.size).toBe(2);
+
+    // Clean up
+    completionCallbacks.forEach((cb) => cb());
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- Regression: error propagation from queued tasks ---
+
+  it('continues draining after a task throws an error', async () => {
+    const executionOrder: string[] = [];
+    let resolveBlock: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveBlock = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Start a message container
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Enqueue a failing task and a succeeding task
+    queue.enqueueTask('group1@g.us', 'bad-task', async () => {
+      executionOrder.push('bad-task');
+      throw new Error('task exploded');
+    });
+    queue.enqueueTask('group1@g.us', 'good-task', async () => {
+      executionOrder.push('good-task');
+    });
+
+    // Release the message container
+    resolveBlock!();
+    await vi.advanceTimersByTimeAsync(10);
+    // bad-task runs, throws, drains good-task
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Good task should still run despite the previous task failing
+    expect(executionOrder).toContain('bad-task');
+    expect(executionOrder).toContain('good-task');
+  });
+
+  // --- Regression: group isolation on failure ---
+
+  it('one group failure does not block other groups', async () => {
+    const processed: string[] = [];
+    const completionCallbacks = new Map<string, () => void>();
+
+    const processMessages = vi.fn(async (groupJid: string) => {
+      if (groupJid === 'bad@g.us') {
+        throw new Error('group failure');
+      }
+      processed.push(groupJid);
+      await new Promise<void>((resolve) =>
+        completionCallbacks.set(groupJid, resolve),
+      );
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Fill both slots
+    queue.enqueueMessageCheck('bad@g.us');
+    queue.enqueueMessageCheck('good@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // bad@g.us threw — its slot freed, good@g.us should still be running
+    expect(processed).toContain('good@g.us');
+
+    completionCallbacks.get('good@g.us')?.();
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- Regression: shutdown drains active containers ---
+
+  it('shutdown waits for active containers then resolves', async () => {
+    let resolveProcess: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Start shutdown with a long grace period
+    let shutdownResolved = false;
+    const shutdownPromise = queue.shutdown(30000).then(() => {
+      shutdownResolved = true;
+    });
+
+    // Not yet resolved
+    await vi.advanceTimersByTimeAsync(100);
+    expect(shutdownResolved).toBe(false);
+
+    // Complete the active container
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(600); // poll interval is 500ms
+
+    expect(shutdownResolved).toBe(true);
+    await shutdownPromise;
+  });
+
+  // --- Regression: shutdown grace period timeout ---
+
+  it('shutdown resolves after grace period even if containers are stuck', async () => {
+    const processMessages = vi.fn(
+      async () =>
+        new Promise<boolean>(() => {
+          /* never resolves */
+        }),
+    );
+
+    queue.setProcessMessagesFn(processMessages);
+
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    let shutdownResolved = false;
+    const shutdownPromise = queue.shutdown(5000).then(() => {
+      shutdownResolved = true;
+    });
+
+    // Advance past grace period
+    await vi.advanceTimersByTimeAsync(5500);
+
+    expect(shutdownResolved).toBe(true);
+    await shutdownPromise;
+  });
+
+  // --- Regression: empty queue edge cases ---
+
+  it('enqueueMessageCheck on empty queue with no processMessagesFn is safe', async () => {
+    // No processMessagesFn set — should not throw
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(100);
+    // No crash = pass
+  });
+
+  it('shutdown on empty queue resolves immediately', async () => {
+    let resolved = false;
+    await queue.shutdown(5000).then(() => {
+      resolved = true;
+    });
+    expect(resolved).toBe(true);
+  });
+
+  // --- Regression: stale waitingGroups cleanup (from drainGroup bug fix) ---
+
+  it('cleans up stale waitingGroups entries when group state is drained', async () => {
+    const completionCallbacks: Array<() => void> = [];
+
+    const processMessages = vi.fn(async (groupJid: string) => {
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Fill both slots
+    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('group2@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // group3 goes to waiting list
+    queue.enqueueMessageCheck('group3@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Now complete group3's pending messages before it gets a slot:
+    // enqueue another message for group3 so it has pendingMessages=true
+    // then complete group1 so group3 starts
+    completionCallbacks[0](); // group1 done
+    await vi.advanceTimersByTimeAsync(10);
+
+    // group3 should have started
+    expect(processMessages).toHaveBeenCalledTimes(3);
+    expect(processMessages).toHaveBeenLastCalledWith('group3@g.us');
+
+    // Clean up remaining
+    completionCallbacks[1](); // group2
+    await vi.advanceTimersByTimeAsync(10);
+    completionCallbacks[2](); // group3
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- Regression: double-enqueue prevention for pending tasks ---
+
+  it('prevents duplicate task IDs in pending queue', async () => {
+    let resolveBlock: () => void;
+    const executionCount: Record<string, number> = {};
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveBlock = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Block group with a message container
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Enqueue same task ID twice while blocked
+    const makeFn = (label: string) => async () => {
+      executionCount[label] = (executionCount[label] || 0) + 1;
+    };
+    queue.enqueueTask('group1@g.us', 'dup-task', makeFn('first'));
+    queue.enqueueTask('group1@g.us', 'dup-task', makeFn('second'));
+
+    // Release
+    resolveBlock!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Only the first enqueue should have run
+    expect(executionCount['first']).toBe(1);
+    expect(executionCount['second']).toBeUndefined();
+  });
 });

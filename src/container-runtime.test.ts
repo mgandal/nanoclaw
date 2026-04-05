@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Hoisted mocks — vi.hoisted ensures these exist before vi.mock factories run
+const { mockExecSync, mockPlatform, mockNetworkInterfaces } = vi.hoisted(
+  () => ({
+    mockExecSync: vi.fn(),
+    mockPlatform: vi.fn(() => 'darwin'),
+    mockNetworkInterfaces: vi.fn(() => ({})),
+  }),
+);
+
 // Mock logger
 vi.mock('./logger.js', () => ({
   logger: {
@@ -10,11 +19,27 @@ vi.mock('./logger.js', () => ({
   },
 }));
 
-// Mock child_process — store the mock fn so tests can configure it
-const mockExecSync = vi.fn();
+// Mock child_process
 vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
+
+// Mock os module for platform-specific tests
+vi.mock('os', async () => {
+  const actual = await vi.importActual<typeof import('os')>('os');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      platform: (...args: unknown[]) => mockPlatform(...args),
+      networkInterfaces: (...args: unknown[]) =>
+        mockNetworkInterfaces(...args),
+    },
+    platform: (...args: unknown[]) => mockPlatform(...args),
+    networkInterfaces: (...args: unknown[]) =>
+      mockNetworkInterfaces(...args),
+  };
+});
 
 import {
   CONTAINER_RUNTIME_BIN,
@@ -22,6 +47,7 @@ import {
   stopContainer,
   ensureContainerRuntimeRunning,
   cleanupOrphans,
+  hostGatewayArgs,
 } from './container-runtime.js';
 import { logger } from './logger.js';
 
@@ -188,5 +214,182 @@ describe('cleanupOrphans', () => {
       { count: 2, names: ['nanoclaw-a-1', 'nanoclaw-b-2'] },
       'Stopped orphaned containers',
     );
+  });
+
+  it('handles malformed JSON output gracefully', () => {
+    mockExecSync.mockReturnValueOnce('not valid json {{{');
+
+    cleanupOrphans(); // should not throw — outer catch handles parse error
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'Failed to clean up orphaned containers',
+    );
+  });
+
+  it('handles empty string output by treating as empty array', () => {
+    mockExecSync.mockReturnValueOnce('');
+
+    cleanupOrphans(); // should not throw — falls back to '[]'
+
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('handles many orphans without stopping early', () => {
+    const orphans = Array.from({ length: 20 }, (_, i) => ({
+      status: 'running',
+      configuration: { id: `nanoclaw-group${i}-${i}` },
+    }));
+    mockExecSync.mockReturnValueOnce(JSON.stringify(orphans));
+    // All stop calls succeed
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans();
+
+    // 1 ls + 20 stop calls
+    expect(mockExecSync).toHaveBeenCalledTimes(21);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 20 }),
+      'Stopped orphaned containers',
+    );
+  });
+
+  it('skips containers with missing configuration or id fields', () => {
+    const lsOutput = JSON.stringify([
+      { status: 'running', configuration: { id: 'nanoclaw-valid-1' } },
+      { status: 'running', configuration: {} }, // missing id
+      { status: 'running' }, // missing configuration entirely
+    ]);
+    mockExecSync.mockReturnValueOnce(lsOutput);
+    mockExecSync.mockReturnValue('');
+
+    // This may throw or handle gracefully depending on implementation
+    // The point is it should not crash the whole cleanup
+    cleanupOrphans();
+  });
+});
+
+// --- stopContainer edge cases ---
+
+describe('stopContainer edge cases', () => {
+  it('rejects empty string name', () => {
+    expect(() => stopContainer('')).toThrow('Invalid container name');
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects names starting with a dot', () => {
+    expect(() => stopContainer('.hidden')).toThrow('Invalid container name');
+  });
+
+  it('rejects names starting with a dash', () => {
+    expect(() => stopContainer('-flag')).toThrow('Invalid container name');
+  });
+
+  it('accepts names starting with a digit', () => {
+    mockExecSync.mockReturnValueOnce('');
+    stopContainer('1container');
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop 1container`,
+      { stdio: 'pipe' },
+    );
+  });
+
+  it('accepts names with dots, dashes, and underscores', () => {
+    mockExecSync.mockReturnValueOnce('');
+    stopContainer('nanoclaw_group.test-123');
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw_group.test-123`,
+      { stdio: 'pipe' },
+    );
+  });
+
+  it('rejects names with spaces', () => {
+    expect(() => stopContainer('name with spaces')).toThrow(
+      'Invalid container name',
+    );
+  });
+
+  it('rejects names with newlines (shell injection vector)', () => {
+    expect(() => stopContainer('name\n--rm')).toThrow(
+      'Invalid container name',
+    );
+  });
+});
+
+// --- ensureContainerRuntimeRunning edge cases ---
+
+describe('ensureContainerRuntimeRunning error details', () => {
+  it('sets cause on the thrown error for debugging', () => {
+    const originalError = new Error('binary not found');
+    mockExecSync.mockImplementation(() => {
+      throw originalError;
+    });
+
+    let caught: Error | undefined;
+    try {
+      ensureContainerRuntimeRunning();
+    } catch (e) {
+      caught = e as Error;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught!.message).toBe(
+      'Container runtime is required but failed to start',
+    );
+    expect(caught!.cause).toBe(originalError);
+  });
+
+  it('logs error details when start fails', () => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error('permission denied');
+    });
+
+    expect(() => ensureContainerRuntimeRunning()).toThrow();
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      'Failed to start container runtime',
+    );
+  });
+});
+
+// --- readonlyMountArgs edge cases ---
+
+describe('readonlyMountArgs edge cases', () => {
+  it('handles paths with spaces (Apple Container bind mount)', () => {
+    const args = readonlyMountArgs(
+      '/host/path with spaces',
+      '/container/path with spaces',
+    );
+    expect(args).toEqual([
+      '--mount',
+      'type=bind,source=/host/path with spaces,target=/container/path with spaces,readonly',
+    ]);
+  });
+
+  it('uses --mount flag (not -v) for Apple Container compatibility', () => {
+    const args = readonlyMountArgs('/host', '/container');
+    // Apple Container requires --mount syntax, not -v
+    expect(args[0]).toBe('--mount');
+    expect(args[1]).toContain('type=bind');
+    expect(args[1]).not.toContain('-v');
+  });
+});
+
+// --- hostGatewayArgs ---
+
+describe('hostGatewayArgs', () => {
+  it('returns --add-host arg on Linux', () => {
+    mockPlatform.mockReturnValue('linux');
+    // Re-import needed for platform check, but hostGatewayArgs reads os.platform() at call time
+    const args = hostGatewayArgs();
+    expect(args).toEqual(['--add-host=host.docker.internal:host-gateway']);
+  });
+
+  it('returns empty array on macOS (Apple Container handles it)', () => {
+    mockPlatform.mockReturnValue('darwin');
+    const args = hostGatewayArgs();
+    expect(args).toEqual([]);
   });
 });
