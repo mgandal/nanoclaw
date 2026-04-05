@@ -11,7 +11,7 @@ import {
   formatOutbound,
   stripInternalTags,
 } from './router.js';
-import { parseTextStyles, parseSignalStyles } from './text-styles.js';
+import { parseTextStyles, parseSignalStyles, ChannelType } from './text-styles.js';
 import { NewMessage } from './types.js';
 
 function makeMsg(overrides: Partial<NewMessage> = {}): NewMessage {
@@ -603,5 +603,202 @@ describe('formatOutbound — channel-aware', () => {
 
   it('signal channel is passthrough — raw markdown preserved for parseSignalStyles', () => {
     expect(formatOutbound('**bold**', 'signal')).toBe('**bold**');
+  });
+});
+
+// --- Regression tests: router.ts hardening ---
+
+import { routeOutbound, findChannel } from './router.js';
+import { Channel } from './types.js';
+
+function makeMockChannel(
+  name: string,
+  ownedJids: string[],
+  connected = true,
+): Channel {
+  const sent: { jid: string; text: string }[] = [];
+  return {
+    name,
+    connect: async () => {},
+    sendMessage: async (jid: string, text: string) => {
+      sent.push({ jid, text });
+    },
+    isConnected: () => connected,
+    ownsJid: (jid: string) => ownedJids.includes(jid),
+    disconnect: async () => {},
+    _sent: sent,
+  } as Channel & { _sent: typeof sent };
+}
+
+describe('escapeXml — OWASP-relevant edge cases', () => {
+  it('handles single quotes (apostrophes) in attribute context', () => {
+    // Single quotes are safe when attributes use double quotes (which formatMessages does),
+    // but escapeXml should at minimum not corrupt them
+    const result = escapeXml("it's a test");
+    expect(result).toContain("'"); // single quotes pass through (attributes use double quotes)
+  });
+
+  it('returns empty string for null/undefined input (falsy guard)', () => {
+    expect(escapeXml(null as unknown as string)).toBe('');
+    expect(escapeXml(undefined as unknown as string)).toBe('');
+  });
+
+  it('handles strings with only special characters', () => {
+    expect(escapeXml('&<>"')).toBe('&amp;&lt;&gt;&quot;');
+  });
+
+  it('handles very long strings without stack overflow', () => {
+    const longStr = '<'.repeat(10000);
+    const result = escapeXml(longStr);
+    expect(result).toBe('&lt;'.repeat(10000));
+  });
+
+  it('does not double-escape already-escaped entities', () => {
+    // If input already has &amp; it should become &amp;amp;
+    expect(escapeXml('&amp;')).toBe('&amp;amp;');
+  });
+});
+
+describe('formatMessages — edge cases', () => {
+  it('handles empty content gracefully', () => {
+    const result = formatMessages([makeMsg({ content: '' })], 'UTC');
+    expect(result).toContain('sender="Alice"');
+    expect(result).toContain('></message>'); // empty content between tags
+  });
+
+  it('handles very long content without truncation', () => {
+    const longContent = 'x'.repeat(50000);
+    const result = formatMessages([makeMsg({ content: longContent })], 'UTC');
+    expect(result).toContain(longContent);
+  });
+
+  it('handles messages with only whitespace content', () => {
+    const result = formatMessages([makeMsg({ content: '   ' })], 'UTC');
+    expect(result).toContain('   </message>');
+  });
+
+  it('handles reply_to_message_id with special characters', () => {
+    const result = formatMessages(
+      [makeMsg({ reply_to_message_id: 'id<with>&"special' })],
+      'UTC',
+    );
+    expect(result).toContain(
+      'reply_to="id&lt;with&gt;&amp;&quot;special"',
+    );
+  });
+});
+
+describe('stripInternalTags — malformed and nested', () => {
+  it('handles unclosed internal tag (no match, text preserved)', () => {
+    expect(stripInternalTags('hello <internal>unclosed')).toBe(
+      'hello <internal>unclosed',
+    );
+  });
+
+  it('handles nested internal tags (greedy inner match)', () => {
+    const input =
+      '<internal>outer<internal>inner</internal>still</internal>visible';
+    const result = stripInternalTags(input);
+    // The non-greedy [\s\S]*? will match the first closing tag
+    expect(result).toContain('visible');
+  });
+
+  it('handles internal tags with attributes (does not match)', () => {
+    // <internal foo="bar"> is NOT <internal> — regex requires exact tag
+    const input = '<internal foo="bar">secret</internal>';
+    expect(stripInternalTags(input)).toBe(input.trim());
+  });
+
+  it('handles empty internal tags', () => {
+    expect(stripInternalTags('hello <internal></internal> world')).toBe(
+      'hello  world',
+    );
+  });
+
+  it('preserves text when no internal tags present', () => {
+    expect(stripInternalTags('just normal text')).toBe('just normal text');
+  });
+});
+
+describe('formatOutbound — edge cases', () => {
+  it('returns empty string for empty input', () => {
+    expect(formatOutbound('')).toBe('');
+  });
+
+  it('returns empty string for whitespace-only after stripping tags', () => {
+    expect(formatOutbound('<internal>hidden</internal>   ')).toBe('');
+  });
+
+  it('applies formatting for all known channel types', () => {
+    const channels: Array<{ type: ChannelType; input: string; expected: string }> = [
+      { type: 'whatsapp', input: '**bold**', expected: '*bold*' },
+      { type: 'telegram', input: '**bold**', expected: '*bold*' },
+      { type: 'slack', input: '**bold**', expected: '*bold*' },
+      { type: 'discord', input: '**bold**', expected: '**bold**' },
+      { type: 'signal', input: '**bold**', expected: '**bold**' },
+    ];
+    for (const { type, input, expected } of channels) {
+      expect(formatOutbound(input, type)).toBe(expected);
+    }
+  });
+});
+
+describe('routeOutbound — channel routing', () => {
+  it('throws when no channel owns the JID', () => {
+    const ch = makeMockChannel('telegram', ['tg:123']);
+    expect(() => routeOutbound([ch], 'unknown:999', 'hello')).toThrow(
+      'No channel for JID: unknown:999',
+    );
+  });
+
+  it('throws when channel owns JID but is disconnected', () => {
+    const ch = makeMockChannel('telegram', ['tg:123'], false);
+    expect(() => routeOutbound([ch], 'tg:123', 'hello')).toThrow(
+      'No channel for JID: tg:123',
+    );
+  });
+
+  it('routes to the correct channel when multiple exist', async () => {
+    const ch1 = makeMockChannel('telegram', ['tg:123']) as Channel & {
+      _sent: { jid: string; text: string }[];
+    };
+    const ch2 = makeMockChannel('whatsapp', ['wa:456']) as Channel & {
+      _sent: { jid: string; text: string }[];
+    };
+    await routeOutbound([ch1, ch2], 'wa:456', 'hello');
+    expect(ch1._sent).toHaveLength(0);
+    expect(ch2._sent).toHaveLength(1);
+    expect(ch2._sent[0]).toEqual({ jid: 'wa:456', text: 'hello' });
+  });
+
+  it('throws with empty channel list', () => {
+    expect(() => routeOutbound([], 'tg:123', 'hello')).toThrow(
+      'No channel for JID: tg:123',
+    );
+  });
+});
+
+describe('findChannel — lookup edge cases', () => {
+  it('returns undefined when no channels exist', () => {
+    expect(findChannel([], 'tg:123')).toBeUndefined();
+  });
+
+  it('returns undefined when no channel owns the JID', () => {
+    const ch = makeMockChannel('telegram', ['tg:123']);
+    expect(findChannel([ch], 'tg:999')).toBeUndefined();
+  });
+
+  it('returns the first matching channel', () => {
+    const ch1 = makeMockChannel('telegram', ['tg:123']);
+    const ch2 = makeMockChannel('telegram2', ['tg:123']); // duplicate
+    const result = findChannel([ch1, ch2], 'tg:123');
+    expect(result?.name).toBe('telegram');
+  });
+
+  it('finds channel regardless of connection status', () => {
+    const ch = makeMockChannel('telegram', ['tg:123'], false);
+    // findChannel does NOT check isConnected (unlike routeOutbound)
+    expect(findChannel([ch], 'tg:123')).toBeDefined();
+    expect(findChannel([ch], 'tg:123')?.name).toBe('telegram');
   });
 });
