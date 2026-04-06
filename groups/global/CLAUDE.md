@@ -178,12 +178,12 @@ Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2,500+ ma
 
 For simple lookups where you know the file, use Read/Grep directly — they're faster.
 
-### Wiki (synthesized research knowledge — `99-wiki/`)
+### Wiki (synthesized research knowledge — `98-nanoKB/wiki/`)
 
 For research and science questions, **check the wiki first** before searching raw vault files. The wiki contains synthesized, lab-contextualized knowledge — papers, tools, methods, datasets, concepts — that is higher quality than raw notes.
 
 **How to use:**
-1. Read `99-wiki/index.md` (or `/workspace/extra/claire-vault/99-wiki/index.md` in containers) — it catalogs all pages with one-line summaries
+1. Read `98-nanoKB/wiki/index.md` (or `/workspace/extra/claire-vault/98-nanoKB/wiki/index.md` in containers) — it catalogs all pages with one-line summaries
 2. Read relevant wiki pages for your answer
 3. If the wiki doesn't cover the topic, search QMD/vault as fallback
 
@@ -211,7 +211,7 @@ Before asking Mike for any specific fact, detail, or piece of information, you M
 ### Tier 1 — Search first (always)
 1. **Group memory** — `/workspace/group/memory.md` plus any topic-specific files
 2. **Hindsight** — `mcp__hindsight__recall` for personal facts and past conversation context
-3. **Wiki** — `99-wiki/index.md` for research/science questions (synthesized knowledge)
+3. **Wiki** — `98-nanoKB/wiki/index.md` for research/science questions (synthesized knowledge)
 4. **QMD** — `mcp__qmd__query` across vault, sessions, conversations, state files
 5. **SimpleMem** — `mcp__simplemem__search_memory` for broad semantic search (emails, notes, history)
 6. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
@@ -296,9 +296,9 @@ Route files based on content type:
 
 | Content | Vault Path | Filename Pattern |
 |---------|-----------|-----------------|
-| Research summaries / syntheses | `99-wiki/syntheses/` | `{topic}-{YYYY-MM-DD}.md` |
-| Tool/method notes | `99-wiki/tools/` | `{tool-name}.md` |
-| Paper summaries | `99-wiki/papers/` | `{first-author}-{year}-{short-title}.md` |
+| Research summaries / syntheses | `98-nanoKB/wiki/syntheses/` | `{topic}-{YYYY-MM-DD}.md` |
+| Tool/method notes | `98-nanoKB/wiki/tools/` | `{tool-name}.md` |
+| Paper summaries | `98-nanoKB/wiki/papers/` | `{first-author}-{year}-{short-title}.md` |
 | Meeting notes | `10-daily/meetings/` | `{YYYY-MM-DD}-{meeting-name}.md` |
 | Day-specific notes (journals, daily summaries) | `10-daily/journal/` | `{YYYY-MM-DD}.md` |
 | General resources / saved content | `40-resources/` | descriptive name |
@@ -323,8 +323,8 @@ status: "active"
 ```
 
 2. **Use templates when they exist** — check for `_template.md` in the target folder and follow its structure. Key templates:
-   - `99-wiki/tools/_template.md` — tool entries (rich frontmatter with category, install_method, lab status)
-   - `99-wiki/papers/_template.md` — paper summaries (authors, DOI, methods, relevance)
+   - `98-nanoKB/wiki/tools/_template.md` — tool entries (rich frontmatter with category, install_method, lab status)
+   - `98-nanoKB/wiki/papers/_template.md` — paper summaries (authors, DOI, methods, relevance)
 
 3. **Use `[[wikilinks]]`** to cross-reference other vault files when you know they exist.
 
