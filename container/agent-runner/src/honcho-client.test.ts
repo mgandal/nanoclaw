@@ -203,6 +203,16 @@ describe('getPeerContext', () => {
     expect(url).toBe(`${BASE_URL}/v3/workspaces/ws/peers/p1/context`);
   });
 
+  it('combines representation and peer_card when both present', async () => {
+    globalThis.fetch = makeFetchMock({
+      status: 200,
+      body: { peer_id: 'p1', target_id: 'p2', representation: 'rep text', peer_card: 'card text' },
+    });
+    const client = createHonchoClient(BASE_URL);
+    const ctx = await client.getPeerContext('ws', 'p1');
+    expect(ctx).toBe('rep text\n\ncard text');
+  });
+
   it('includes session_id query param when provided', async () => {
     globalThis.fetch = makeFetchMock({
       status: 200,
