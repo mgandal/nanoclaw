@@ -141,6 +141,13 @@ export async function handleXIpc(
       result = await runScript('quote', { tweetUrl: data.tweetUrl, comment: data.comment });
       break;
 
+    case 'x_bookmarks':
+      result = await runScript('bookmarks', {
+        limit: data.limit ?? 50,
+        sinceId: data.sinceId,
+      });
+      break;
+
     default:
       return false;
   }
