@@ -52,7 +52,7 @@ function isQmdReachable(): boolean {
 
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
-    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|SIMPLEMEM_URL)=/i;
+    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN)=/i;
   return args.map((arg, i) => {
     if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
       const eqIdx = arg.indexOf('=');
@@ -304,33 +304,6 @@ function buildContainerArgs(
     args.push('-e', `QMD_URL=${qmdUrl}`);
   }
 
-  // Pass SimpleMem memory URL if configured (read from .env since launchd doesn't set it)
-  // Rewrite host to gateway IP; keep token in URL query param (not a separate env var)
-  const simpleMemEnv = readEnvFile(['SIMPLEMEM_URL']);
-  const simpleMemUrl = process.env.SIMPLEMEM_URL || simpleMemEnv.SIMPLEMEM_URL;
-  if (simpleMemUrl) {
-    try {
-      const parsed = new URL(simpleMemUrl);
-      const hostname =
-        parsed.hostname === 'localhost'
-          ? CONTAINER_HOST_GATEWAY
-          : parsed.hostname;
-      // Rebuild URL with /mcp path, preserving query params (includes auth token)
-      const containerUrl = new URL(
-        `${parsed.protocol}//${hostname}:${parsed.port}/mcp`,
-      );
-      for (const [k, v] of parsed.searchParams) {
-        containerUrl.searchParams.set(k, v);
-      }
-      args.push('-e', `SIMPLEMEM_URL=${containerUrl.toString()}`);
-    } catch {
-      logger.warn(
-        { simpleMemUrl },
-        'Invalid SIMPLEMEM_URL, skipping SimpleMem',
-      );
-    }
-  }
-
   // Pass Apple Notes MCP endpoint URL (only if configured in .env)
   const appleNotesEnv = readEnvFile(['APPLE_NOTES_URL']);
   const appleNotesUrl =
@@ -395,9 +368,32 @@ function buildContainerArgs(
     }
   }
 
+  // Pass Honcho user-modeling API URL
+  const honchoEnv = readEnvFile(['HONCHO_URL']);
+  const honchoUrl = process.env.HONCHO_URL || honchoEnv.HONCHO_URL;
+  if (honchoUrl) {
+    try {
+      const parsed = new URL(honchoUrl);
+      const hostname =
+        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+          ? CONTAINER_HOST_GATEWAY
+          : parsed.hostname;
+      args.push(
+        '-e',
+        `HONCHO_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
+      );
+    } catch {
+      logger.warn(
+        { honchoUrl },
+        'Invalid HONCHO_URL, skipping Honcho',
+      );
+    }
+  }
+
   // Pass Readwise access token (for readwise CLI in container)
   const readwiseEnv = readEnvFile(['READWISE_ACCESS_TOKEN']);
-  const readwiseToken = process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
+  const readwiseToken =
+    process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
   if (readwiseToken) {
     args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
   }

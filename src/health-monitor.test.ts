@@ -161,7 +161,7 @@ describe('HealthMonitor infra alerts (consecutive failures)', () => {
     for (let i = 0; i < 3; i++) {
       monitor.recordInfraEvent('mcp:QMD', 'unreachable');
     }
-    monitor.recordInfraEvent('mcp:SimpleMem', 'unreachable'); // only 1 failure
+    monitor.recordInfraEvent('mcp:TestService', 'unreachable'); // only 1 failure
     const alerts = monitor.checkThresholds();
     const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
     expect(infraAlerts).toHaveLength(1);
@@ -468,9 +468,9 @@ describe('HealthMonitor fix handlers', () => {
 
   it('registers and retrieves fix handlers', () => {
     const handler: FixHandler = {
-      id: 'mcp-simplemem',
-      service: 'mcp:SimpleMem',
-      fixScript: '/path/to/restart-simplemem.sh',
+      id: 'mcp-test-service',
+      service: 'mcp:TestService',
+      fixScript: '/path/to/restart-test-service.sh',
       verify: {
         type: 'http',
         url: 'http://localhost:8200/api/health',
@@ -480,7 +480,7 @@ describe('HealthMonitor fix handlers', () => {
       maxAttempts: 2,
     };
     monitor.addFixHandler(handler);
-    expect(monitor.getFixHandler('mcp:SimpleMem')).toBe(handler);
+    expect(monitor.getFixHandler('mcp:TestService')).toBe(handler);
   });
 
   it('returns undefined for unknown service', () => {
@@ -518,9 +518,9 @@ describe('HealthMonitor fix handlers', () => {
 
     it('executes fix script and verifies success', async () => {
       const handler: FixHandler = {
-        id: 'mcp-simplemem',
-        service: 'mcp:SimpleMem',
-        fixScript: '/scripts/fixes/restart-simplemem.sh',
+        id: 'mcp-test-service',
+        service: 'mcp:TestService',
+        fixScript: '/scripts/fixes/restart-test-service.sh',
         verify: {
           type: 'http',
           url: 'http://localhost:8200/api/health',
@@ -531,10 +531,10 @@ describe('HealthMonitor fix handlers', () => {
       };
       monitor.addFixHandler(handler);
 
-      const result = await monitor.attemptFix('mcp:SimpleMem');
+      const result = await monitor.attemptFix('mcp:TestService');
       expect(result).toBe('fixed');
       expect(mockActions.execScript).toHaveBeenCalledWith(
-        '/scripts/fixes/restart-simplemem.sh',
+        '/scripts/fixes/restart-test-service.sh',
         undefined,
       );
       expect(mockActions.httpCheck).toHaveBeenCalledWith(
