@@ -395,6 +395,13 @@ function buildContainerArgs(
     }
   }
 
+  // Pass Readwise access token (for readwise CLI in container)
+  const readwiseEnv = readEnvFile(['READWISE_ACCESS_TOKEN']);
+  const readwiseToken = process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
+  if (readwiseToken) {
+    args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
+  }
+
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
 
