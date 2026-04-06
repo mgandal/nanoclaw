@@ -62,8 +62,8 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY agent-runner/package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (--legacy-peer-deps for zod 3/4 conflict between agent-sdk and mcp-sdk)
+RUN npm install --legacy-peer-deps
 
 # Copy source code
 COPY agent-runner/ ./

@@ -23,6 +23,8 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { createHonchoClient } from './honcho-client.js';
+import { HonchoSession } from './honcho-session.js';
 
 interface ImageAttachment {
   base64: string;
@@ -213,20 +215,18 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     };
   }
 
-  if (process.env.SIMPLEMEM_URL) {
-    try {
-      const smUrl = new URL(process.env.SIMPLEMEM_URL);
-      const smToken = smUrl.searchParams.get('token');
-      smUrl.searchParams.delete('token');
-      servers.simplemem = {
-        type: 'http',
-        url: smUrl.toString(),
-        headers: {
-          Accept: 'application/json, text/event-stream',
-          ...(smToken ? { Authorization: `Bearer ${smToken}` } : {}),
-        },
-      };
-    } catch { /* invalid URL, skip */ }
+  if (process.env.HONCHO_URL) {
+    const honchoMcpPath = path.join(path.dirname(mcpServerPath), 'honcho-mcp-stdio.js');
+    servers.honcho = {
+      command: 'node',
+      args: [honchoMcpPath],
+      env: {
+        HONCHO_URL: process.env.HONCHO_URL,
+        HONCHO_WORKSPACE: 'nanoclaw',
+        HONCHO_USER_PEER: 'mgandal',
+        HONCHO_AI_PEER: containerInput.groupFolder.replace(/^telegram_/, ''),
+      },
+    };
   }
 
   if (process.env.APPLE_NOTES_URL) {
@@ -591,7 +591,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__qmd__*',
-        'mcp__simplemem__*',
+        'mcp__honcho__*',
         'mcp__hindsight__*',
 
         'mcp__apple_notes__*',
@@ -754,6 +754,25 @@ async function main(): Promise<void> {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
+  // Initialize Honcho session (skip for scheduled tasks — don't pollute user models)
+  let honchoSession: HonchoSession | null = null;
+  if (process.env.HONCHO_URL && !containerInput.isScheduledTask) {
+    const honchoClient = createHonchoClient(process.env.HONCHO_URL);
+    const aiPeer = containerInput.groupFolder.replace(/^telegram_/, '');
+    honchoSession = new HonchoSession(honchoClient, {
+      workspace: 'nanoclaw',
+      userPeer: 'mgandal',
+      aiPeer,
+      sessionId: containerInput.sessionId || `new-${Date.now()}`,
+    });
+    await honchoSession.initialize();
+
+    // Initial prefetch (blocking on first turn — no cached context yet)
+    if (honchoSession.isReady()) {
+      await honchoSession.prefetchContext();
+    }
+  }
+
   let sessionId = containerInput.sessionId;
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
@@ -905,6 +924,11 @@ async function main(): Promise<void> {
         `Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`,
       );
 
+      // Inject Honcho context into prompt (if available)
+      if (honchoSession?.isReady()) {
+        prompt = honchoSession.injectContext(prompt);
+      }
+
       const queryResult = await runQuery(
         prompt,
         sessionId,
@@ -920,6 +944,14 @@ async function main(): Promise<void> {
         resumeAt = queryResult.lastAssistantUuid;
       }
 
+      // Update Honcho session ID if SDK created a new one
+      if (honchoSession?.isReady() && queryResult.newSessionId &&
+          queryResult.newSessionId !== containerInput.sessionId) {
+        honchoSession.updateSessionId(queryResult.newSessionId).catch((err) => {
+          log(`Honcho session update failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+
       // If _close was consumed during the query, exit immediately.
       // Don't emit a session-update marker (it would reset the host's
       // idle timer and cause a 30-min delay before the next _close).
@@ -931,7 +963,18 @@ async function main(): Promise<void> {
       // Emit session update so host can track it
       writeOutput({ status: 'success', result: null, newSessionId: sessionId });
 
+      // Background prefetch for next turn (with 3s timeout)
+      const prefetchPromise = honchoSession?.isReady()
+        ? honchoSession.prefetchContext()
+        : Promise.resolve();
+
       log('Query ended, waiting for next IPC message...');
+
+      // Wait for prefetch to complete (with 3s timeout) before next turn
+      await Promise.race([
+        prefetchPromise,
+        new Promise(resolve => setTimeout(resolve, 3000)),
+      ]);
 
       // Wait for the next message or _close sentinel
       const nextMessage = await waitForIpcMessage();

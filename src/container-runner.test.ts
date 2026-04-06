@@ -494,11 +494,10 @@ describe('container-runner environment variable handling', () => {
   afterEach(() => {
     vi.useRealTimers();
     // Clean up env vars we set during tests
-    delete process.env.SIMPLEMEM_URL;
+    delete process.env.HONCHO_URL;
     delete process.env.APPLE_NOTES_URL;
     delete process.env.TODOIST_URL;
     delete process.env.HINDSIGHT_URL;
-
   });
 
   it('passes OAuth placeholder when auth mode is oauth', async () => {
@@ -551,9 +550,9 @@ describe('container-runner environment variable handling', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
-  it('rewrites localhost to host gateway in SIMPLEMEM_URL', async () => {
+  it('rewrites localhost to host gateway in HONCHO_URL', async () => {
     vi.mocked(readEnvFile).mockReturnValue({
-      SIMPLEMEM_URL: 'http://localhost:8200/mcp?token=secret123',
+      HONCHO_URL: 'http://localhost:8010',
     });
 
     const resultPromise = runContainerAgent(testGroup, testInput, () => {});
@@ -564,24 +563,20 @@ describe('container-runner environment variable handling', () => {
     const args = spawnCall[1] as string[];
     const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
-    const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
-    expect(simpleMemVar).toBeDefined();
-    // localhost should be rewritten to host.docker.internal (the mock gateway)
-    expect(simpleMemVar).toContain('host.docker.internal');
-    expect(simpleMemVar).not.toContain('localhost');
-    // Auth token should be preserved in query params
-    expect(simpleMemVar).toContain('token=secret123');
+    const honchoVar = envVars.find((a) => a.startsWith('HONCHO_URL='));
+    expect(honchoVar).toBeDefined();
+    expect(honchoVar).toContain('host.docker.internal');
+    expect(honchoVar).not.toContain('localhost');
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
 
-    // Reset mock
     vi.mocked(readEnvFile).mockReturnValue({});
   });
 
-  it('skips SIMPLEMEM_URL when URL is malformed', async () => {
+  it('skips HONCHO_URL when URL is malformed', async () => {
     vi.mocked(readEnvFile).mockReturnValue({
-      SIMPLEMEM_URL: 'not-a-valid-url',
+      HONCHO_URL: 'not-a-valid-url',
     });
 
     const resultPromise = runContainerAgent(testGroup, testInput, () => {});
@@ -592,9 +587,8 @@ describe('container-runner environment variable handling', () => {
     const args = spawnCall[1] as string[];
     const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
-    // Should NOT have SIMPLEMEM_URL in args
-    const simpleMemVar = envVars.find((a) => a.startsWith('SIMPLEMEM_URL='));
-    expect(simpleMemVar).toBeUndefined();
+    const honchoVar = envVars.find((a) => a.startsWith('HONCHO_URL='));
+    expect(honchoVar).toBeUndefined();
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
