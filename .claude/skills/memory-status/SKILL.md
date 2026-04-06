@@ -65,13 +65,6 @@ docker logs hindsight --tail 20 2>&1
 ```
 Note: Hindsight uses bank "hermes" at `/mcp/hermes/`.
 
-### Cognee
-```bash
-docker logs cognee --tail 20 2>&1
-# Check Neo4j if running
-docker logs $(docker ps --filter "name=neo4j" --format "{{.Names}}" 2>/dev/null) --tail 10 2>&1
-```
-
 ### Apple Notes
 ```bash
 # Check recent logs
@@ -156,11 +149,6 @@ docker logs simplemem --tail 50 2>&1 | grep -i "tools/call\|memory\|recall" | ta
 docker logs hindsight --tail 50 2>&1 | grep -i "tools/call\|memory\|recall\|remember" | tail -5
 ```
 
-### Cognee
-```bash
-docker logs cognee --tail 50 2>&1 | grep -i "tools/call\|search\|graph\|query" | tail -5
-```
-
 ### Apple Notes
 ```bash
 tail -20 ~/.cache/apple-notes-mcp/launchd-stderr.log 2>&1 | grep -i "tools/call\|search\|list" | tail -5
@@ -224,8 +212,7 @@ If everything is healthy, say so:
 - **SimpleMem health**: use `/api/health` not the MCP SSE URL (SSE hangs on GET)
 - **SimpleMem JWT**: token in SIMPLEMEM_URL has an expiry — check `exp` claim
 - **QMD embed under Bun**: `$BUN_INSTALL` env var causes `qmd embed` to run under Bun, which lacks sqlite-vec. Run under Node instead: `node /Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js embed`
-- **Hindsight/Cognee not in health monitor**: these are NOT in the `mcpEndpoints` array in `src/index.ts` — only checked by this skill
-- **Cognee 406 is normal**: Cognee uses Streamable HTTP MCP which returns 406 on GET (requires POST). A 406 means "alive but wrong method" — treat as UP. Check `~/.cache/cognee-mcp/server.log` for actual POST interactions
+- **Hindsight not in health monitor**: it is NOT in the `mcpEndpoints` array in `src/index.ts` — only checked by this skill
 - **Apple Container**: containers are ephemeral, spun up per-message. `container list` showing nothing is normal when idle
 - **Vault `.pageindex/`**: created lazily per-directory when PDFs are indexed via Telegram auto-trigger or IPC. Absence is normal — only flag if a specific PDF was expected to be indexed
 - **Hindsight**: runs as a native Node process, NOT a Docker container. Use `lsof -i :8889` to find PID, not `docker logs`

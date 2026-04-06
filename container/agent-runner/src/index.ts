@@ -253,14 +253,6 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     };
   }
 
-  if (process.env.COGNEE_URL) {
-    servers.cognee = {
-      type: 'http',
-      url: process.env.COGNEE_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
-    };
-  }
-
   // Gmail MCP (if credentials exist in the container)
   if (fs.existsSync('/home/node/.gmail-mcp/credentials.json')) {
     servers.gmail = {
@@ -601,7 +593,7 @@ async function runQuery(
         'mcp__qmd__*',
         'mcp__simplemem__*',
         'mcp__hindsight__*',
-        'mcp__cognee__*',
+
         'mcp__apple_notes__*',
         'mcp__ollama__*',
         'mcp__todoist__*',

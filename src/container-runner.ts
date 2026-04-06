@@ -395,25 +395,6 @@ function buildContainerArgs(
     }
   }
 
-  // Pass Cognee knowledge graph MCP endpoint URL
-  const cogneeEnv = readEnvFile(['COGNEE_URL']);
-  const cogneeUrl = process.env.COGNEE_URL || cogneeEnv.COGNEE_URL;
-  if (cogneeUrl) {
-    try {
-      const parsed = new URL(cogneeUrl);
-      const hostname =
-        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
-          ? CONTAINER_HOST_GATEWAY
-          : parsed.hostname;
-      args.push(
-        '-e',
-        `COGNEE_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
-      );
-    } catch {
-      logger.warn({ cogneeUrl }, 'Invalid COGNEE_URL, skipping Cognee');
-    }
-  }
-
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
 
