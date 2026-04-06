@@ -44,6 +44,8 @@ See global CLAUDE.md for the memory architecture (Hindsight, QMD, file-based). K
 - **QMD** (`mcp__qmd__query`) — document search across vault, Apple Notes, sessions
 - **Files** — `conversations/`, `memory.md`, topic-specific files
 
+**MANDATORY: You must call `mcp__hindsight__retain` before your final response in every session.** Summarize what was discussed, decided, or learned. Also retain immediately when Mike shares facts, preferences, or instructions — don't batch these to end of session.
+
 ## Danger Zone
 
 As the main channel with elevated privileges, you have the most power and the most risk:

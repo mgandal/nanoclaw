@@ -127,11 +127,13 @@ If memory.md is missing or Hindsight returns zero results, note this internally 
 
 Use `mcp__hindsight__*` as your primary memory for anything learned in conversation.
 
-**When to retain:**
-- User shares personal facts, preferences, or context
+**MANDATORY: End-of-session retain.** Before your final response in any session where something meaningful happened, call `mcp__hindsight__retain` with a summary of what was discussed, decided, or learned. This is not optional. If you are uncertain whether the session was "substantive enough," retain anyway — false positives are cheap, lost context is expensive.
+
+**When to retain (during the session):**
+- User shares personal facts, preferences, or context — retain immediately, don't wait for end of session
 - Important decisions, outcomes, or action items
-- After substantive conversations — retain a brief summary of what was discussed and decided
-- When doing research — store key findings so they persist
+- Research findings, new information about people/projects/grants
+- Any instruction about how things should work ("from now on...", "always...", "never...")
 
 **When to recall:**
 - Before answering questions that might depend on past context
