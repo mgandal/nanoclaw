@@ -748,7 +748,7 @@ if (isMain) {
 
 const X_RESULTS_DIR = path.join(IPC_DIR, 'x_results');
 
-async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string }> {
+async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(X_RESULTS_DIR, `${requestId}.json`);
   const pollInterval = 1000;
   let elapsed = 0;
@@ -832,6 +832,31 @@ if (isMain) {
       writeIpcFile(TASKS_DIR, { type: 'x_quote', requestId, tweetUrl: args.tweet_url, comment: args.comment, groupFolder, timestamp: new Date().toISOString() });
       const result = await waitForXResult(requestId);
       return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };
+    },
+  );
+
+  server.tool(
+    'x_bookmarks',
+    'Fetch recent X/Twitter bookmarks. Returns bookmarked tweets with author, text, and URL. Main group only.',
+    {
+      limit: z.number().default(50).describe('Max bookmarks to fetch (default 50)'),
+      since_id: z.string().optional().describe('Stop at this tweet ID (for incremental sync)'),
+    },
+    async (args) => {
+      const requestId = `xbookmarks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'x_bookmarks',
+        requestId,
+        limit: args.limit,
+        sinceId: args.since_id,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForXResult(requestId, 180000);
+      return {
+        content: [{ type: 'text' as const, text: typeof result.data === 'object' ? JSON.stringify(result.data) : result.message }],
+        isError: !result.success,
+      };
     },
   );
 }
