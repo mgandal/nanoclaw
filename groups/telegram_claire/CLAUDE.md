@@ -38,14 +38,11 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 ## Memory
 
-See global CLAUDE.md for the full four-system memory architecture (Hindsight, Cognee, QMD, file-based). Key points for the main channel:
+See global CLAUDE.md for the memory architecture (Hindsight, QMD, file-based). Key points for the main channel:
 
 - **Hindsight** (`mcp__hindsight__retain/recall/reflect`) — primary memory for all personal facts, preferences, and conversational context
-- **Cognee** (`mcp__cognee__search/save_interaction`) — knowledge graph for relationship queries ("who works on what", "how are X and Y connected")
 - **QMD** (`mcp__qmd__query`) — document search across vault, Apple Notes, sessions
 - **Files** — `conversations/`, `memory.md`, topic-specific files
-
-**As the main channel, you are responsible for feeding the knowledge graph.** After substantive sessions, call `mcp__cognee__save_interaction` with a summary. This builds structured knowledge that all groups benefit from.
 
 ## Danger Zone
 
@@ -376,6 +373,10 @@ See `container/skills/wiki/SKILL.md` for the full schema. Three operations:
 ### Triggers
 
 When the user sends a URL, PDF, paper, image, or says "add this to the wiki" — run the ingest workflow. When asking a question that the wiki might answer — check the wiki first. Periodically (or when asked) — run lint.
+
+### Bus Messages: wiki-ingest
+
+When your context packet contains bus messages with topic `wiki-ingest` (from VAULT-claw or other groups), treat them as ingest requests: run the full wiki ingest workflow on the content in the `finding` field. Confirm the ingest by sending a brief summary to your group.
 
 ## User Preferences
 

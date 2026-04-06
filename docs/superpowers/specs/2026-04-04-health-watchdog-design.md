@@ -114,7 +114,6 @@ declare -A EXPECTED=(
   [8186]="node"  # supergateway for Todoist
   [8200]="docker-proxy"
   [8889]="node"  # hindsight
-  [8191]="node"  # cognee proxy
 )
 ```
 Only kills if the process on the port does NOT match the expected pattern. Logs full command line, PID, and owning user before any kill.

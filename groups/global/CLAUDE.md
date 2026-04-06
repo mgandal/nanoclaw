@@ -145,30 +145,6 @@ Use `mcp__hindsight__*` as your primary memory for anything learned in conversat
 - `mcp__hindsight__create_mental_model` — build persistent models of recurring topics
 - `mcp__hindsight__create_directive` — set standing instructions that persist across sessions
 
-### Cognee (knowledge graph — relationships, entities, structured knowledge)
-
-Use `mcp__cognee__*` for questions about **relationships and connections** — who works on what, which grants fund which projects, how people/topics/institutions are connected. Cognee has your entire vault (370+ contacts, projects, grants, state files) indexed in a Neo4j knowledge graph.
-
-**When to search Cognee:**
-- Questions about people relationships ("Who collaborates with Bogdan?", "Which postdocs work on autism?")
-- Questions about project structure ("What grants fund the isoform project?", "Which papers came from R01-MH137578?")
-- Any question where the answer requires connecting information across multiple files or entities
-- When QMD returns fragments but you need the bigger picture of how things relate
-
-**Key tools:**
-- `mcp__cognee__search(search_query, search_type, top_k)` — query the knowledge graph
-  - `search_type="GRAPH_COMPLETION"` — best quality, LLM synthesizes an answer from graph context (slower)
-  - `search_type="CHUNKS"` — fast vector search, returns raw text passages (no LLM)
-- `mcp__cognee__save_interaction(data)` — feed conversation content into the knowledge graph (async, runs in background)
-- `mcp__cognee__list_data` — browse indexed datasets
-- `mcp__cognee__cognify_status` — check if background processing is complete
-
-**MANDATORY: Post-session knowledge capture.** At the END of sessions that involved substantive decisions, research findings, or new information about people/projects/grants, call:
-```
-mcp__cognee__save_interaction(data: "Summary of session: [brief description of what was discussed, decided, or learned]")
-```
-This feeds the conversation into the knowledge graph asynchronously. It does NOT block — the pipeline runs in the background.
-
 ### QMD (document search — vault, notes, sessions)
 
 Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2000+ markdown files across the Obsidian vault, Apple Notes, group memory, and session archives.
@@ -203,20 +179,18 @@ Before asking Mike for any specific fact, detail, or piece of information, you M
 1. **Group memory** — `/workspace/group/memory.md` plus any topic-specific files
 2. **Hindsight** — `mcp__hindsight__recall` for personal facts and past conversation context
 3. **QMD** — `mcp__qmd__query` across vault, sessions, conversations, state files
-4. **Cognee** — `mcp__cognee__search` for relationship/entity queries (use `GRAPH_COMPLETION` for complex, `CHUNKS` for fast)
-5. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
-6. **Conversation logs** — `/workspace/group/conversations/`
+4. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
+5. **Conversation logs** — `/workspace/group/conversations/`
 
 ### Tier 2 — Search if Tier 1 is empty
-7. **Gmail** — search inbox/sent for relevant emails, reservations, confirmations
-8. **Calendar** — check for relevant events and appointments
-9. **iMessage** — search recent messages for context
-10. **Apple Notes** — `mcp__apple_notes__search_notes` for note content
+6. **Gmail** — search inbox/sent for relevant emails, reservations, confirmations
+7. **Calendar** — check for relevant events and appointments
+8. **iMessage** — search recent messages for context
+9. **Apple Notes** — `mcp__apple_notes__search_notes` for note content
 
 ### When to use which system
 - **"What did Mike say about X?"** → Hindsight (conversational memory)
 - **"Find the note about X"** → QMD (document search)
-- **"Who works on X?" / "How are X and Y connected?"** → Cognee (knowledge graph)
 - **"What's in this specific file?"** → Read/Grep (direct file access)
 
 ### Rule

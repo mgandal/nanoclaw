@@ -498,7 +498,7 @@ describe('container-runner environment variable handling', () => {
     delete process.env.APPLE_NOTES_URL;
     delete process.env.TODOIST_URL;
     delete process.env.HINDSIGHT_URL;
-    delete process.env.COGNEE_URL;
+
   });
 
   it('passes OAuth placeholder when auth mode is oauth', async () => {
