@@ -134,6 +134,9 @@ Use `mcp__hindsight__*` as your primary memory for anything learned in conversat
 - Important decisions, outcomes, or action items
 - Research findings, new information about people/projects/grants
 - Any instruction about how things should work ("from now on...", "always...", "never...")
+- Task outcomes — what was built, fixed, deployed, or completed (all groups, not just main)
+- Errors or failures worth remembering ("X didn't work because Y")
+- Cross-group context — anything another group might benefit from knowing
 
 **When to recall:**
 - Before answering questions that might depend on past context
@@ -147,9 +150,26 @@ Use `mcp__hindsight__*` as your primary memory for anything learned in conversat
 - `mcp__hindsight__create_mental_model` — build persistent models of recurring topics
 - `mcp__hindsight__create_directive` — set standing instructions that persist across sessions
 
+### SimpleMem (long-term semantic memory — emails, notes, vault, conversations)
+
+Use `mcp__simplemem__*` for broad semantic search across all ingested content. SimpleMem has 1,100+ vault files, 870+ Apple Notes, email summaries, Claude session history, and Telegram history — all vectorized and searchable by meaning.
+
+**When to use SimpleMem:**
+- Questions that span multiple sources ("What do we know about X across emails, notes, and vault?")
+- When QMD returns nothing — SimpleMem indexes different content (emails, Apple Notes full text)
+- When you need context that might be in an email, a note, or a past conversation
+- Broad "what do we know about..." queries
+
+**Key tools:**
+- `mcp__simplemem__add_memory` — store a new memory (text is automatically vectorized)
+- `mcp__simplemem__search_memory` — semantic search across all stored memories
+- `mcp__simplemem__list_memories` — browse recent memories
+
+SimpleMem is fed automatically every 8 hours by the sync pipeline (vault files, Apple Notes, emails, session history). You can also store memories directly during conversations.
+
 ### QMD (document search — vault, notes, sessions)
 
-Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2000+ markdown files across the Obsidian vault, Apple Notes, group memory, and session archives.
+Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2,500+ markdown files across the Obsidian vault, Apple Notes, group memory, and session archives.
 
 **Key tools:**
 - `mcp__qmd__query` — hybrid semantic + keyword search (best quality)
@@ -157,6 +177,17 @@ Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2000+ mar
 - `mcp__qmd__multi_get` — batch retrieve by glob pattern
 
 For simple lookups where you know the file, use Read/Grep directly — they're faster.
+
+### Wiki (synthesized research knowledge — `99-wiki/`)
+
+For research and science questions, **check the wiki first** before searching raw vault files. The wiki contains synthesized, lab-contextualized knowledge — papers, tools, methods, datasets, concepts — that is higher quality than raw notes.
+
+**How to use:**
+1. Read `99-wiki/index.md` (or `/workspace/extra/claire-vault/99-wiki/index.md` in containers) — it catalogs all pages with one-line summaries
+2. Read relevant wiki pages for your answer
+3. If the wiki doesn't cover the topic, search QMD/vault as fallback
+
+See `WIKI-SCHEMA.md` at the vault root for writing conventions.
 
 ### File-based memory (local per-group)
 
@@ -180,19 +211,23 @@ Before asking Mike for any specific fact, detail, or piece of information, you M
 ### Tier 1 — Search first (always)
 1. **Group memory** — `/workspace/group/memory.md` plus any topic-specific files
 2. **Hindsight** — `mcp__hindsight__recall` for personal facts and past conversation context
-3. **QMD** — `mcp__qmd__query` across vault, sessions, conversations, state files
-4. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
-5. **Conversation logs** — `/workspace/group/conversations/`
+3. **Wiki** — `99-wiki/index.md` for research/science questions (synthesized knowledge)
+4. **QMD** — `mcp__qmd__query` across vault, sessions, conversations, state files
+5. **SimpleMem** — `mcp__simplemem__search_memory` for broad semantic search (emails, notes, history)
+6. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
+7. **Conversation logs** — `/workspace/group/conversations/`
 
 ### Tier 2 — Search if Tier 1 is empty
-6. **Gmail** — search inbox/sent for relevant emails, reservations, confirmations
-7. **Calendar** — check for relevant events and appointments
-8. **iMessage** — search recent messages for context
-9. **Apple Notes** — `mcp__apple_notes__search_notes` for note content
+8. **Gmail** — search inbox/sent for relevant emails, reservations, confirmations
+9. **Calendar** — check for relevant events and appointments
+10. **iMessage** — search recent messages for context
+11. **Apple Notes** — `mcp__apple_notes__search_notes` for note content
 
 ### When to use which system
 - **"What did Mike say about X?"** → Hindsight (conversational memory)
+- **"What do we know about gene X / method Y?"** → Wiki first, then QMD
 - **"Find the note about X"** → QMD (document search)
+- **"Was there an email about X?"** → SimpleMem (has email summaries), then Gmail
 - **"What's in this specific file?"** → Read/Grep (direct file access)
 
 ### Rule
