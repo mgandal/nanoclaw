@@ -273,7 +273,10 @@ export function createHonchoClient(baseUrl: string): HonchoClient {
         const res = await jsonGet(url, TIMEOUT_CONTEXT_MS);
         if (!res.ok) return '';
         const data = await res.json() as HonchoContext;
-        return data.representation ?? '';
+        const parts: string[] = [];
+        if (data.representation) parts.push(data.representation);
+        if (data.peer_card) parts.push(data.peer_card);
+        return parts.join('\n\n');
       } catch {
         return '';
       }
