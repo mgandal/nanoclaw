@@ -1,6 +1,6 @@
 ---
 name: memory-status
-description: Run a comprehensive diagnostic of all NanoClaw memory layers — health, stats, test queries, and actionable recommendations. Use when you want a status report on QMD, SimpleMem, Hindsight, Cognee, Apple Notes, Todoist, SQLite, group memory, and the Obsidian vault.
+description: Run a comprehensive diagnostic of all NanoClaw memory layers — health, stats, test queries, and actionable recommendations. Use when you want a status report on QMD, SimpleMem, Hindsight, Apple Notes, Todoist, SQLite, group memory, and the Obsidian vault.
 ---
 
 # Memory Layer Status Report
@@ -22,9 +22,6 @@ time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8200/
 
 # Hindsight (port 8889)
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://127.0.0.1:8889/mcp/hermes/
-
-# Cognee (port 8191)
-time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://127.0.0.1:8191/mcp
 
 # Apple Notes (port 8184)
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8184/mcp
@@ -172,7 +169,6 @@ Present a single formatted report. Use this exact structure:
 | QMD | ... | ... | ... | ... |
 | SimpleMem | ... | ... | ... | ... |
 | Hindsight | ... | ... | ... | ... |
-| Cognee | ... | ... | ... | ... |
 | Apple Notes | ... | ... | ... | ... |
 | Todoist | ... | ... | ... | ... |
 
@@ -189,7 +185,6 @@ Present a single formatted report. Use this exact structure:
 | QMD | (test query result + latency) | ... |
 | SimpleMem | (from logs) | ... |
 | Hindsight | (from logs) | ... |
-| Cognee | (from logs) | ... |
 | Apple Notes | (from logs) | ... |
 | Todoist | (from logs) | ... |
 
@@ -203,7 +198,7 @@ List any issues found with actionable fix commands. Examples:
 - JWT token expiry approaching: warn with date
 
 If everything is healthy, say so:
-> All 9 memory layers operational. No issues detected.
+> All 8 memory layers operational. No issues detected.
 ```
 
 ## Reference: Known Quirks
