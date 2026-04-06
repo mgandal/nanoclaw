@@ -89,7 +89,7 @@ systemctl --user restart nanoclaw
 
 ## Infrastructure / Services
 
-- SimpleMem runs in Docker — do NOT try to start it locally or create duplicate configs
+- Honcho runs in Docker (shared with Hermes) on port 8010 — workspace "nanoclaw"
 - QMD must bind to IPv4 (0.0.0.0), not just IPv6
 - Todoist uses REST API v1 (not v2)
 - When checking service status, report what you find — do NOT attempt to fix services that are already running correctly
