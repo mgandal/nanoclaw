@@ -91,7 +91,6 @@ systemctl --user restart nanoclaw
 
 - SimpleMem runs in Docker — do NOT try to start it locally or create duplicate configs
 - QMD must bind to IPv4 (0.0.0.0), not just IPv6
-- Cognee uses SQLite — always check for orphaned processes holding DB locks before starting
 - Todoist uses REST API v1 (not v2)
 - When checking service status, report what you find — do NOT attempt to fix services that are already running correctly
 
