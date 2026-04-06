@@ -834,18 +834,6 @@ async function main(): Promise<void> {
   const fixScriptsDir = path.join(process.cwd(), 'scripts', 'fixes');
 
   healthMonitor.addFixHandler({
-    id: 'mcp-simplemem',
-    service: 'mcp:SimpleMem',
-    fixScript: path.join(fixScriptsDir, 'restart-simplemem.sh'),
-    verify: {
-      type: 'http',
-      url: 'http://localhost:8200/api/health',
-      expectStatus: 200,
-    },
-    cooldownMs: 120_000,
-    maxAttempts: 2,
-  });
-  healthMonitor.addFixHandler({
     id: 'mcp-qmd',
     service: 'mcp:QMD',
     fixScript: path.join(fixScriptsDir, 'restart-qmd.sh'),
@@ -908,6 +896,29 @@ async function main(): Promise<void> {
 
   healthMonitor.setFixActions(createDefaultFixActions());
 
+  // Bootstrap Honcho workspace (create if not exists)
+  const honchoBootstrapEnv = readEnvFile(['HONCHO_URL']);
+  const honchoBootstrapUrl = process.env.HONCHO_URL || honchoBootstrapEnv.HONCHO_URL;
+  if (honchoBootstrapUrl) {
+    try {
+      const res = await fetch(`${honchoBootstrapUrl}/v3/workspaces`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'nanoclaw' }),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        logger.info('Honcho workspace "nanoclaw" created');
+      } else if (res.status === 409) {
+        logger.debug('Honcho workspace "nanoclaw" already exists');
+      } else {
+        logger.warn({ status: res.status }, 'Honcho workspace bootstrap unexpected status');
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Honcho workspace bootstrap failed (Honcho may be down)');
+    }
+  }
+
   // Periodically check health thresholds + MCP endpoints
   // Each endpoint has an optional healthUrl for services where the MCP URL
   // isn't suitable for health checks (e.g. SSE endpoints that hang or require auth).
@@ -917,11 +928,7 @@ async function main(): Promise<void> {
     healthUrl?: string;
   }> = [
     { name: 'QMD', url: 'http://localhost:8181/mcp' },
-    {
-      name: 'SimpleMem',
-      url: process.env.SIMPLEMEM_URL,
-      healthUrl: 'http://localhost:8200/api/health',
-    },
+    { name: 'Honcho', url: undefined as string | undefined },
     { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
     { name: 'Todoist', url: process.env.TODOIST_URL },
   ];
@@ -929,11 +936,13 @@ async function main(): Promise<void> {
   // Read URLs from .env if not in process.env
   {
     const envUrls = readEnvFile([
-      'SIMPLEMEM_URL',
+      'HONCHO_URL',
       'APPLE_NOTES_URL',
       'TODOIST_URL',
     ]);
-    if (!mcpEndpoints[1].url) mcpEndpoints[1].url = envUrls.SIMPLEMEM_URL;
+    if (!mcpEndpoints[1].url && envUrls.HONCHO_URL) {
+      mcpEndpoints[1].url = `${envUrls.HONCHO_URL}/v3/workspaces/list`;
+    }
     if (!mcpEndpoints[2].url) mcpEndpoints[2].url = envUrls.APPLE_NOTES_URL;
     if (!mcpEndpoints[3].url) mcpEndpoints[3].url = envUrls.TODOIST_URL;
   }
