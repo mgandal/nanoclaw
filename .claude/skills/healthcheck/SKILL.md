@@ -19,9 +19,6 @@ curl -s -o /dev/null -w "SimpleMem: %{http_code} %{time_total}s" http://localhos
 # Hindsight (port 8889)
 curl -s -o /dev/null -w "Hindsight: %{http_code} %{time_total}s" --max-time 5 http://127.0.0.1:8889/mcp/hermes/
 
-# Cognee (port 8191 — 406 on GET is normal/healthy)
-curl -s -o /dev/null -w "Cognee: %{http_code} %{time_total}s" --max-time 5 http://127.0.0.1:8191/mcp
-
 # Apple Notes (port 8184)
 curl -s -o /dev/null -w "Apple Notes: %{http_code} %{time_total}s" --max-time 5 http://localhost:8184/mcp
 
@@ -40,12 +37,10 @@ Report results in a table:
 | QMD | ... | ... |
 | SimpleMem | ... | ... |
 | Hindsight | ... | ... |
-| Cognee | ... | ... |
 | Apple Notes | ... | ... |
 | Todoist | ... | ... |
 ```
 
 Notes:
-- Cognee returns 406 on GET — this means UP (Streamable HTTP MCP requires POST)
 - Apple Notes/Todoist return 405 on GET — this means UP
 - For deeper diagnostics (stats, test queries, local storage), use `/memory-status`
