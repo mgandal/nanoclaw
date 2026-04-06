@@ -81,14 +81,111 @@ This stores credentials in `~/.config/readwise/` inside the container. Since con
 
 Option (a) is simpler: add `readwise login-with-token $READWISE_ACCESS_TOKEN` to the task's `script` field (pre-task bash).
 
-## Part C: X/Twitter Bookmarks Sync (DEFERRED)
+## Part C: X/Twitter Bookmarks Sync
 
-No API key available. Options:
-1. **Playwright scraper** — Navigate to x.com/i/bookmarks, extract bookmark URLs. Requires persistent X session cookies.
-2. **RSS bridge** — Third-party services that expose X bookmarks as RSS. Unreliable.
-3. **Manual** — Mike copies bookmark URLs to VAULT-claw. Already works via Part A.
+No API key. Uses Playwright browser automation via the existing X integration skill infrastructure.
 
-Recommend deferring to a separate implementation. The `bird` CLI (already in container) can read tweets by URL but has no bookmark-listing capability.
+### Architecture
+
+The X integration skill (`.claude/skills/x-integration/`) already has:
+- Playwright with persistent Chrome profile (`data/x-browser-profile/`)
+- Host-side IPC handler (`host.ts` → spawns script subprocesses)
+- Container-side MCP tool definitions (`agent.ts`)
+- Authentication via `setup.ts` (user logs into X once, session persists)
+
+The bookmark scraper adds one new script (`scripts/bookmarks.ts`) and one new IPC handler (`x_bookmarks`), following the identical pattern as `like.ts`, `post.ts`, etc.
+
+### New script: `scripts/bookmarks.ts`
+
+```
+Input: { limit?: number, sinceId?: string }
+Output: { success: true, data: { bookmarks: [{ id, url, author, text, timestamp }] } }
+```
+
+Steps:
+1. `getBrowserContext()` — reuse authenticated Chrome profile
+2. Navigate to `https://x.com/i/bookmarks`
+3. Wait for `article[data-testid="tweet"]` elements to load
+4. For each visible tweet card, extract:
+   - Tweet URL (from the timestamp link `a[href*="/status/"]`)
+   - Author (`[data-testid="User-Name"]`)
+   - Text content (`[data-testid="tweetText"]`)
+   - Tweet ID (from URL)
+5. If `sinceId` provided, stop scraping when we hit that ID (incremental)
+6. If `limit` provided, stop after N bookmarks
+7. Scroll down and repeat until limit/sinceId reached or no more content
+8. Return structured array
+
+### Scrolling strategy
+X bookmarks page uses infinite scroll. The script:
+1. Scrapes visible tweets
+2. Scrolls to bottom (`window.scrollTo(0, document.body.scrollHeight)`)
+3. Waits 2s for new content
+4. Repeats until: limit reached, sinceId found, or no new tweets after 3 scroll attempts
+
+Default limit: 50 bookmarks per sync (keeps runtime under 2 minutes).
+
+### Host-side IPC handler
+
+Add `x_bookmarks` case to `host.ts`:
+```typescript
+case 'x_bookmarks':
+  result = await runScript('bookmarks', {
+    limit: data.limit ?? 50,
+    sinceId: data.sinceId
+  });
+  break;
+```
+
+### Container-side MCP tool
+
+Add to `agent.ts`:
+```typescript
+{
+  name: 'x_bookmarks',
+  description: 'Fetch recent X/Twitter bookmarks',
+  parameters: {
+    limit: { type: 'number', description: 'Max bookmarks to fetch (default 50)' },
+    sinceId: { type: 'string', description: 'Stop at this tweet ID (for incremental sync)' }
+  }
+}
+```
+
+### Scheduled task
+
+A VAULT-claw scheduled task (cron: `0 9 * * *`, 9am daily, staggered 1h after Readwise):
+
+```
+X Bookmarks daily sync. Fetch new bookmarks since last check.
+
+1. Read /workspace/group/x-bookmarks-state.json for last synced tweet ID
+2. Call x_bookmarks tool with sinceId from state (or no sinceId if first run, limit 50)
+3. For each new bookmark:
+   a. Read the full tweet/thread using bird CLI: bird read {url}
+   b. Determine category (paper, tool, article, thread, other)
+   c. Create/update wiki page if substantial (papers, tools, threads)
+   d. Save to 99-wiki/sources/ as raw capture
+   e. Update 99-wiki/index.md and log.md
+4. Write newest tweet ID to state file
+5. Send digest to this group
+```
+
+### Prerequisites
+
+1. **X integration must be set up first** — run `setup.ts` to authenticate Chrome profile
+2. **X integration must be integrated into NanoClaw** — the skill's SKILL.md documents the 4 integration points (ipc.ts, ipc-mcp-stdio.ts, Dockerfile, build.sh) that need wiring up
+3. **Is it already integrated?** If not, this is a dependency.
+
+### Risk: X UI changes
+
+X frequently updates their DOM. Selectors may break. Mitigation:
+- Use `data-testid` attributes (X's own test IDs, more stable than classes)
+- The script should gracefully return an error with the selector that failed, making fixes quick
+- Same risk already accepted for post/like/reply/retweet scripts
+
+### Risk: Rate limiting / detection
+
+Scraping bookmarks once daily (50 items, <2 min session) is minimal activity on a real Chrome profile with a real user session. Low risk of detection, same as the existing post/like scripts.
 
 ## Implementation Order
 
@@ -96,9 +193,12 @@ Recommend deferring to a separate implementation. The `bird` CLI (already in con
 2. Add Readwise CLI to Dockerfile + rebuild container
 3. Add READWISE_ACCESS_TOKEN to .env and container-runner.ts
 4. Create scheduled task for Readwise sync (Part B)
-5. Test: paste a URL to VAULT-claw, verify wiki ingest
-6. Test: trigger Readwise sync manually, verify wiki ingest
-7. (Future) Implement X bookmark scraper (Part C)
+5. Wire up X integration into NanoClaw (if not already done)
+6. Create `scripts/bookmarks.ts` + add `x_bookmarks` to host.ts and agent.ts
+7. Create scheduled task for X bookmarks sync (Part C)
+8. Test: paste a URL to VAULT-claw, verify wiki ingest
+9. Test: trigger Readwise sync manually, verify wiki ingest
+10. Test: trigger X bookmarks sync manually, verify scraping + wiki ingest
 
 ## Files to modify
 
@@ -108,11 +208,16 @@ Recommend deferring to a separate implementation. The `bird` CLI (already in con
 | `container/Dockerfile` | Add `@readwise/cli` to npm install |
 | `.env` | Add `READWISE_ACCESS_TOKEN` |
 | `src/container-runner.ts` | Inject `READWISE_ACCESS_TOKEN` into containers |
-| `container/build.sh` | No change (rebuilds automatically) |
+| `.claude/skills/x-integration/scripts/bookmarks.ts` | **NEW** — Playwright bookmark scraper |
+| `.claude/skills/x-integration/host.ts` | Add `x_bookmarks` case |
+| `.claude/skills/x-integration/agent.ts` | Add `x_bookmarks` MCP tool definition |
+| `src/ipc.ts` | Wire up X IPC handler (if not already done) |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | Wire up X MCP tools (if not already done) |
+| `container/Dockerfile` | COPY x-integration skill (if not already done) |
 
 ## Not in scope
 
-- X bookmark sync (deferred — Part C)
 - Readwise highlight sync (only Reader documents for now)
-- Two-way sync (we don't write back to Readwise)
+- Two-way sync (we don't write back to Readwise or X)
 - SimpleMem tool name fix (separate task)
+- X API approach (requires $100/month paid tier)
