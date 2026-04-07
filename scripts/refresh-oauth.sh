@@ -3,11 +3,21 @@
 # Claude Code refreshes the token automatically; this script copies
 # the latest token into .env and restarts NanoClaw if it changed.
 #
-# Runs via launchd every 4 hours (token expires ~24h, so plenty of margin).
+# Runs via launchd every hour. No restart needed — credential proxy re-reads
+# .env on every request.
 
 set -euo pipefail
-exec 200>/tmp/nanoclaw-oauth.lock
-flock -n 200 || { echo "Another OAuth refresh is running, skipping"; exit 0; }
+LOCKDIR="/tmp/nanoclaw-oauth.lock"
+if ! mkdir "$LOCKDIR" 2>/dev/null; then
+  # Stale lock? Remove if older than 5 minutes
+  if [ -d "$LOCKDIR" ] && find "$LOCKDIR" -maxdepth 0 -mmin +5 | grep -q .; then
+    rmdir "$LOCKDIR" 2>/dev/null || true
+    mkdir "$LOCKDIR" 2>/dev/null || { echo "Another OAuth refresh is running, skipping"; exit 0; }
+  else
+    echo "Another OAuth refresh is running, skipping"; exit 0
+  fi
+fi
+trap 'rmdir "$LOCKDIR" 2>/dev/null' EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../.env"
@@ -28,7 +38,7 @@ fi
 CURRENT_TOKEN=$(grep '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
 
 if [ "$NEW_TOKEN" = "$CURRENT_TOKEN" ]; then
-  log "Token unchanged, skipping restart"
+  log "Token unchanged, no update needed"
   exit 0
 fi
 
@@ -60,16 +70,6 @@ with open('$ENV_FILE', 'w') as f:
             f.write(line)
 "
 
-log "Token refreshed (expires in ${EXPIRES_OK}h), restarting NanoClaw"
-
-# Graceful restart: bootout+bootstrap instead of kickstart -k (which SIGKILLs)
-PLIST="$HOME/Library/LaunchAgents/com.nanoclaw.plist"
-if [ -f "$PLIST" ]; then
-    launchctl bootout "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
-    sleep 2
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-else
-    launchctl kickstart -k "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
-fi
+log "Token refreshed (expires in ${EXPIRES_OK}h) — credential proxy picks up new token automatically"
 
 exit 0

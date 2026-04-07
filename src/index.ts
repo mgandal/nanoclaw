@@ -898,7 +898,8 @@ async function main(): Promise<void> {
 
   // Bootstrap Honcho workspace (create if not exists)
   const honchoBootstrapEnv = readEnvFile(['HONCHO_URL']);
-  const honchoBootstrapUrl = process.env.HONCHO_URL || honchoBootstrapEnv.HONCHO_URL;
+  const honchoBootstrapUrl =
+    process.env.HONCHO_URL || honchoBootstrapEnv.HONCHO_URL;
   if (honchoBootstrapUrl) {
     try {
       const res = await fetch(`${honchoBootstrapUrl}/v3/workspaces`, {
@@ -912,10 +913,16 @@ async function main(): Promise<void> {
       } else if (res.status === 409) {
         logger.debug('Honcho workspace "nanoclaw" already exists');
       } else {
-        logger.warn({ status: res.status }, 'Honcho workspace bootstrap unexpected status');
+        logger.warn(
+          { status: res.status },
+          'Honcho workspace bootstrap unexpected status',
+        );
       }
     } catch (err) {
-      logger.warn({ err }, 'Honcho workspace bootstrap failed (Honcho may be down)');
+      logger.warn(
+        { err },
+        'Honcho workspace bootstrap failed (Honcho may be down)',
+      );
     }
   }
 
