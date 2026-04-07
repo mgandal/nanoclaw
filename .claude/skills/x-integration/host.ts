@@ -22,9 +22,10 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
   const scriptPath = path.join(process.cwd(), '.claude', 'skills', 'x-integration', 'scripts', `${script}.ts`);
 
   return new Promise((resolve) => {
-    const proc = spawn(path.join(path.dirname(process.execPath), 'npx'), ['tsx', scriptPath], {
+    const nodeBinDir = '/Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/bin';
+    const proc = spawn(nodeBinDir + '/npx', ['tsx', scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, NANOCLAW_ROOT: process.cwd() },
+      env: { ...process.env, NANOCLAW_ROOT: process.cwd(), PATH: nodeBinDir + ':' + (process.env.PATH || '') },
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
