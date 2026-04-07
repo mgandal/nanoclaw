@@ -24,9 +24,9 @@ export const OLLAMA_ADMIN_TOOLS =
   (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
-export const MAX_MESSAGES_PER_PROMPT = parseInt(
-  process.env.MAX_MESSAGES_PER_PROMPT || '10',
-  10,
+export const MAX_MESSAGES_PER_PROMPT = Math.max(
+  1,
+  parseInt(process.env.MAX_MESSAGES_PER_PROMPT || '10', 10) || 10,
 );
 
 // Absolute paths needed for container mounts
