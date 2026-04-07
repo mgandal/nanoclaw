@@ -322,7 +322,7 @@ The task will run in that group's context with access to their files and memory.
 When triggered as a scheduled morning briefing task, compose a chief-of-staff briefing for Mike. You are the single voice — not multiple agents talking, but one composed message from a chief of staff who has been in the office since dawn.
 
 **Data to gather:**
-1. Today's calendar: run `/workspace/extra/claire-tools/icalbuddy.sh` to get today's events. Detect conflicts (overlapping times).
+1. Today's calendar: use the `calendar_today` MCP tool to get today's events from ALL calendars (Google, Exchange/Outlook, subscriptions). Detect conflicts (overlapping times). Use `calendar_range` for multi-day lookups and `calendar_list` to discover available calendars.
 2. Recent emails: check Gmail for the last 24h of inbox activity.
 3. System alerts: check `/workspace/project/data/system-alerts.json` for unresolved infrastructure issues.
 4. Current priorities: already in your context packet.
