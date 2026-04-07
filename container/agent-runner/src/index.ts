@@ -253,6 +253,14 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     };
   }
 
+  if (process.env.CALENDAR_URL) {
+    servers.calendar = {
+      type: 'http',
+      url: process.env.CALENDAR_URL,
+      headers: { Accept: 'application/json, text/event-stream' },
+    };
+  }
+
   // Gmail MCP (if credentials exist in the container)
   if (fs.existsSync('/home/node/.gmail-mcp/credentials.json')) {
     servers.gmail = {
@@ -598,6 +606,7 @@ async function runQuery(
         'mcp__ollama__*',
         'mcp__todoist__*',
         'mcp__gmail__*',
+        'mcp__calendar__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',

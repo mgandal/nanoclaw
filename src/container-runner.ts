@@ -368,6 +368,25 @@ function buildContainerArgs(
     }
   }
 
+  // Pass Calendar MCP endpoint URL (only if configured in .env)
+  const calendarEnv = readEnvFile(['CALENDAR_URL']);
+  const calendarUrl = process.env.CALENDAR_URL || calendarEnv.CALENDAR_URL;
+  if (calendarUrl) {
+    try {
+      const parsed = new URL(calendarUrl);
+      const hostname =
+        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+          ? CONTAINER_HOST_GATEWAY
+          : parsed.hostname;
+      args.push(
+        '-e',
+        `CALENDAR_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
+      );
+    } catch {
+      logger.warn({ calendarUrl }, 'Invalid CALENDAR_URL, skipping Calendar');
+    }
+  }
+
   // Pass Honcho user-modeling API URL
   const honchoEnv = readEnvFile(['HONCHO_URL']);
   const honchoUrl = process.env.HONCHO_URL || honchoEnv.HONCHO_URL;
@@ -383,10 +402,7 @@ function buildContainerArgs(
         `HONCHO_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
       );
     } catch {
-      logger.warn(
-        { honchoUrl },
-        'Invalid HONCHO_URL, skipping Honcho',
-      );
+      logger.warn({ honchoUrl }, 'Invalid HONCHO_URL, skipping Honcho');
     }
   }
 
