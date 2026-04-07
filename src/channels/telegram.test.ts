@@ -508,7 +508,10 @@ describe('TelegramChannel', () => {
       const handler = botRef.handlers.get('message:photo');
       expect(handler).toBeDefined();
 
-      const ctx = makeNonTextCtx({ caption: 'Check this out' });
+      const ctx = makeNonTextCtx({
+        caption: 'Check this out',
+        extra: { photo: [{ file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 }] },
+      });
       await handler!(ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
@@ -525,7 +528,9 @@ describe('TelegramChannel', () => {
       await channel.connect();
 
       const handler = botRef.handlers.get('message:photo');
-      const ctx = makeNonTextCtx({});
+      const ctx = makeNonTextCtx({
+        extra: { photo: [{ file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 }] },
+      });
       await handler!(ctx);
 
       expect(opts.onMessage).toHaveBeenCalledWith(
