@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'OLLAMA_ADMIN_TOOLS',
+  'OLLAMA_DEFAULT_MODEL',
   'TELEGRAM_BOT_POOL',
   'TZ',
 ]);
@@ -22,6 +23,8 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const OLLAMA_ADMIN_TOOLS =
   (process.env.OLLAMA_ADMIN_TOOLS || envConfig.OLLAMA_ADMIN_TOOLS) === 'true';
+export const OLLAMA_DEFAULT_MODEL =
+  process.env.OLLAMA_DEFAULT_MODEL || envConfig.OLLAMA_DEFAULT_MODEL || '';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 export const MAX_MESSAGES_PER_PROMPT = Math.max(
