@@ -995,7 +995,8 @@ describe('container-runner volume mount construction', () => {
     // Non-main should NOT have /workspace/project mount (check -v args)
     const mountArgs = args.filter((a, i) => i > 0 && args[i - 1] === '-v');
     const projectMount = mountArgs.find(
-      (a) => a.includes(':/workspace/project:') || a.endsWith(':/workspace/project'),
+      (a) =>
+        a.includes(':/workspace/project:') || a.endsWith(':/workspace/project'),
     );
     expect(projectMount).toBeUndefined();
 
@@ -1175,7 +1176,9 @@ describe('container-runner output marker parsing edge cases', () => {
     // Split the marker and JSON across multiple data events
     fakeProc.stdout.push(`${OUTPUT_START_MARKER}\n{"statu`);
     await vi.advanceTimersByTimeAsync(5);
-    fakeProc.stdout.push(`s":"success","result":"chunked"}\n${OUTPUT_END_MARKER}\n`);
+    fakeProc.stdout.push(
+      `s":"success","result":"chunked"}\n${OUTPUT_END_MARKER}\n`,
+    );
     await vi.advanceTimersByTimeAsync(10);
 
     fakeProc.emit('close', 0);

@@ -888,7 +888,9 @@ describe('HealthMonitor regression tests', () => {
     expect(r3).toBe('escalated');
 
     // The escalation alert should have been fired
-    const escalationCalls = (alertFn as ReturnType<typeof vi.fn>).mock.calls.filter(
+    const escalationCalls = (
+      alertFn as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(
       (c: unknown[]) => (c[0] as HealthAlert).type === 'fix_escalation',
     );
     expect(escalationCalls.length).toBeGreaterThanOrEqual(1);
@@ -896,7 +898,8 @@ describe('HealthMonitor regression tests', () => {
 
     // After escalation, attempt count is reset — next attempt should NOT immediately escalate
     (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
-      reachable: true, statusCode: 200,
+      reachable: true,
+      statusCode: 200,
     });
     const r4 = await monitor.attemptFix('svc:esc');
     expect(r4).toBe('fixed');

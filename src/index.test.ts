@@ -428,7 +428,12 @@ describe('checkSessionExpiry boundary conditions', () => {
   });
 
   it('expires when both createdAt and lastUsed are undefined', () => {
-    const result = checkSessionExpiry(undefined, undefined, TWO_HOURS, FOUR_HOURS);
+    const result = checkSessionExpiry(
+      undefined,
+      undefined,
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
     // Both Infinity, max age check comes first
     expect(result).toMatch(/max age/);
   });
@@ -539,7 +544,12 @@ describe('startup recovery (DB layer)', () => {
     expect(recoveredSeq).toBeGreaterThan(0);
 
     // Messages since recovered seq should only be the one after the bot reply
-    const pending = getMessagesSince('group1@g.us', recoveredSeq, 'Claire', 200);
+    const pending = getMessagesSince(
+      'group1@g.us',
+      recoveredSeq,
+      'Claire',
+      200,
+    );
     expect(pending).toHaveLength(1);
     expect(pending[0].content).toBe('After bot reply');
   });
@@ -707,7 +717,9 @@ describe('isStaleSessionError edge cases', () => {
 
   it('detects ENOENT with .jsonl in path', () => {
     expect(
-      isStaleSessionError('Error: ENOENT: no such file or directory, open "/data/sessions/abc.jsonl"'),
+      isStaleSessionError(
+        'Error: ENOENT: no such file or directory, open "/data/sessions/abc.jsonl"',
+      ),
     ).toBe(true);
   });
 
@@ -716,7 +728,9 @@ describe('isStaleSessionError edge cases', () => {
   });
 
   it('does not false-positive on ENOENT without .jsonl', () => {
-    expect(isStaleSessionError('ENOENT: no such file /tmp/config.json')).toBe(false);
+    expect(isStaleSessionError('ENOENT: no such file /tmp/config.json')).toBe(
+      false,
+    );
   });
 });
 
