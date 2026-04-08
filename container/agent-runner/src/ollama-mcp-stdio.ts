@@ -13,6 +13,7 @@ import path from 'path';
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://host.docker.internal:11434';
 const OLLAMA_ADMIN_TOOLS = process.env.OLLAMA_ADMIN_TOOLS === 'true';
+const OLLAMA_DEFAULT_MODEL = process.env.OLLAMA_DEFAULT_MODEL || '';
 const OLLAMA_STATUS_FILE = '/workspace/ipc/ollama_status.json';
 
 /** Timeout for generate requests (model inference can be slow). */
@@ -103,18 +104,25 @@ server.tool(
 
 server.tool(
   'ollama_generate',
-  'Send a prompt to a local Ollama model and get a response. Good for cheaper/faster tasks like summarization, translation, or general queries. Use ollama_list_models first to see available models.',
+  `Send a prompt to a local Ollama model and get a response. Good for cheaper/faster tasks like summarization, translation, or general queries.${OLLAMA_DEFAULT_MODEL ? ` Default model: ${OLLAMA_DEFAULT_MODEL}` : ' Use ollama_list_models first to see available models.'}`,
   {
-    model: z.string().describe('The model name (e.g., "llama3.2", "mistral", "gemma2")'),
+    model: z.string().optional().describe(`The model name (e.g., "llama3.2", "mistral", "gemma2").${OLLAMA_DEFAULT_MODEL ? ` Defaults to "${OLLAMA_DEFAULT_MODEL}" if omitted.` : ''}`),
     prompt: z.string().describe('The prompt to send to the model'),
     system: z.string().optional().describe('Optional system prompt to set model behavior'),
   },
   async (args) => {
-    log(`>>> Generating with ${args.model} (${args.prompt.length} chars)...`);
-    writeStatus('generating', `Generating with ${args.model}`);
+    const model = args.model || OLLAMA_DEFAULT_MODEL;
+    if (!model) {
+      return {
+        content: [{ type: 'text' as const, text: 'Error: no model specified and no default model configured. Use ollama_list_models to see available models.' }],
+        isError: true,
+      };
+    }
+    log(`>>> Generating with ${model} (${args.prompt.length} chars)...`);
+    writeStatus('generating', `Generating with ${model}`);
     try {
       const body: Record<string, unknown> = {
-        model: args.model,
+        model,
         prompt: args.prompt,
         stream: false,
       };
@@ -141,12 +149,12 @@ server.tool(
       let meta = '';
       if (data.total_duration) {
         const secs = (data.total_duration / 1e9).toFixed(1);
-        meta = `\n\n[${args.model} | ${secs}s${data.eval_count ? ` | ${data.eval_count} tokens` : ''}]`;
-        log(`<<< Done: ${args.model} | ${secs}s | ${data.eval_count || '?'} tokens | ${data.response.length} chars`);
-        writeStatus('done', `${args.model} | ${secs}s | ${data.eval_count || '?'} tokens`);
+        meta = `\n\n[${model} | ${secs}s${data.eval_count ? ` | ${data.eval_count} tokens` : ''}]`;
+        log(`<<< Done: ${model} | ${secs}s | ${data.eval_count || '?'} tokens | ${data.response.length} chars`);
+        writeStatus('done', `${model} | ${secs}s | ${data.eval_count || '?'} tokens`);
       } else {
-        log(`<<< Done: ${args.model} | ${data.response.length} chars`);
-        writeStatus('done', `${args.model} | ${data.response.length} chars`);
+        log(`<<< Done: ${model} | ${data.response.length} chars`);
+        writeStatus('done', `${model} | ${data.response.length} chars`);
       }
 
       return { content: [{ type: 'text' as const, text: data.response + meta }] };

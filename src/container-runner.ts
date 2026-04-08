@@ -16,6 +16,7 @@ import {
   GROUPS_DIR,
   IDLE_TIMEOUT,
   OLLAMA_ADMIN_TOOLS,
+  OLLAMA_DEFAULT_MODEL,
   TIMEZONE,
 } from './config.js';
 import { writeContextPacket } from './context-assembler.js';
@@ -295,6 +296,9 @@ function buildContainerArgs(
   // Forward Ollama admin tools flag if enabled
   if (OLLAMA_ADMIN_TOOLS) {
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
+  }
+  if (OLLAMA_DEFAULT_MODEL) {
+    args.push('-e', `OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL}`);
   }
 
   // Route API traffic through the credential proxy (containers never see real secrets)
