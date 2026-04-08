@@ -645,3 +645,414 @@ describe('save_skill', () => {
     );
   });
 });
+
+// --- 11. Malformed task data handling ---
+
+describe('malformed task data', () => {
+  it('handles task with empty type string gracefully', async () => {
+    // Empty string type should fall through to default case without crash
+    await processTaskIpc({ type: '' }, 'telegram_main', true, deps);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('handles schedule_task with invalid schedule_type gracefully', async () => {
+    // A schedule_type that is not cron/interval/once should result in
+    // nextRun being null, and createTask should still be called
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'test task',
+        schedule_type: 'bogus_type',
+        schedule_value: 'whatever',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // Task gets created with null next_run (no matching schedule type branch)
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].next_run).toBeNull();
+    expect(onTasksChangedSpy).toHaveBeenCalled();
+  });
+});
+
+// --- 12. Concurrent task processing ---
+
+describe('concurrent task processing', () => {
+  it('handles multiple schedule_task calls in parallel without interference', async () => {
+    const promises = Array.from({ length: 5 }, (_, i) =>
+      processTaskIpc(
+        {
+          type: 'schedule_task',
+          taskId: `concurrent-task-${i}`,
+          prompt: `task ${i}`,
+          schedule_type: 'once',
+          schedule_value: '2025-12-01T00:00:00',
+          targetJid: 'tg:other456',
+        },
+        'telegram_main',
+        true,
+        deps,
+      ),
+    );
+
+    await Promise.all(promises);
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(5);
+    expect(onTasksChangedSpy).toHaveBeenCalledTimes(5);
+  });
+
+  it('handles mixed task types concurrently', async () => {
+    // Create a task first so we can pause it
+    createTask({
+      id: 'mix-task-1',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'existing',
+      schedule_type: 'once',
+      schedule_value: '2025-12-01T00:00:00',
+      context_mode: 'isolated',
+      next_run: '2025-12-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const promises = [
+      processTaskIpc(
+        {
+          type: 'schedule_task',
+          taskId: 'mix-task-2',
+          prompt: 'new task',
+          schedule_type: 'once',
+          schedule_value: '2025-12-01T00:00:00',
+          targetJid: 'tg:other456',
+        },
+        'telegram_main',
+        true,
+        deps,
+      ),
+      processTaskIpc(
+        { type: 'pause_task', taskId: 'mix-task-1' },
+        'telegram_other',
+        false,
+        deps,
+      ),
+    ];
+
+    await Promise.all(promises);
+
+    const task1 = getTaskById('mix-task-1');
+    const task2 = getTaskById('mix-task-2');
+    expect(task1!.status).toBe('paused');
+    expect(task2).toBeDefined();
+  });
+});
+
+// --- 13. schedule_task with invalid cron expression ---
+
+describe('schedule_task with invalid cron', () => {
+  it('rejects task with invalid cron expression', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'should not be created',
+        schedule_type: 'cron',
+        schedule_value: 'not a valid cron',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects task with invalid interval value', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'bad interval',
+        schedule_type: 'interval',
+        schedule_value: 'not-a-number',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects task with invalid once timestamp', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'bad once',
+        schedule_type: 'once',
+        schedule_value: 'not-a-date',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 14. Authorization enforcement ---
+
+describe('authorization enforcement', () => {
+  it('non-main group cannot schedule task for another group', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'cross-group attack',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:main123',
+      },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+
+  it('non-main group cannot register new groups', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:evil999',
+        name: 'Evil',
+        folder: 'telegram_evil',
+        trigger: '@Evil',
+      },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    expect(registerGroupSpy).not.toHaveBeenCalled();
+  });
+
+  it('non-main group cannot refresh groups', async () => {
+    await processTaskIpc(
+      { type: 'refresh_groups' },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    expect(syncGroupsSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 15. schedule_task context_mode defaults ---
+
+describe('schedule_task context_mode', () => {
+  it('defaults to isolated when context_mode is not provided', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        taskId: 'ctx-default',
+        prompt: 'no context mode',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('ctx-default');
+    expect(task!.context_mode).toBe('isolated');
+  });
+
+  it('accepts group context_mode', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        taskId: 'ctx-group',
+        prompt: 'group context',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+        context_mode: 'group',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('ctx-group');
+    expect(task!.context_mode).toBe('group');
+  });
+
+  it('falls back to isolated for invalid context_mode', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        taskId: 'ctx-invalid',
+        prompt: 'invalid context',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:other456',
+        context_mode: 'bogus',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('ctx-invalid');
+    expect(task!.context_mode).toBe('isolated');
+  });
+});
+
+// --- 16. schedule_task with unregistered target JID ---
+
+describe('schedule_task target validation', () => {
+  it('rejects task for unregistered target JID', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'orphan target',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:nonexistent999',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 17. register_group with invalid folder ---
+
+describe('register_group folder validation', () => {
+  it('rejects folder with path traversal', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:bad1',
+        name: 'Bad',
+        folder: '../escape',
+        trigger: '@Bad',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(registerGroupSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects register_group with missing required fields', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:incomplete',
+        name: 'Incomplete',
+        // folder and trigger missing
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(registerGroupSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 18. save_skill result file writing ---
+
+describe('save_skill result file', () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-result-test-'));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, 'container', 'skills'), { recursive: true });
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('saves skill file to disk for valid request', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'result-test-skill',
+        skillContent: '# Result Test Skill',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const skillPath = path.join(
+      tmpDir,
+      'container',
+      'skills',
+      'result-test-skill',
+      'SKILL.md',
+    );
+    expect(fs.existsSync(skillPath)).toBe(true);
+    expect(fs.readFileSync(skillPath, 'utf-8')).toBe('# Result Test Skill');
+  });
+
+  it('rejects skill with single-char name (regex validation)', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'A',
+        skillContent: '# Bad',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // No skill directory should be created
+    const skillDir = path.join(tmpDir, 'container', 'skills', 'A');
+    expect(fs.existsSync(skillDir)).toBe(false);
+  });
+
+  it('rejects skill name starting with hyphen', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: '-bad-name',
+        skillContent: '# Bad',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const skillDir = path.join(tmpDir, 'container', 'skills', '-bad-name');
+    expect(fs.existsSync(skillDir)).toBe(false);
+  });
+});

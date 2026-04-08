@@ -245,4 +245,203 @@ describe('handleSessionCommand', () => {
       expect.stringContaining('Failed to process'),
     );
   });
+
+  // --- NEW REGRESSION TESTS ---
+
+  it('handles /new command: forwards to agent and advances cursor', async () => {
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/new')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.runAgent).toHaveBeenCalledWith('/new', expect.any(Function));
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
+    expect(deps.setTyping).toHaveBeenCalledWith(true);
+    expect(deps.setTyping).toHaveBeenCalledWith(false);
+  });
+
+  it('/new during active container execution: reports failure when agent errors', async () => {
+    const deps = makeDeps({
+      runAgent: vi.fn().mockImplementation(async (_prompt, onOutput) => {
+        await onOutput({ status: 'error', result: 'Container busy' });
+        return 'error';
+      }),
+    });
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/new')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    // Should send the error output AND a failure message
+    expect(deps.sendMessage).toHaveBeenCalledWith('Container busy');
+    expect(deps.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('failed'),
+    );
+    // Cursor still advances even on error
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
+  });
+
+  it('/compact forwards agent output to sendMessage', async () => {
+    const deps = makeDeps({
+      runAgent: vi.fn().mockImplementation(async (_prompt, onOutput) => {
+        await onOutput({ status: 'success', result: 'Context compacted.' });
+        await onOutput({ status: 'success', result: null });
+        return 'success';
+      }),
+    });
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/compact')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.sendMessage).toHaveBeenCalledWith('Context compacted.');
+  });
+
+  it('/compact with no active session still forwards to agent', async () => {
+    // The session-commands module doesn't check session existence;
+    // it always forwards to runAgent which handles session lifecycle
+    const deps = makeDeps({
+      runAgent: vi.fn().mockResolvedValue('success'),
+    });
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/compact')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.runAgent).toHaveBeenCalledWith('/compact', expect.any(Function));
+  });
+
+  it('returns handled:false for unknown slash commands', async () => {
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/reset')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result.handled).toBe(false);
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('rejects commands with extra args (not just the bare command)', async () => {
+    const deps = makeDeps();
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/new force')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result.handled).toBe(false);
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('is case-sensitive: /New and /COMPACT are not recognized', async () => {
+    const deps = makeDeps();
+    const result1 = await handleSessionCommand({
+      missedMessages: [makeMsg('/New')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result1.handled).toBe(false);
+
+    const result2 = await handleSessionCommand({
+      missedMessages: [makeMsg('/COMPACT')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result2.handled).toBe(false);
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('handles /new followed by a regular message: only processes /new, leaves post-command messages pending', async () => {
+    const deps = makeDeps();
+    const msgs = [
+      makeMsg('/new', { seq: 1 }),
+      makeMsg('hello after reset', { seq: 2 }),
+    ];
+    const result = await handleSessionCommand({
+      missedMessages: msgs,
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.runAgent).toHaveBeenCalledWith('/new', expect.any(Function));
+    // Cursor advances to the command seq (1), NOT the post-command message (2)
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
+  });
+
+  it('handles multiple rapid /new commands: only processes the first one', async () => {
+    const deps = makeDeps();
+    const msgs = [
+      makeMsg('/new', { seq: 1 }),
+      makeMsg('/new', { seq: 2 }),
+      makeMsg('/new', { seq: 3 }),
+    ];
+    const result = await handleSessionCommand({
+      missedMessages: msgs,
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    // Only one runAgent call for the first /new
+    expect(deps.runAgent).toHaveBeenCalledTimes(1);
+    expect(deps.runAgent).toHaveBeenCalledWith('/new', expect.any(Function));
+    // Cursor advances to the first command only
+    expect(deps.advanceCursor).toHaveBeenCalledWith(1);
+  });
+
+  it('strips internal tags from agent output before sending', async () => {
+    const deps = makeDeps({
+      runAgent: vi.fn().mockImplementation(async (_prompt, onOutput) => {
+        await onOutput({
+          status: 'success',
+          result: 'Visible text <internal>hidden stuff</internal> more visible',
+        });
+        return 'success';
+      }),
+    });
+    const result = await handleSessionCommand({
+      missedMessages: [makeMsg('/compact')],
+      isMainGroup: true,
+      groupName: 'test',
+      triggerPattern: trigger,
+      timezone: 'UTC',
+      deps,
+    });
+    expect(result).toEqual({ handled: true, success: true });
+    expect(deps.sendMessage).toHaveBeenCalledWith('Visible text  more visible');
+  });
 });

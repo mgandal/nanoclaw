@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  getDueTasks,
   getTaskById,
+  getTaskRunLogs,
   logTaskRun,
+  updateTask,
+  updateTaskAfterRun,
 } from './db.js';
 import {
   _resetAlertsForTests,
@@ -702,5 +706,318 @@ describe('checkAlerts — batching and edge cases (regression)', () => {
     vi.advanceTimersByTime(70000);
     // sendMessage should NOT be called — no main group to deliver to
     expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('computeNextRun — cron edge cases', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('handles monthly cron (runs on 1st of each month)', () => {
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: '0 9 1 * *', // 9am on 1st of month
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextDate = new Date(nextRun!);
+    // Should be in the future and on the 1st of a month
+    expect(nextDate.getTime()).toBeGreaterThan(Date.now());
+    expect(nextDate.getUTCDate()).toBe(1);
+  });
+
+  it('handles yearly cron (runs on Jan 1st)', () => {
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: '0 0 1 1 *', // midnight Jan 1st
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextDate = new Date(nextRun!);
+    expect(nextDate.getTime()).toBeGreaterThan(Date.now());
+    // Should be Jan 1 of a future year
+    expect(nextDate.getUTCMonth()).toBe(0); // January
+    expect(nextDate.getUTCDate()).toBe(1);
+  });
+
+  it('does not throttle hourly cron (inter-fire gap >= 30 min)', () => {
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *', // every hour
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const gapMs = new Date(nextRun!).getTime() - Date.now();
+    // Hourly cron has 60min inter-fire gap, so it should NOT be throttled.
+    // The next occurrence may be < 30 min away (e.g. if we're at :43),
+    // but the throttle only kicks in when the cron FIRES too frequently.
+    // So the gap should be <= 60min (one hour interval) and > 0.
+    expect(gapMs).toBeGreaterThan(0);
+    expect(gapMs).toBeLessThanOrEqual(60 * 60 * 1000);
+  });
+});
+
+describe('task status transitions and DB persistence', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('updateTaskAfterRun marks once-task as completed when nextRun is null', () => {
+    createTestTask('once-complete');
+    // Simulate: computeNextRun returned null for a once-task
+    updateTaskAfterRun('once-complete', null, 'Done');
+    const task = getTaskById('once-complete');
+    expect(task).toBeDefined();
+    expect(task!.status).toBe('completed');
+    expect(task!.last_result).toBe('Done');
+    expect(task!.last_run).not.toBeNull();
+    expect(task!.next_run).toBeNull();
+  });
+
+  it('updateTaskAfterRun keeps recurring task active when nextRun is provided', () => {
+    createTestTask('recurring-active');
+    const nextRun = new Date(Date.now() + 3600000).toISOString();
+    updateTaskAfterRun('recurring-active', nextRun, 'OK');
+    const task = getTaskById('recurring-active');
+    expect(task).toBeDefined();
+    expect(task!.status).toBe('active');
+    expect(task!.next_run).toBe(nextRun);
+    expect(task!.last_result).toBe('OK');
+  });
+
+  it('logTaskRun persists error details to task_run_logs', () => {
+    createTestTask('log-error');
+    const runAt = '2026-06-15T12:00:00Z';
+    logTaskRun({
+      task_id: 'log-error',
+      run_at: runAt,
+      duration_ms: 500,
+      status: 'error',
+      result: null,
+      error: 'Container crashed',
+    });
+    const logs = getTaskRunLogs('2026-06-15T00:00:00Z');
+    const entry = logs.find((l) => l.task_id === 'log-error');
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe('error');
+    expect(entry!.error).toBe('Container crashed');
+    expect(entry!.duration_ms).toBe(500);
+  });
+
+  it('logTaskRun persists success result to task_run_logs', () => {
+    createTestTask('log-success');
+    const runAt = '2026-06-15T13:00:00Z';
+    logTaskRun({
+      task_id: 'log-success',
+      run_at: runAt,
+      duration_ms: 1200,
+      status: 'success',
+      result: 'All good',
+      error: null,
+    });
+    const logs = getTaskRunLogs('2026-06-15T00:00:00Z');
+    const entry = logs.find((l) => l.task_id === 'log-success');
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe('success');
+    expect(entry!.result).toBe('All good');
+    expect(entry!.error).toBeNull();
+  });
+});
+
+describe('expired/past schedule handling (DB-level)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getDueTasks picks up tasks whose next_run is far in the past (expired schedule)', () => {
+    // Task was due 2 hours ago — should still be returned by getDueTasks
+    createTask({
+      id: 'task-expired',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'run overdue task',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 2 * 3600000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    const dueTasks = getDueTasks();
+    expect(dueTasks.length).toBeGreaterThanOrEqual(1);
+    expect(dueTasks.some((t) => t.id === 'task-expired')).toBe(
+      true,
+    );
+  });
+
+  it('getDueTasks does not return paused tasks even if next_run is past due', () => {
+    createTask({
+      id: 'task-paused-due',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'should not run',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    // Pause it
+    updateTask('task-paused-due', { status: 'paused' });
+
+    const dueTasks = getDueTasks();
+    expect(
+      dueTasks.some((t) => t.id === 'task-paused-due'),
+    ).toBe(false);
+  });
+});
+
+describe('concurrent task execution prevention (DB-level)', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('completed tasks are excluded from getDueTasks even with past next_run', () => {
+    createTask({
+      id: 'task-race',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'test race',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    // Mark task as completed (simulates race: getDueTasks returned it, but
+    // status changed before scheduler re-checks with getTaskById)
+    updateTask('task-race', { status: 'completed' });
+
+    const dueTasks = getDueTasks();
+    expect(dueTasks.some((t) => t.id === 'task-race')).toBe(
+      false,
+    );
+
+    // Also verify getTaskById returns the completed status (scheduler's re-check)
+    const task = getTaskById('task-race');
+    expect(task).toBeDefined();
+    expect(task!.status).toBe('completed');
+  });
+});
+
+describe('alert includes last success time', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('includes last success time in alert when available', () => {
+    createTestTask('task-with-history');
+    // Log a success, then two failures
+    logTaskRun({
+      task_id: 'task-with-history',
+      run_at: '2026-03-23T08:00:00Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: 'task-with-history',
+      run_at: '2026-03-23T09:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'task-with-history',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+
+    const deps = makeMockDeps();
+    checkAlerts(makeTask({ id: 'task-with-history' }), 'fail2', deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    expect(msg).toContain('Last success');
+    expect(msg).toContain('2026-03-23T08:00:00Z');
+  });
+});
+
+describe('computeNextRun — interval drift prevention', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('anchors to scheduled time even when execution is delayed', () => {
+    // Task was scheduled 5s ago. Next run should be scheduled+interval, not now+interval.
+    const now = Date.now();
+    const scheduledTime = new Date(now - 5000).toISOString(); // 5s ago
+    const intervalMs = 3600000; // 1 hour
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: String(intervalMs),
+      next_run: scheduledTime,
+    });
+
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    // Should be scheduled + 1h, NOT now + 1h
+    const expectedMs = new Date(scheduledTime).getTime() + intervalMs;
+    expect(new Date(nextRun!).getTime()).toBe(expectedMs);
+    // Confirm it differs from now+interval (drift prevention)
+    expect(new Date(nextRun!).getTime()).not.toBe(now + intervalMs);
+  });
+
+  it('skips multiple missed intervals and lands on the correct grid point', () => {
+    // 3.5 intervals have passed since scheduled time
+    const intervalMs = 3600000; // 1 hour
+    const now = Date.now();
+    const scheduledTime = new Date(now - 3.5 * intervalMs).toISOString();
+    const task = makeTask({
+      schedule_type: 'interval',
+      schedule_value: String(intervalMs),
+      next_run: scheduledTime,
+    });
+
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextMs = new Date(nextRun!).getTime();
+    // Should be base + 4*interval (first grid point after now)
+    const expectedMs = new Date(scheduledTime).getTime() + 4 * intervalMs;
+    expect(nextMs).toBe(expectedMs);
+    expect(nextMs).toBeGreaterThan(now);
+    // Verify grid alignment
+    const offset =
+      (nextMs - new Date(scheduledTime).getTime()) % intervalMs;
+    expect(offset).toBe(0);
   });
 });

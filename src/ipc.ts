@@ -257,12 +257,22 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  // Resolve container path to host path
-                  const hostFilePath = resolveContainerFilePathToHost(
-                    data.filePath,
-                    sourceGroup,
-                    registeredGroups,
-                  );
+                  // Resolve container path to host path (or pass through absolute host paths)
+                  let hostFilePath: string | null;
+                  if (
+                    data.filePath.startsWith('/') &&
+                    !data.filePath.startsWith('/workspace/') &&
+                    fs.existsSync(data.filePath)
+                  ) {
+                    // Absolute host path (e.g. from Hermes MCP) — pass through
+                    hostFilePath = data.filePath;
+                  } else {
+                    hostFilePath = resolveContainerFilePathToHost(
+                      data.filePath,
+                      sourceGroup,
+                      registeredGroups,
+                    );
+                  }
                   if (!hostFilePath || !fs.existsSync(hostFilePath)) {
                     logger.warn(
                       {

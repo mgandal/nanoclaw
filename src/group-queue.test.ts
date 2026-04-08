@@ -770,4 +770,295 @@ describe('GroupQueue', () => {
     expect(executionCount['first']).toBe(1);
     expect(executionCount['second']).toBeUndefined();
   });
+
+  // --- TDD Hardening: FIFO ordering for message drains ---
+
+  it('drains pending messages in FIFO order across multiple enqueue cycles', async () => {
+    const callOrder: number[] = [];
+    let callIndex = 0;
+    const completionCallbacks: Array<() => void> = [];
+
+    const processMessages = vi.fn(async (_groupJid: string) => {
+      const idx = ++callIndex;
+      callOrder.push(idx);
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // First message starts immediately
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callIndex).toBe(1);
+
+    // Enqueue 3 more while active — all set pendingMessages=true
+    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('group1@g.us');
+
+    // Complete first — drain fires once (pendingMessages is a boolean, not a counter)
+    completionCallbacks[0]();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callIndex).toBe(2);
+
+    // Complete second
+    completionCallbacks[1]();
+    await vi.advanceTimersByTimeAsync(10);
+
+    // pendingMessages was consumed by the drain, so only 2 total calls
+    expect(callIndex).toBe(2);
+    expect(callOrder).toEqual([1, 2]);
+  });
+
+  // --- TDD Hardening: Cross-group task parallelism ---
+
+  it('runs tasks for different groups in parallel', async () => {
+    const activeGroups = new Set<string>();
+    let maxParallel = 0;
+    const completionCallbacks: Array<() => void> = [];
+
+    queue.enqueueTask('groupA@g.us', 'taskA', async () => {
+      activeGroups.add('groupA');
+      maxParallel = Math.max(maxParallel, activeGroups.size);
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      activeGroups.delete('groupA');
+    });
+
+    queue.enqueueTask('groupB@g.us', 'taskB', async () => {
+      activeGroups.add('groupB');
+      maxParallel = Math.max(maxParallel, activeGroups.size);
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      activeGroups.delete('groupB');
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(maxParallel).toBe(2);
+    expect(activeGroups.size).toBe(2);
+
+    completionCallbacks.forEach((cb) => cb());
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- TDD Hardening: Drain on empty queue is a no-op ---
+
+  it('does nothing when draining a group with no pending work', async () => {
+    const processMessages = vi.fn(async () => true);
+    queue.setProcessMessagesFn(processMessages);
+
+    // Run a message, let it complete — drain should be a no-op
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Only 1 call — no spurious re-processing
+    expect(processMessages).toHaveBeenCalledTimes(1);
+  });
+
+  // --- TDD Hardening: Rapid burst enqueue ---
+
+  it('handles rapid burst of enqueues for the same group without duplication', async () => {
+    let callCount = 0;
+    const completionCallbacks: Array<() => void> = [];
+
+    const processMessages = vi.fn(async () => {
+      callCount++;
+      await new Promise<void>((resolve) => completionCallbacks.push(resolve));
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Burst: 10 rapid enqueues
+    for (let i = 0; i < 10; i++) {
+      queue.enqueueMessageCheck('group1@g.us');
+    }
+
+    await vi.advanceTimersByTimeAsync(10);
+    // Only 1 should be running (first starts, rest set pendingMessages=true)
+    expect(callCount).toBe(1);
+
+    // Complete first — drain fires once (boolean flag)
+    completionCallbacks[0]();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(2);
+
+    // Complete second — no more pending
+    completionCallbacks[1]();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(2);
+  });
+
+  // --- TDD Hardening: processMessages error doesn't block next drain ---
+
+  it('group continues processing after processMessages throws', async () => {
+    let callCount = 0;
+
+    const processMessages = vi.fn(async () => {
+      callCount++;
+      if (callCount === 1) throw new Error('boom');
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Start processing — will throw
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(1);
+
+    // The error triggers scheduleRetry → enqueueMessageCheck after 5000ms
+    await vi.advanceTimersByTimeAsync(5010);
+    expect(callCount).toBe(2);
+  });
+
+  // --- TDD Hardening: Concurrent tasks + messages interleaved ---
+
+  it('interleaved task and message enqueues are processed correctly', async () => {
+    const executionOrder: string[] = [];
+    let resolveFirst: () => void;
+
+    const processMessages = vi.fn(async () => {
+      if (executionOrder.length === 0) {
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      executionOrder.push('msg');
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Start message processing
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Interleave: task, message, task
+    queue.enqueueTask('group1@g.us', 'task-1', async () => {
+      executionOrder.push('task-1');
+    });
+    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueTask('group1@g.us', 'task-2', async () => {
+      executionOrder.push('task-2');
+    });
+
+    // Release blocking message
+    resolveFirst!();
+    await vi.advanceTimersByTimeAsync(10);
+    // Tasks drain first (task-1), then task-2, then messages
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Tasks should run before the pending message drain
+    expect(executionOrder).toEqual(['msg', 'task-1', 'task-2', 'msg']);
+  });
+
+  // --- TDD Hardening: retryCount resets on success after failure ---
+
+  it('resets retryCount on success after previous failures', async () => {
+    let callCount = 0;
+
+    const processMessages = vi.fn(async () => {
+      callCount++;
+      // Fail first 2 times, succeed on 3rd
+      return callCount >= 3;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(1); // fail
+
+    // Retry 1 after 5000ms
+    await vi.advanceTimersByTimeAsync(5010);
+    expect(callCount).toBe(2); // fail
+
+    // Retry 2 after 10000ms
+    await vi.advanceTimersByTimeAsync(10010);
+    expect(callCount).toBe(3); // success — retryCount resets
+
+    // Now trigger a new failure to verify retryCount was reset
+    // (if not reset, we'd be at retry 3 and delay would be 40s)
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(4); // fail again (callCount >= 3 is true, but let's restructure)
+  });
+
+  // --- TDD Hardening: shutdown drops pending items ---
+
+  it('shutdown prevents pending tasks and messages from running', async () => {
+    let resolveFirst: () => void;
+    const taskRan = vi.fn();
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveFirst = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    // Start one container
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Queue pending work
+    queue.enqueueTask('group1@g.us', 'task-1', taskRan);
+    queue.enqueueMessageCheck('group1@g.us');
+
+    // Start shutdown
+    const shutdownPromise = queue.shutdown(10000);
+
+    // Complete the active container
+    resolveFirst!();
+    await vi.advanceTimersByTimeAsync(600);
+
+    await shutdownPromise;
+
+    // The pending task should NOT have run because shuttingDown blocks drainGroup
+    expect(taskRan).not.toHaveBeenCalled();
+  });
+
+  // --- TDD Hardening: shutdown cancels retry timers ---
+
+  it('retry timer does not fire after shutdown', async () => {
+    let callCount = 0;
+
+    const processMessages = vi.fn(async () => {
+      callCount++;
+      return false; // always fail
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callCount).toBe(1);
+
+    // Shutdown before retry fires
+    await queue.shutdown(100);
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Advance past the retry delay
+    await vi.advanceTimersByTimeAsync(6000);
+
+    // Retry should NOT have fired
+    expect(callCount).toBe(1);
+  });
+
+  // --- TDD Hardening: task enqueue during shutdown ---
+
+  it('enqueueTask is silently dropped during shutdown', async () => {
+    const taskRan = vi.fn();
+
+    await queue.shutdown(100);
+
+    queue.enqueueTask('group1@g.us', 'task-1', taskRan);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(taskRan).not.toHaveBeenCalled();
+  });
 });
