@@ -1414,7 +1414,9 @@ describe('session expiry detection', () => {
   it('identifies sessions with last_used older than 2 hours as expired', () => {
     // Create a session and manually set last_used to 3 hours ago
     setSession('expired-group', 'sess-old');
-    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const threeHoursAgo = new Date(
+      Date.now() - 3 * 60 * 60 * 1000,
+    ).toISOString();
     // Directly update last_used to simulate an old session
     // We need to use the DB internals to set a past timestamp
     // touchSession only sets to "now", so we use setSession which sets last_used = now,
@@ -1457,7 +1459,13 @@ describe('schema migration idempotency on same database', () => {
     _initTestDatabase();
     // Store data
     setSession('test', 'sess-1');
-    storeChatMetadata('tg:1', '2024-01-01T00:00:00.000Z', 'Chat', 'telegram', true);
+    storeChatMetadata(
+      'tg:1',
+      '2024-01-01T00:00:00.000Z',
+      'Chat',
+      'telegram',
+      true,
+    );
     storeMessageDirect({
       id: 'mig-1',
       chat_jid: 'tg:1',
@@ -1474,7 +1482,13 @@ describe('schema migration idempotency on same database', () => {
     expect(() => _initTestDatabase()).not.toThrow();
 
     // Verify schema is fully functional after second init
-    storeChatMetadata('tg:2', '2024-01-01T00:00:00.000Z', 'Chat2', 'telegram', false);
+    storeChatMetadata(
+      'tg:2',
+      '2024-01-01T00:00:00.000Z',
+      'Chat2',
+      'telegram',
+      false,
+    );
     setSession('test2', 'sess-2');
     expect(getSession('test2')).toBe('sess-2');
     expect(getAllChats()).toHaveLength(1); // new DB, only tg:2
@@ -1575,12 +1589,12 @@ describe('scheduled task status transitions', () => {
     // Paused tasks should NOT appear in getDueTasks
     const pastTime = new Date(Date.now() - 60000).toISOString();
     updateTask('trans-1', { next_run: pastTime });
-    expect(getDueTasks().find(t => t.id === 'trans-1')).toBeUndefined();
+    expect(getDueTasks().find((t) => t.id === 'trans-1')).toBeUndefined();
 
     // Resume
     updateTask('trans-1', { status: 'active' });
     expect(getTaskById('trans-1')!.status).toBe('active');
-    expect(getDueTasks().find(t => t.id === 'trans-1')).toBeDefined();
+    expect(getDueTasks().find((t) => t.id === 'trans-1')).toBeDefined();
   });
 
   it('active -> completed via updateTaskAfterRun (nextRun=null)', () => {
@@ -1605,7 +1619,7 @@ describe('scheduled task status transitions', () => {
     expect(task.last_run).toBeDefined();
 
     // Completed tasks should NOT appear in getDueTasks
-    expect(getDueTasks().find(t => t.id === 'trans-2')).toBeUndefined();
+    expect(getDueTasks().find((t) => t.id === 'trans-2')).toBeUndefined();
   });
 
   it('logTaskRun records are preserved after task deletion', () => {
@@ -1749,7 +1763,7 @@ describe('NULL handling in optional columns', () => {
   it('chat with null channel and is_group', () => {
     storeChatMetadata('unknown:123', '2024-01-01T00:00:00.000Z');
     const chats = getAllChats();
-    const chat = chats.find(c => c.jid === 'unknown:123');
+    const chat = chats.find((c) => c.jid === 'unknown:123');
     expect(chat).toBeDefined();
     expect(chat!.channel).toBeNull();
     expect(chat!.is_group).toBeNull();

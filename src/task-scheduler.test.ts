@@ -856,9 +856,7 @@ describe('expired/past schedule handling (DB-level)', () => {
 
     const dueTasks = getDueTasks();
     expect(dueTasks.length).toBeGreaterThanOrEqual(1);
-    expect(dueTasks.some((t) => t.id === 'task-expired')).toBe(
-      true,
-    );
+    expect(dueTasks.some((t) => t.id === 'task-expired')).toBe(true);
   });
 
   it('getDueTasks does not return paused tasks even if next_run is past due', () => {
@@ -878,9 +876,7 @@ describe('expired/past schedule handling (DB-level)', () => {
     updateTask('task-paused-due', { status: 'paused' });
 
     const dueTasks = getDueTasks();
-    expect(
-      dueTasks.some((t) => t.id === 'task-paused-due'),
-    ).toBe(false);
+    expect(dueTasks.some((t) => t.id === 'task-paused-due')).toBe(false);
   });
 });
 
@@ -908,9 +904,7 @@ describe('concurrent task execution prevention (DB-level)', () => {
     updateTask('task-race', { status: 'completed' });
 
     const dueTasks = getDueTasks();
-    expect(dueTasks.some((t) => t.id === 'task-race')).toBe(
-      false,
-    );
+    expect(dueTasks.some((t) => t.id === 'task-race')).toBe(false);
 
     // Also verify getTaskById returns the completed status (scheduler's re-check)
     const task = getTaskById('task-race');
@@ -1016,8 +1010,7 @@ describe('computeNextRun — interval drift prevention', () => {
     expect(nextMs).toBe(expectedMs);
     expect(nextMs).toBeGreaterThan(now);
     // Verify grid alignment
-    const offset =
-      (nextMs - new Date(scheduledTime).getTime()) % intervalMs;
+    const offset = (nextMs - new Date(scheduledTime).getTime()) % intervalMs;
     expect(offset).toBe(0);
   });
 });
