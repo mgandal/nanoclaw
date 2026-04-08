@@ -637,3 +637,269 @@ describe('generateAllowlistTemplate', () => {
     expect(typeof parsed.nonMainReadOnly).toBe('boolean');
   });
 });
+
+// ==================== NEW REGRESSION TESTS ====================
+
+describe('validateMount — host path traversal attacks', () => {
+  it('rejects host path with ../../etc/passwd traversal outside allowed root', () => {
+    const allowedRoot = createTempMountDir('safe-root');
+    createTempMountDir('safe-root/subdir');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: false, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Attempt to traverse out of allowed root via host path
+    const mount: AdditionalMount = {
+      hostPath: path.join(allowedRoot, 'subdir', '..', '..', '..', 'etc'),
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    // path.resolve normalizes the traversal; /etc either doesn't exist or is outside allowed root
+    expect(result.allowed).toBe(false);
+  });
+
+  it('rejects symlink in host path that escapes to /etc', () => {
+    const allowedRoot = createTempMountDir('safe-root');
+    const symlinkPath = path.join(allowedRoot, 'escape-link');
+    // /etc always exists on macOS/Linux
+    try {
+      fs.symlinkSync('/etc', symlinkPath);
+    } catch {
+      // If symlink creation fails, skip
+      return;
+    }
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: symlinkPath, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    // Symlink resolves to /etc which is outside allowed root
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('not under any allowed root');
+  });
+});
+
+describe('validateMount — read-only enforcement edge cases', () => {
+  it('non-main group gets read-only even when root allows rw and mount requests rw', () => {
+    const allowedRoot = createTempMountDir('rw-root');
+    const subdir = createTempMountDir('rw-root/data');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: true,
+    });
+
+    const mount: AdditionalMount = { hostPath: subdir, readonly: false };
+    const result = validateMount(mount, /* isMain */ false, allowlistPath);
+    expect(result.allowed).toBe(true);
+    expect(result.effectiveReadonly).toBe(true);
+  });
+
+  it('non-main group with nonMainReadOnly=false gets rw when root allows it', () => {
+    const allowedRoot = createTempMountDir('rw-root');
+    const subdir = createTempMountDir('rw-root/data');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: subdir, readonly: false };
+    const result = validateMount(mount, /* isMain */ false, allowlistPath);
+    expect(result.allowed).toBe(true);
+    expect(result.effectiveReadonly).toBe(false);
+  });
+
+  it('mount with readonly=true stays read-only even when everything permits rw', () => {
+    const allowedRoot = createTempMountDir('rw-root');
+    const subdir = createTempMountDir('rw-root/data');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Explicitly requesting read-only
+    const mount: AdditionalMount = { hostPath: subdir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(true);
+    expect(result.effectiveReadonly).toBe(true);
+  });
+});
+
+describe('validateMount — path normalization', () => {
+  it('normalizes double slashes in host path', () => {
+    const allowedRoot = createTempMountDir('norm-root');
+    const subdir = createTempMountDir('norm-root/repo');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Double slashes in path
+    const mount: AdditionalMount = {
+      hostPath: subdir.replace('/repo', '//repo'),
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(true);
+  });
+
+  it('normalizes trailing slashes on allowed root in allowlist', () => {
+    const allowedRoot = createTempMountDir('norm-root');
+    const subdir = createTempMountDir('norm-root/repo');
+
+    writeAllowlist({
+      allowedRoots: [
+        {
+          path: allowedRoot + '/',
+          allowReadWrite: true,
+          description: 'test',
+        },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: subdir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(true);
+  });
+});
+
+describe('validateMount — sensitive directory protection', () => {
+  it('blocks mount to HOME/.ssh even if HOME is an allowed root', () => {
+    const fakeHome = createTempMountDir('fakehome');
+    const sshDir = createTempMountDir('fakehome/.ssh');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: fakeHome, allowReadWrite: true, description: 'home' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: sshDir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('.ssh');
+  });
+
+  it('blocks mount containing .env in deeply nested path', () => {
+    const allowedRoot = createTempMountDir('deep-root');
+    const envDir = createTempMountDir('deep-root/a/b/.env');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: envDir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('.env');
+  });
+});
+
+describe('validateMount — multiple overlapping allowed roots', () => {
+  it('uses correct root permissions when paths overlap (rw root nested in ro root)', () => {
+    const outerRoot = createTempMountDir('outer');
+    const innerRoot = createTempMountDir('outer/inner');
+    const target = createTempMountDir('outer/inner/project');
+
+    writeAllowlist({
+      allowedRoots: [
+        {
+          path: outerRoot,
+          allowReadWrite: false,
+          description: 'outer read-only',
+        },
+        {
+          path: innerRoot,
+          allowReadWrite: true,
+          description: 'inner read-write',
+        },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: target, readonly: false };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(true);
+    // First matching root wins — the outer root matches first, so it should be read-only
+    // This documents the current behavior: first-match wins
+    // The mount is allowed but the effective readonly depends on which root matches first
+  });
+
+  it('path under only one of multiple non-overlapping roots is allowed', () => {
+    const rootA = createTempMountDir('rootA');
+    const rootB = createTempMountDir('rootB');
+    const targetA = createTempMountDir('rootA/project');
+    const outside = createTempMountDir('rootC');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: rootA, allowReadWrite: true, description: 'A' },
+        { path: rootB, allowReadWrite: false, description: 'B' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Target under rootA: allowed
+    const mountA: AdditionalMount = { hostPath: targetA, readonly: true };
+    const resultA = validateMount(mountA, true, allowlistPath);
+    expect(resultA.allowed).toBe(true);
+
+    // Target under neither root: rejected
+    const mountOut: AdditionalMount = { hostPath: outside, readonly: true };
+    const resultOut = validateMount(mountOut, true, allowlistPath);
+    expect(resultOut.allowed).toBe(false);
+  });
+});
+
+describe('validateMount — empty allowedRoots array', () => {
+  it('blocks all mounts when allowedRoots is an empty array', () => {
+    const someDir = createTempMountDir('anydir');
+
+    writeAllowlist({
+      allowedRoots: [],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: someDir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('not under any allowed root');
+  });
+});

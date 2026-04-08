@@ -774,3 +774,302 @@ describe('HealthMonitor fix integration', () => {
     expect(mockActions.execScript).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('HealthMonitor regression tests', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+  let mockActions: FixActions;
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 10,
+      maxErrorsPerHour: 10,
+      onAlert: alertFn,
+    });
+    mockActions = {
+      execScript: vi
+        .fn()
+        .mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
+      httpCheck: vi
+        .fn()
+        .mockResolvedValue({ reachable: true, statusCode: 200 }),
+      acquireLock: vi.fn().mockResolvedValue(true),
+      releaseLock: vi.fn().mockResolvedValue(undefined),
+    };
+    monitor.setFixActions(mockActions);
+  });
+
+  it('cooldown enforced: blocks fix attempts within cooldown window even after failure', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: false,
+    });
+    monitor.addFixHandler({
+      id: 'cooldown-test',
+      service: 'svc:cd',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 60_000,
+      maxAttempts: 5,
+    });
+
+    // First attempt fails verification but sets lastAttempt
+    const r1 = await monitor.attemptFix('svc:cd');
+    expect(r1).toBe('verify-failed');
+
+    // Second attempt within cooldown should be blocked
+    const r2 = await monitor.attemptFix('svc:cd');
+    expect(r2).toBe('cooldown');
+    // execScript should only have been called once (for the first attempt)
+    expect(mockActions.execScript).toHaveBeenCalledTimes(1);
+  });
+
+  it('lock prevents concurrent fix attempts on the same service', async () => {
+    let lockHeld = false;
+    (mockActions.acquireLock as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        if (lockHeld) return false;
+        lockHeld = true;
+        return true;
+      },
+    );
+    (mockActions.releaseLock as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        lockHeld = false;
+      },
+    );
+    // Make the fix script take some time
+    (mockActions.execScript as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ ok: true, stdout: '', stderr: '' }), 50),
+        ),
+    );
+
+    monitor.addFixHandler({
+      id: 'lock-test',
+      service: 'svc:lock',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    // Start two concurrent fix attempts
+    const [r1, r2] = await Promise.all([
+      monitor.attemptFix('svc:lock'),
+      monitor.attemptFix('svc:lock'),
+    ]);
+
+    // One should succeed, one should be locked
+    const results = [r1, r2].sort();
+    expect(results).toContain('fixed');
+    expect(results).toContain('locked');
+  });
+
+  it('escalation fires alert with fix_escalation type and resets attempt count', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: false,
+    });
+    monitor.addFixHandler({
+      id: 'esc-test',
+      service: 'svc:esc',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 3,
+    });
+
+    // Exhaust attempts: 3 verify-failed, then escalation on 4th call
+    await monitor.attemptFix('svc:esc'); // attempt 0 -> verify-failed, count becomes 1
+    await monitor.attemptFix('svc:esc'); // attempt 1 -> verify-failed, count becomes 2
+    const r3 = await monitor.attemptFix('svc:esc'); // attempt 2 -> verify-failed, count becomes 3, triggers escalation
+    expect(r3).toBe('escalated');
+
+    // The escalation alert should have been fired
+    const escalationCalls = (alertFn as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (c: unknown[]) => (c[0] as HealthAlert).type === 'fix_escalation',
+    );
+    expect(escalationCalls.length).toBeGreaterThanOrEqual(1);
+    expect(escalationCalls[0][0].detail).toContain('3 attempts');
+
+    // After escalation, attempt count is reset — next attempt should NOT immediately escalate
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: true, statusCode: 200,
+    });
+    const r4 = await monitor.attemptFix('svc:esc');
+    expect(r4).toBe('fixed');
+  });
+
+  it('getStatus includes all groups with spawn or error events', () => {
+    monitor.recordSpawn('alpha');
+    monitor.recordError('beta', 'oops');
+    monitor.recordSpawn('alpha');
+    monitor.recordError('alpha', 'fail');
+
+    const status = monitor.getStatus();
+    expect(status).toHaveProperty('alpha');
+    expect(status).toHaveProperty('beta');
+    expect(status['alpha']).toMatchObject({
+      spawns_1h: 2,
+      errors_1h: 1,
+      paused: false,
+    });
+    expect(status['beta']).toMatchObject({
+      spawns_1h: 0,
+      errors_1h: 1,
+      paused: false,
+    });
+  });
+
+  it('duplicate addFixHandler for same service overwrites previous handler', () => {
+    const handler1: FixHandler = {
+      id: 'h1',
+      service: 'svc:dup',
+      fixScript: '/old.sh',
+      verify: { type: 'http', url: 'http://localhost:1', expectStatus: 200 },
+      cooldownMs: 1000,
+      maxAttempts: 2,
+    };
+    const handler2: FixHandler = {
+      id: 'h2',
+      service: 'svc:dup',
+      fixScript: '/new.sh',
+      verify: { type: 'http', url: 'http://localhost:2', expectStatus: 200 },
+      cooldownMs: 2000,
+      maxAttempts: 5,
+    };
+    monitor.addFixHandler(handler1);
+    monitor.addFixHandler(handler2);
+
+    const retrieved = monitor.getFixHandler('svc:dup');
+    expect(retrieved?.id).toBe('h2');
+    expect(retrieved?.fixScript).toBe('/new.sh');
+    expect(retrieved?.maxAttempts).toBe(5);
+  });
+
+  it('script-failed result when fix script execution fails', async () => {
+    (mockActions.execScript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      stdout: '',
+      stderr: 'permission denied',
+    });
+    monitor.addFixHandler({
+      id: 'script-fail',
+      service: 'svc:sf',
+      fixScript: '/broken.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    const result = await monitor.attemptFix('svc:sf');
+    expect(result).toBe('script-failed');
+    // httpCheck should NOT be called since the script itself failed
+    expect(mockActions.httpCheck).not.toHaveBeenCalled();
+    // Lock should still be released
+    expect(mockActions.releaseLock).toHaveBeenCalled();
+  });
+
+  it('verify with non-200 expectStatus', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: true,
+      statusCode: 204,
+    });
+    monitor.addFixHandler({
+      id: 'status-204',
+      service: 'svc:204',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 204 },
+      cooldownMs: 0,
+      maxAttempts: 2,
+    });
+
+    const result = await monitor.attemptFix('svc:204');
+    expect(result).toBe('fixed');
+  });
+
+  it('verify fails when http returns wrong status code', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: true,
+      statusCode: 503,
+    });
+    monitor.addFixHandler({
+      id: 'wrong-status',
+      service: 'svc:ws',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    const result = await monitor.attemptFix('svc:ws');
+    expect(result).toBe('verify-failed');
+  });
+
+  it('attemptFix returns no-handler when fixActions not set', async () => {
+    const freshMonitor = new HealthMonitor({
+      maxSpawnsPerHour: 10,
+      maxErrorsPerHour: 10,
+      onAlert: alertFn,
+    });
+    freshMonitor.addFixHandler({
+      id: 'no-actions',
+      service: 'svc:na',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 2,
+    });
+    // fixActions never set
+    const result = await freshMonitor.attemptFix('svc:na');
+    expect(result).toBe('no-handler');
+  });
+
+  it('infra failure count persists and auto-fix clears it', async () => {
+    monitor.addFixHandler({
+      id: 'infra-clear',
+      service: 'mcp:Persist',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    // Record 3 failures — threshold reached
+    monitor.recordInfraEvent('mcp:Persist', 'down');
+    monitor.recordInfraEvent('mcp:Persist', 'down');
+    monitor.recordInfraEvent('mcp:Persist', 'down');
+    expect(monitor.getInfraFailureCount('mcp:Persist')).toBe(3);
+
+    // Infra alert should fire
+    const alerts1 = monitor.checkThresholds();
+    expect(alerts1.filter((a) => a.type === 'infra_error')).toHaveLength(1);
+
+    // Fix it
+    const result = await monitor.attemptFix('mcp:Persist');
+    expect(result).toBe('fixed');
+
+    // Failure count should be cleared
+    expect(monitor.getInfraFailureCount('mcp:Persist')).toBe(0);
+
+    // No more infra alerts
+    const alerts2 = monitor.checkThresholds();
+    expect(alerts2.filter((a) => a.type === 'infra_error')).toHaveLength(0);
+  });
+
+  it('auto-resume paused group after events expire even when group has no new events', () => {
+    // Exceed threshold to pause
+    for (let i = 0; i < 11; i++) monitor.recordSpawn('orphan');
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('orphan')).toBe(true);
+
+    // Simulate all events expiring by clearing the spawn log
+    // The group will no longer appear in spawnLog iteration,
+    // but the auto-resume sweep at end of checkThresholds should catch it
+    monitor['spawnLog'] = [];
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('orphan')).toBe(false);
+  });
+});

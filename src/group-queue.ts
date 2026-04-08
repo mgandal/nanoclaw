@@ -210,7 +210,7 @@ export class GroupQueue {
     state.pendingMessages = false;
     this.activeCount++;
 
-    logger.debug(
+    logger.info(
       { groupJid, reason, activeCount: this.activeCount },
       'Starting container for group',
     );

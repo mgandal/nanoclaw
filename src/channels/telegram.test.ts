@@ -510,7 +510,11 @@ describe('TelegramChannel', () => {
 
       const ctx = makeNonTextCtx({
         caption: 'Check this out',
-        extra: { photo: [{ file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 }] },
+        extra: {
+          photo: [
+            { file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 },
+          ],
+        },
       });
       await handler!(ctx);
 
@@ -529,7 +533,11 @@ describe('TelegramChannel', () => {
 
       const handler = botRef.handlers.get('message:photo');
       const ctx = makeNonTextCtx({
-        extra: { photo: [{ file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 }] },
+        extra: {
+          photo: [
+            { file_id: 'abc', file_unique_id: 'u1', width: 800, height: 600 },
+          ],
+        },
       });
       await handler!(ctx);
 

@@ -856,3 +856,416 @@ describe('container-runner redacts sensitive args', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 });
+
+// ─── NEW REGRESSION TESTS ───────────────────────────────────────────────
+
+describe('container-runner ANTHROPIC_BASE_URL construction', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('constructs ANTHROPIC_BASE_URL with host gateway, proxy port, and proxy token', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const baseUrlVar = envVars.find((a) => a.startsWith('ANTHROPIC_BASE_URL='));
+    expect(baseUrlVar).toBeDefined();
+    // Should follow format: http://{CONTAINER_HOST_GATEWAY}:{CREDENTIAL_PROXY_PORT}/{proxyToken}
+    expect(baseUrlVar).toBe(
+      'ANTHROPIC_BASE_URL=http://host.docker.internal:3001/test-proxy-token',
+    );
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner secret filtering', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('never passes CLAUDE_CODE_OAUTH_TOKEN to containers in either auth mode', async () => {
+    for (const mode of ['api-key', 'oauth'] as const) {
+      vi.mocked(detectAuthMode).mockReturnValue(mode);
+      fakeProc = createFakeProcess();
+      vi.mocked(spawn).mockReturnValue(fakeProc as any);
+
+      const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+      await vi.advanceTimersByTimeAsync(10);
+
+      const args = vi.mocked(spawn).mock.calls.at(-1)![1] as string[];
+      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+      const oauthVar = envVars.find((a) =>
+        a.startsWith('CLAUDE_CODE_OAUTH_TOKEN='),
+      );
+      expect(oauthVar).toBeUndefined();
+
+      fakeProc.emit('close', 0);
+      await vi.advanceTimersByTimeAsync(10);
+    }
+
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+  });
+
+  it('never passes real ANTHROPIC_API_KEY value to containers', async () => {
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
+    expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner volume mount construction', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('main group gets project root read-only and store writable', async () => {
+    const mainGroup: RegisteredGroup = {
+      ...testGroup,
+      isMain: true,
+    };
+
+    const resultPromise = runContainerAgent(
+      mainGroup,
+      { ...testInput, isMain: true },
+      () => {},
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // Project root should be mounted read-only (via readonlyMountArgs mock -> ':ro')
+    const projectRoMount = args.find(
+      (a) => a.includes('/workspace/project') && a.includes(':ro'),
+    );
+    expect(projectRoMount).toBeDefined();
+
+    // Store should be writable (no :ro suffix)
+    const storeMountIdx = args.findIndex(
+      (a) => a.includes('/workspace/project/store') && !a.includes(':ro'),
+    );
+    expect(storeMountIdx).toBeGreaterThan(-1);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('non-main group does not get project root mount', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // Non-main should NOT have /workspace/project mount (check -v args)
+    const mountArgs = args.filter((a, i) => i > 0 && args[i - 1] === '-v');
+    const projectMount = mountArgs.find(
+      (a) => a.includes(':/workspace/project:') || a.endsWith(':/workspace/project'),
+    );
+    expect(projectMount).toBeUndefined();
+
+    // But should have /workspace/group
+    const groupMount = mountArgs.find((a) => a.includes('/workspace/group'));
+    expect(groupMount).toBeDefined();
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner MCP URL injection', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+    vi.mocked(readEnvFile).mockReturnValue({});
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.HINDSIGHT_URL;
+    delete process.env.CALENDAR_URL;
+    delete process.env.TODOIST_URL;
+    delete process.env.APPLE_NOTES_URL;
+    delete process.env.READWISE_ACCESS_TOKEN;
+  });
+
+  it('rewrites 127.0.0.1 to host gateway for HINDSIGHT_URL', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      HINDSIGHT_URL: 'http://127.0.0.1:8889/mcp/hermes/',
+    });
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const hindsightVar = envVars.find((a) => a.startsWith('HINDSIGHT_URL='));
+    expect(hindsightVar).toBeDefined();
+    expect(hindsightVar).toContain('host.docker.internal');
+    expect(hindsightVar).not.toContain('127.0.0.1');
+    expect(hindsightVar).toContain(':8889');
+    expect(hindsightVar).toContain('/mcp/hermes/');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('rewrites localhost to host gateway for CALENDAR_URL', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      CALENDAR_URL: 'http://localhost:8188/mcp',
+    });
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const calendarVar = envVars.find((a) => a.startsWith('CALENDAR_URL='));
+    expect(calendarVar).toBeDefined();
+    expect(calendarVar).toContain('host.docker.internal:8188');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('passes READWISE_ACCESS_TOKEN when configured', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      READWISE_ACCESS_TOKEN: 'rwt_test123',
+    });
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const readwiseVar = envVars.find((a) =>
+      a.startsWith('READWISE_ACCESS_TOKEN='),
+    );
+    expect(readwiseVar).toBe('READWISE_ACCESS_TOKEN=rwt_test123');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('always passes OLLAMA_HOST with host gateway', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const ollamaVar = envVars.find((a) => a.startsWith('OLLAMA_HOST='));
+    expect(ollamaVar).toBe('OLLAMA_HOST=http://host.docker.internal:11434');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner exit code handling', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns error with stderr tail on exit code 1', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    fakeProc.stderr.push('Error: ENOMEM\nKilled\n');
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('Container exited with code 1');
+    expect(result.error).toContain('ENOMEM');
+  });
+
+  it('returns success with parsed output on exit code 0 (legacy mode)', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    const output = JSON.stringify({
+      status: 'success',
+      result: 'All good',
+      newSessionId: 'sess-ok',
+    });
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n${output}\n${OUTPUT_END_MARKER}\n`,
+    );
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.result).toBe('All good');
+    expect(result.newSessionId).toBe('sess-ok');
+  });
+});
+
+describe('container-runner output marker parsing edge cases', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('handles output markers split across multiple chunks', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    // Split the marker and JSON across multiple data events
+    fakeProc.stdout.push(`${OUTPUT_START_MARKER}\n{"statu`);
+    await vi.advanceTimersByTimeAsync(5);
+    fakeProc.stdout.push(`s":"success","result":"chunked"}\n${OUTPUT_END_MARKER}\n`);
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(onOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ result: 'chunked' }),
+    );
+  });
+
+  it('handles multiple output markers in a single chunk', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    const out1 = JSON.stringify({ status: 'success', result: 'first' });
+    const out2 = JSON.stringify({ status: 'success', result: 'second' });
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n${out1}\n${OUTPUT_END_MARKER}\n` +
+        `${OUTPUT_START_MARKER}\n${out2}\n${OUTPUT_END_MARKER}\n`,
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(onOutput).toHaveBeenCalledTimes(2);
+    expect(onOutput).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ result: 'first' }),
+    );
+    expect(onOutput).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ result: 'second' }),
+    );
+  });
+});
+
+describe('container-runner custom timeout from containerConfig', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+    vi.mocked(stopContainer).mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('uses group containerConfig timeout when larger than IDLE_TIMEOUT + 30s', async () => {
+    const longTimeoutGroup: RegisteredGroup = {
+      ...testGroup,
+      containerConfig: {
+        timeout: 3600000, // 1 hour -- larger than IDLE_TIMEOUT + 30s (1830000)
+      },
+    };
+
+    const resultPromise = runContainerAgent(
+      longTimeoutGroup,
+      testInput,
+      () => {},
+    );
+
+    // Advance past default timeout (1830000) but before custom timeout (3600000)
+    await vi.advanceTimersByTimeAsync(2000000);
+
+    // Should NOT have timed out yet
+    expect(vi.mocked(stopContainer)).not.toHaveBeenCalled();
+
+    // Now advance past the custom timeout
+    await vi.advanceTimersByTimeAsync(1700000);
+
+    // Now it should have timed out
+    expect(vi.mocked(stopContainer)).toHaveBeenCalled();
+
+    fakeProc.emit('close', 137);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('timed out');
+  });
+});

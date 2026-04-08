@@ -81,13 +81,13 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
+export interface VolumeMount {
   hostPath: string;
   containerPath: string;
   readonly: boolean;
 }
 
-function buildVolumeMounts(
+export function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
 ): VolumeMount[] {
@@ -125,16 +125,6 @@ function buildVolumeMounts(
       containerPath: '/workspace/group',
       readonly: false,
     });
-
-    // Global memory directory — writable for main so it can update shared context
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: false,
-      });
-    }
   } else {
     // Other groups only get their own folder
     mounts.push({
@@ -271,6 +261,22 @@ function buildVolumeMounts(
       isMain,
     );
     mounts.push(...validatedMounts);
+  }
+
+  // Guardrail: detect duplicate container paths before they reach the runtime.
+  // Apple Container's virtiofs rejects duplicate mount targets with errno 16 (EBUSY),
+  // which silently kills ALL container spawns until the service is restarted.
+  const seen = new Map<string, string>();
+  for (const m of mounts) {
+    const prev = seen.get(m.containerPath);
+    if (prev) {
+      throw new Error(
+        `Duplicate container mount path '${m.containerPath}': ` +
+          `'${prev}' and '${m.hostPath}' both target the same path. ` +
+          `This would cause virtiofs errno 16 (EBUSY) at runtime.`,
+      );
+    }
+    seen.set(m.containerPath, m.hostPath);
   }
 
   return mounts;
