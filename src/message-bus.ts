@@ -150,6 +150,59 @@ export class MessageBus {
     return messages;
   }
 
+  writeAgentMessage(agentFsKey: string, message: Partial<BusMessage>): void {
+    if (agentFsKey.includes('..') || agentFsKey.includes('/') || agentFsKey.includes('\0')) {
+      throw new Error(`Invalid agentFsKey: ${agentFsKey}`);
+    }
+    const agentDir = path.join(this.agentsDir, agentFsKey);
+    fs.mkdirSync(agentDir, { recursive: true });
+    const ts = Date.now();
+    const idPrefix = (message.id ?? Math.random().toString(36).slice(2, 8)).slice(0, 8);
+    const filename = `${ts}-${idPrefix}.json`;
+    const tmpPath = path.join(agentDir, `.${filename}.tmp`);
+    const finalPath = path.join(agentDir, filename);
+    fs.writeFileSync(tmpPath, JSON.stringify(message, null, 2));
+    fs.renameSync(tmpPath, finalPath);
+  }
+
+  listAgentMessages(agentFsKey: string): BusMessage[] {
+    const agentDir = path.join(this.agentsDir, agentFsKey);
+    if (!fs.existsSync(agentDir)) return [];
+    const messages: BusMessage[] = [];
+    for (const file of fs.readdirSync(agentDir).sort()) {
+      if (!file.endsWith('.json') || file.startsWith('.')) continue;
+      try {
+        messages.push(JSON.parse(fs.readFileSync(path.join(agentDir, file), 'utf-8')));
+      } catch {
+        /* skip corrupt files */
+      }
+    }
+    return messages;
+  }
+
+  claimAgentMessage(agentFsKey: string, filename: string): boolean {
+    const agentDir = path.join(this.agentsDir, agentFsKey);
+    const jsonPath = path.join(agentDir, filename);
+    const processingPath = path.join(agentDir, filename.replace(/\.json$/, '.processing'));
+    if (!fs.existsSync(jsonPath)) return false;
+    try {
+      fs.renameSync(jsonPath, processingPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  completeAgentMessage(agentFsKey: string, filename: string): void {
+    const baseName = filename.replace(/\.processing$/, '');
+    const agentDir = path.join(this.agentsDir, agentFsKey);
+    const processingPath = path.join(agentDir, `${baseName}.processing`);
+    const donePath = path.join(this.doneDir, baseName);
+    if (fs.existsSync(processingPath)) {
+      fs.renameSync(processingPath, donePath);
+    }
+  }
+
   private appendToAgentQueue(agentOrGroup: string, message: BusMessage): void {
     const agentDir = path.join(this.agentsDir, agentOrGroup);
     fs.mkdirSync(agentDir, { recursive: true });
