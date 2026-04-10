@@ -52,6 +52,7 @@ export const SENDER_ALLOWLIST_PATH = path.join(
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+export const AGENTS_DIR = path.join(DATA_DIR, 'agents');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
@@ -85,7 +86,7 @@ export const SESSION_MAX_AGE_MS = parseInt(
 ); // 4 hours
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
-  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
+  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '8', 10) || 8,
 );
 
 function escapeRegex(str: string): string {
@@ -131,9 +132,11 @@ export const TELEGRAM_BOT_POOL = (
 
 // Context assembler configuration
 export const CONTEXT_PACKET_MAX_SIZE = parseInt(
-  process.env.CONTEXT_PACKET_MAX_SIZE || '8000',
+  process.env.CONTEXT_PACKET_MAX_SIZE || '16000',
   10,
 );
+export const BUS_POLL_INTERVAL = parseInt(process.env.BUS_POLL_INTERVAL || '30000', 10);
+export const BUS_HIGH_PRIORITY_INTERVAL = 5000;
 
 // Health monitor thresholds
 export const HEALTH_MONITOR_INTERVAL = 60_000;

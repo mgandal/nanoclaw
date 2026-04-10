@@ -6,6 +6,7 @@ import {
   fsPathToCompoundKey,
   isCompoundKey,
 } from './compound-key';
+import { isValidGroupFolder } from './group-folder';
 
 describe('compound-key', () => {
   describe('compoundKey', () => {
@@ -68,8 +69,27 @@ describe('compound-key', () => {
     });
 
     it('passes through plain keys unchanged', () => {
-      expect(compoundKeyToFsPath('telegram_lab-claw')).toBe('telegram_lab-claw');
-      expect(fsPathToCompoundKey('telegram_lab-claw')).toBe('telegram_lab-claw');
+      expect(compoundKeyToFsPath('telegram_lab-claw')).toBe(
+        'telegram_lab-claw',
+      );
+      expect(fsPathToCompoundKey('telegram_lab-claw')).toBe(
+        'telegram_lab-claw',
+      );
     });
+  });
+});
+
+describe('group-folder -- rejection', () => {
+  it('rejects folder names containing consecutive hyphens', () => {
+    expect(isValidGroupFolder('telegram_lab--claw')).toBe(false);
+  });
+
+  it('still allows single hyphens', () => {
+    expect(isValidGroupFolder('telegram_lab-claw')).toBe(true);
+  });
+
+  it('still allows other valid names', () => {
+    expect(isValidGroupFolder('telegram_claire')).toBe(true);
+    expect(isValidGroupFolder('CODE-claw')).toBe(true);
   });
 });
