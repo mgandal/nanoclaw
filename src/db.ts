@@ -82,7 +82,7 @@ function createSchema(database: Database): void {
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
       name TEXT NOT NULL,
-      folder TEXT NOT NULL UNIQUE,
+      folder TEXT NOT NULL,
       trigger_pattern TEXT NOT NULL,
       added_at TEXT NOT NULL,
       container_config TEXT,
@@ -152,6 +152,35 @@ function createSchema(database: Database): void {
     database.exec(`ALTER TABLE messages ADD COLUMN reply_to_sender_name TEXT`);
   } catch {
     /* columns already exist */
+  }
+
+  // Drop UNIQUE constraint on folder to allow multiple JIDs per group folder
+  // (e.g., Telegram + Slack DM both routing to the same agent identity)
+  try {
+    const row = database
+      .prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='registered_groups'`,
+      )
+      .get() as { sql: string } | undefined;
+    if (row?.sql?.includes('folder TEXT NOT NULL UNIQUE')) {
+      database.exec(`
+        CREATE TABLE registered_groups_new (
+          jid TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          folder TEXT NOT NULL,
+          trigger_pattern TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          container_config TEXT,
+          requires_trigger INTEGER DEFAULT 1,
+          is_main INTEGER DEFAULT 0
+        );
+        INSERT INTO registered_groups_new SELECT * FROM registered_groups;
+        DROP TABLE registered_groups;
+        ALTER TABLE registered_groups_new RENAME TO registered_groups;
+      `);
+    }
+  } catch {
+    /* already migrated or table doesn't exist yet */
   }
 }
 

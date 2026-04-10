@@ -810,6 +810,28 @@ export async function processTaskIpc(
       if (
         !handled &&
         typeof data.type === 'string' &&
+        data.type === 'slack_dm'
+      ) {
+        handled = await handleSlackDmIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+        );
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type === 'slack_dm_read'
+      ) {
+        handled = await handleSlackDmReadIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+        );
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
         data.type.startsWith('x_')
       ) {
         try {
@@ -986,6 +1008,181 @@ async function handleImessageIpc(
     return true;
   } catch (err) {
     logger.error({ err, type: data.type, requestId }, 'iMessage IPC error');
+    writeResult({
+      success: false,
+      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return true;
+  }
+}
+
+async function handleSlackDmIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+  isMain: boolean,
+): Promise<boolean> {
+  if (!isMain) {
+    logger.warn({ sourceGroup }, 'Non-main slack_dm IPC attempt blocked');
+    return true; // handled (rejected)
+  }
+
+  const requestId = data.requestId as string | undefined;
+  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
+    logger.warn({ data }, 'slack_dm IPC invalid requestId');
+    return true;
+  }
+
+  const resultsDir = path.join(
+    DATA_DIR,
+    'ipc',
+    sourceGroup,
+    'slack_results',
+  );
+  fs.mkdirSync(resultsDir, { recursive: true });
+
+  const writeResult = (result: {
+    success: boolean;
+    message: string;
+    data?: unknown;
+  }) => {
+    const resultFile = path.join(resultsDir, `${requestId}.json`);
+    const tmpFile = `${resultFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(result));
+    fs.renameSync(tmpFile, resultFile);
+  };
+
+  try {
+    const userId = data.user_id as string | undefined;
+    const userEmail = data.user_email as string | undefined;
+    const text = data.text as string | undefined;
+
+    if (!text || (!userId && !userEmail)) {
+      writeResult({
+        success: false,
+        message: 'Missing required parameters: text and either user_id or user_email',
+      });
+      return true;
+    }
+
+    const body: Record<string, string> = { text };
+    if (userId) body.user_id = userId;
+    if (userEmail) body.user_email = userEmail;
+
+    const response = await fetch('http://127.0.0.1:19876/slack/dm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const result = (await response.json()) as Record<string, unknown>;
+
+    if (response.ok) {
+      writeResult({
+        success: true,
+        message: (result.message as string) || 'Slack DM sent',
+        data: result,
+      });
+    } else {
+      writeResult({
+        success: false,
+        message: (result.error as string) || `Bridge returned ${response.status}`,
+      });
+    }
+
+    logger.info(
+      { requestId, sourceGroup, userId, userEmail },
+      'slack_dm IPC handled',
+    );
+    return true;
+  } catch (err) {
+    logger.error({ err, requestId }, 'slack_dm IPC error');
+    writeResult({
+      success: false,
+      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return true;
+  }
+}
+
+async function handleSlackDmReadIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+  isMain: boolean,
+): Promise<boolean> {
+  if (!isMain) {
+    logger.warn({ sourceGroup }, 'Non-main slack_dm_read IPC attempt blocked');
+    return true; // handled (rejected)
+  }
+
+  const requestId = data.requestId as string | undefined;
+  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
+    logger.warn({ data }, 'slack_dm_read IPC invalid requestId');
+    return true;
+  }
+
+  const resultsDir = path.join(
+    DATA_DIR,
+    'ipc',
+    sourceGroup,
+    'slack_results',
+  );
+  fs.mkdirSync(resultsDir, { recursive: true });
+
+  const writeResult = (result: {
+    success: boolean;
+    message: string;
+    data?: unknown;
+  }) => {
+    const resultFile = path.join(resultsDir, `${requestId}.json`);
+    const tmpFile = `${resultFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(result));
+    fs.renameSync(tmpFile, resultFile);
+  };
+
+  try {
+    const channel = data.channel as string | undefined;
+    const limit = data.limit as number | undefined;
+
+    if (!channel) {
+      writeResult({
+        success: false,
+        message: 'Missing required parameter: channel',
+      });
+      return true;
+    }
+
+    const body: Record<string, unknown> = { channel };
+    if (limit) body.limit = limit;
+
+    const response = await fetch('http://127.0.0.1:19876/slack/dm/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const result = (await response.json()) as Record<string, unknown>;
+
+    if (response.ok) {
+      const messages = result.messages as unknown[];
+      writeResult({
+        success: true,
+        message: JSON.stringify(messages || [], null, 2),
+        data: result,
+      });
+    } else {
+      writeResult({
+        success: false,
+        message: (result.error as string) || `Bridge returned ${response.status}`,
+      });
+    }
+
+    logger.info(
+      { requestId, sourceGroup, channel },
+      'slack_dm_read IPC handled',
+    );
+    return true;
+  } catch (err) {
+    logger.error({ err, requestId }, 'slack_dm_read IPC error');
     writeResult({
       success: false,
       message: `Error: ${err instanceof Error ? err.message : String(err)}`,

@@ -11,6 +11,8 @@ Usage:
 import json
 import os
 import subprocess
+import urllib.parse
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # AppleScript paths — co-located with this bridge script
@@ -101,6 +103,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._handle_mail_read(body)
         elif self.path == "/mail/draft":
             self._handle_mail_draft(body)
+        elif self.path == "/slack/dm":
+            self._handle_slack_dm(body)
+        elif self.path == "/slack/dm/read":
+            self._handle_slack_dm_read(body)
         else:
             self._send_json(404, {"error": "Not found"})
 
@@ -240,6 +246,91 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._send_json(502, {"error": f"Draft creation failed: {stderr}"})
             return
         self._send_json(200, {"status": "draft_created", "to": to, "subject": subject})
+
+    def _handle_slack_dm(self, body):
+        user_email = body.get("user_email", "")
+        user_id = body.get("user_id", "")
+        text = body.get("text", "")
+        if not text or (not user_email and not user_id):
+            self._send_json(400, {"error": "text and either user_email or user_id required"})
+            return
+        token = os.environ.get("SLACK_BOT_TOKEN", "")
+        if not token:
+            env_path = os.path.join(_SCRIPT_DIR, os.pardir, os.pardir, ".env")
+            env_path = os.path.normpath(env_path)
+            try:
+                for line in open(env_path):
+                    if line.startswith("SLACK_BOT_TOKEN="):
+                        token = line.strip().split("=", 1)[1].strip('"').strip("'")
+            except Exception:
+                pass
+        if not token:
+            self._send_json(503, {"error": "SLACK_BOT_TOKEN not found"})
+            return
+        try:
+            # Resolve user ID from email if not provided directly
+            if not user_id:
+                lookup = urllib.request.Request(
+                    f"https://slack.com/api/users.lookupByEmail?email={urllib.parse.quote(user_email)}",
+                    headers={"Authorization": f"Bearer {token}"}
+                )
+                resp = json.loads(urllib.request.urlopen(lookup, timeout=10).read())
+                if not resp.get("ok"):
+                    self._send_json(404, {"error": f"Slack user not found: {resp.get('error')}"})
+                    return
+                user_id = resp["user"]["id"]
+            # Send DM — chat.postMessage accepts a user ID as channel
+            # and auto-opens the DM (no conversations.open needed)
+            msg_payload = json.dumps({"channel": user_id, "text": text}).encode()
+            msg = urllib.request.Request(
+                "https://slack.com/api/chat.postMessage",
+                data=msg_payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+            )
+            msg_resp = json.loads(urllib.request.urlopen(msg, timeout=10).read())
+            if msg_resp.get("ok"):
+                self._send_json(200, {"ok": True, "channel": msg_resp.get("channel"), "ts": msg_resp.get("ts")})
+            else:
+                self._send_json(500, {"error": msg_resp.get("error")})
+        except Exception as e:
+            self._send_json(502, {"error": f"Slack API error: {str(e)}"})
+
+
+    def _handle_slack_dm_read(self, body):
+        channel = body.get("channel", "")
+        if not channel:
+            self._send_json(400, {"error": "channel is required"})
+            return
+        limit = body.get("limit", 10)
+        if not isinstance(limit, int) or limit < 1:
+            limit = 10
+        limit = min(limit, 50)
+        token = os.environ.get("SLACK_BOT_TOKEN", "")
+        if not token:
+            env_path = os.path.join(_SCRIPT_DIR, os.pardir, os.pardir, ".env")
+            env_path = os.path.normpath(env_path)
+            try:
+                for line in open(env_path):
+                    if line.startswith("SLACK_BOT_TOKEN="):
+                        token = line.strip().split("=", 1)[1].strip('"').strip("'")
+            except Exception:
+                pass
+        if not token:
+            self._send_json(503, {"error": "SLACK_BOT_TOKEN not found"})
+            return
+        try:
+            url = f"https://slack.com/api/conversations.history?channel={urllib.parse.quote(channel)}&limit={limit}"
+            req = urllib.request.Request(
+                url,
+                headers={"Authorization": f"Bearer {token}"}
+            )
+            resp = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            if not resp.get("ok"):
+                self._send_json(500, {"error": resp.get("error", "Unknown Slack error")})
+                return
+            self._send_json(200, {"ok": True, "messages": resp.get("messages", [])})
+        except Exception as e:
+            self._send_json(502, {"error": f"Slack API error: {str(e)}"})
 
 
 def create_server(host="127.0.0.1", port=19876):
