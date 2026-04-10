@@ -26,6 +26,7 @@ vi.mock('fs', () => ({
   default: {
     existsSync: vi.fn(() => false),
     readFileSync: vi.fn(() => ''),
+    readdirSync: vi.fn(() => []),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
@@ -314,6 +315,165 @@ describe('assembleContextPacket', () => {
     // Should not crash, should not include bus sections
     expect(packet).toContain('Current date:');
     expect(packet).not.toContain('Pending items');
+  });
+
+  describe('agent identity sections', () => {
+    it('includes agent identity when identity.md exists', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) => typeof p === 'string' && p.includes('identity.md'),
+      );
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '## Role: Researcher\nFocus on literature review.',
+      );
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('<agent-identity>');
+      expect(packet).toContain('## Role: Researcher');
+      expect(packet).toContain('</agent-identity>');
+    });
+
+    it('includes agent state when state.md exists', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) => typeof p === 'string' && p.includes('state.md'),
+      );
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        '## Current Task\nSearching for papers on GWAS.',
+      );
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('<agent-state>');
+      expect(packet).toContain('Searching for papers on GWAS');
+      expect(packet).toContain('</agent-state>');
+    });
+
+    it('includes agent trust when trust.yaml exists', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) => typeof p === 'string' && p.includes('trust.yaml'),
+      );
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        'level: high\nscope: read-write',
+      );
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('<agent-trust>');
+      expect(packet).toContain('level: high');
+      expect(packet).toContain('</agent-trust>');
+    });
+
+    it('includes pending bus messages when bus dir has .json files', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) =>
+          typeof p === 'string' &&
+          p.includes('bus/agents/telegram_science-claw--researcher'),
+      );
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'msg-001.json',
+      ] as unknown as fs.Dirent[]);
+      vi.mocked(fs.readFileSync).mockReturnValue(
+        JSON.stringify({
+          from: 'inbox-agent',
+          topic: 'finding',
+          summary: 'Relevant paper found',
+        }),
+      );
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('<pending-bus-messages');
+      expect(packet).toContain('count="1"');
+      expect(packet).toContain('inbox-agent');
+      expect(packet).toContain('Relevant paper found');
+    });
+
+    it('does not include agent sections when agentName is not provided', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+      );
+      expect(packet).not.toContain('<agent-identity>');
+      expect(packet).not.toContain('<agent-state>');
+      expect(packet).not.toContain('<agent-trust>');
+      expect(packet).not.toContain('<pending-bus-messages');
+    });
+
+    it('omits agent sections gracefully when agent files do not exist', async () => {
+      vi.mocked(fs.existsSync).mockReturnValue(false);
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('Current date:');
+      expect(packet).not.toContain('<agent-identity>');
+      expect(packet).not.toContain('<agent-state>');
+      expect(packet).not.toContain('<agent-trust>');
+    });
+
+    it('skips pending bus messages section when bus dir has no .json files', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) =>
+          typeof p === 'string' &&
+          p.includes('bus/agents/telegram_science-claw--researcher'),
+      );
+      vi.mocked(fs.readdirSync).mockReturnValue([] as unknown as fs.Dirent[]);
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).not.toContain('<pending-bus-messages');
+    });
+
+    it('handles malformed bus message JSON gracefully', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) =>
+          typeof p === 'string' &&
+          p.includes('bus/agents/telegram_science-claw--researcher'),
+      );
+      vi.mocked(fs.readdirSync).mockReturnValue([
+        'msg-001.json',
+      ] as unknown as fs.Dirent[]);
+      vi.mocked(fs.readFileSync).mockReturnValue('NOT VALID JSON{{{');
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      // Should not crash, malformed message filtered out
+      expect(packet).toContain('Current date:');
+      expect(packet).not.toContain('<pending-bus-messages');
+    });
+
+    it('truncates agent state to 2000 chars', async () => {
+      vi.mocked(fs.existsSync).mockImplementation(
+        (p) => typeof p === 'string' && p.includes('state.md'),
+      );
+      vi.mocked(fs.readFileSync).mockReturnValue('S'.repeat(5000));
+      const packet = await assembleContextPacket(
+        'telegram_science-claw',
+        false,
+        'researcher',
+      );
+      expect(packet).toContain('<agent-state>');
+      // state content truncated to 2000 chars — total section ~2030 chars
+      const stateStart =
+        packet.indexOf('<agent-state>') + '<agent-state>\n'.length;
+      const stateEnd = packet.indexOf('\n</agent-state>');
+      const stateContent = packet.slice(stateStart, stateEnd);
+      expect(stateContent.length).toBeLessThanOrEqual(2000);
+    });
   });
 });
 
