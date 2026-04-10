@@ -261,6 +261,14 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
     };
   }
 
+  if (process.env.SLACK_MCP_URL) {
+    servers.slack = {
+      type: 'http',
+      url: process.env.SLACK_MCP_URL,
+      headers: { Accept: 'application/json, text/event-stream' },
+    };
+  }
+
   // Gmail MCP (if credentials exist in the container)
   if (fs.existsSync('/home/node/.gmail-mcp/credentials.json')) {
     servers.gmail = {
@@ -607,6 +615,7 @@ async function runQuery(
         'mcp__todoist__*',
         'mcp__gmail__*',
         'mcp__calendar__*',
+        'mcp__slack__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',

@@ -435,6 +435,25 @@ function buildContainerArgs(
     }
   }
 
+  // Pass Slack MCP endpoint URL (only if configured in .env)
+  const slackMcpEnv = readEnvFile(['SLACK_MCP_URL']);
+  const slackMcpUrl = process.env.SLACK_MCP_URL || slackMcpEnv.SLACK_MCP_URL;
+  if (slackMcpUrl) {
+    try {
+      const parsed = new URL(slackMcpUrl);
+      const hostname =
+        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+          ? CONTAINER_HOST_GATEWAY
+          : parsed.hostname;
+      args.push(
+        '-e',
+        `SLACK_MCP_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
+      );
+    } catch {
+      logger.warn({ slackMcpUrl }, 'Invalid SLACK_MCP_URL, skipping Slack MCP');
+    }
+  }
+
   // Pass Honcho user-modeling API URL
   const honchoEnv = readEnvFile(['HONCHO_URL']);
   const honchoUrl = process.env.HONCHO_URL || honchoEnv.HONCHO_URL;
