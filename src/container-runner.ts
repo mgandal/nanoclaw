@@ -73,6 +73,7 @@ export interface ContainerInput {
   assistantName?: string;
   script?: string;
   images?: Array<{ base64: string; mediaType: string }>;
+  agentName?: string;
 }
 
 export interface ContainerOutput {
@@ -449,8 +450,7 @@ function buildContainerArgs(
 
   // Pass GitHub credentials (for gh CLI in container)
   const githubEnv = readEnvFile(['GITHUB_TOKEN', 'GH_REPO']);
-  const githubToken =
-    process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
+  const githubToken = process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
   if (githubToken) {
     args.push('-e', `GITHUB_TOKEN=${githubToken}`);
   }

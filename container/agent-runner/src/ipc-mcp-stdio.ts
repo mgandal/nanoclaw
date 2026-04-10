@@ -95,6 +95,61 @@ server.tool(
 );
 
 server.tool(
+  'publish_to_bus',
+  'Publish a message to the agent coordination bus for async inter-agent communication.',
+  {
+    to_agent: z.string().describe('Target agent name (e.g., "jennifer", "einstein")'),
+    to_group: z.string().optional().describe('Target group folder (defaults to current group)'),
+    topic: z.string().describe('Message topic for categorization'),
+    priority: z.enum(['low', 'medium', 'high']).optional().describe('Message priority (default: medium)'),
+    summary: z.string().describe('Brief description of what is needed'),
+    payload: z.record(z.unknown()).optional().describe('Structured data for the receiving agent'),
+  },
+  async (args) => {
+    const data = {
+      type: 'publish_to_bus',
+      chatJid,
+      groupFolder,
+      from: groupFolder,
+      to_agent: args.to_agent,
+      to_group: args.to_group || groupFolder,
+      topic: args.topic,
+      priority: args.priority || 'medium',
+      summary: args.summary,
+      payload: args.payload || {},
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{ type: 'text' as const, text: `Bus message published to ${args.to_agent}: ${args.summary}` }],
+    };
+  },
+);
+
+server.tool(
+  'write_agent_state',
+  'Update your persistent working memory (state.md). Writes are serialized through the host to prevent corruption.',
+  {
+    content: z.string().describe('Full markdown content for state.md'),
+    append: z.boolean().optional().describe('If true, append instead of replace (default: false)'),
+  },
+  async (args) => {
+    const data = {
+      type: 'write_agent_state',
+      chatJid,
+      groupFolder,
+      content: args.content,
+      append: args.append || false,
+      timestamp: new Date().toISOString(),
+    };
+    writeIpcFile(TASKS_DIR, data);
+    return {
+      content: [{ type: 'text' as const, text: 'Agent state update queued.' }],
+    };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 
