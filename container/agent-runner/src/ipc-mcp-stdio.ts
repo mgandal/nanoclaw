@@ -1005,6 +1005,76 @@ if (isMain) {
   );
 }
 
+// --- Slack DM Tool ---
+// Send a Slack direct message via the host bridge (port 19876).
+
+const SLACK_RESULTS_DIR = path.join(IPC_DIR, 'slack_results');
+
+if (isMain) {
+  server.tool(
+    'slack_dm',
+    'Send a Slack direct message to a user. Requires either a Slack user ID or email address.',
+    {
+      user_id: z.string().optional().describe('Slack user ID (e.g. "U01ABC123"). Provide this or user_email.'),
+      user_email: z.string().optional().describe('User email address to look up in Slack. Provide this or user_id.'),
+      text: z.string().describe('Message text to send'),
+    },
+    async (args) => {
+      if (!args.user_id && !args.user_email) {
+        return {
+          content: [{ type: 'text' as const, text: 'Error: Provide either user_id or user_email' }],
+          isError: true,
+        };
+      }
+      const requestId = `slack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'slack_dm',
+        requestId,
+        user_id: args.user_id,
+        user_email: args.user_email,
+        text: args.text,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForIpcResult(SLACK_RESULTS_DIR, requestId, 30000);
+      return {
+        content: [{ type: 'text' as const, text: result.message as string || JSON.stringify(result) }],
+        isError: !(result as { success?: boolean }).success,
+      };
+    },
+  );
+}
+
+// --- Slack DM Read Tool ---
+// Read Slack DM conversation history via the host bridge (port 19876).
+
+if (isMain) {
+  server.tool(
+    'slack_dm_read',
+    'Read recent messages from a Slack DM conversation. Requires the DM channel ID.',
+    {
+      channel: z.string().describe('Slack DM channel ID (e.g. "D0AQ09RSF1B")'),
+      limit: z.number().optional().describe('Number of messages to retrieve (default 10, max 50)'),
+    },
+    async (args) => {
+      const requestId = `slack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      writeIpcFile(TASKS_DIR, {
+        type: 'slack_dm_read',
+        requestId,
+        channel: args.channel,
+        limit: args.limit ?? 10,
+        groupFolder,
+        timestamp: new Date().toISOString(),
+      });
+      const result = await waitForIpcResult(SLACK_RESULTS_DIR, requestId, 30000);
+      return {
+        content: [{ type: 'text' as const, text: result.message as string || JSON.stringify(result) }],
+        isError: !(result as { success?: boolean }).success,
+      };
+    },
+  );
+}
+
 // bus_publish — post a finding to the inter-agent message bus
 server.tool(
   'bus_publish',
