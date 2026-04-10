@@ -1,0 +1,14 @@
+bibtexparser>=1.4.0
+sentence-transformers>=3.0.0
+torch<2.6
+bertopic>=0.16.0
+umap-learn>=0.5.0
+hdbscan>=0.8.0
+scikit-learn>=1.4.0
+anthropic>=0.40.0
+openai>=1.0.0
+numpy>=1.26.0
+pandas>=2.0.0
+scipy>=1.13.0
+python-Levenshtein>=0.25.0
+pytest>=8.0.0
