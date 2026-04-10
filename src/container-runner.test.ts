@@ -8,6 +8,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  AGENTS_DIR: '/tmp/nanoclaw-test-data/agents',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -1318,5 +1319,56 @@ describe('container-runner custom timeout from containerConfig', () => {
     const result = await resultPromise;
     expect(result.status).toBe('error');
     expect(result.error).toContain('timed out');
+  });
+});
+
+import fs from 'fs';
+import { buildVolumeMounts } from './container-runner.js';
+
+describe('container-runner agent identity mount', () => {
+  beforeEach(() => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.mkdirSync).mockReturnValue(undefined);
+    vi.mocked(fs.writeFileSync).mockReturnValue(undefined);
+    vi.mocked(fs.readdirSync).mockReturnValue([]);
+    vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false } as any);
+  });
+
+  it('adds /workspace/agent read-only mount when agentName is set and dir exists', () => {
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      // Only return true for the agent dir
+      return String(p).includes('/tmp/nanoclaw-test-data/agents/researcher');
+    });
+
+    const mounts = buildVolumeMounts(testGroup, false, 'researcher');
+
+    const agentMount = mounts.find(
+      (m) => m.containerPath === '/workspace/agent',
+    );
+    expect(agentMount).toBeDefined();
+    expect(agentMount!.hostPath).toContain('agents/researcher');
+    expect(agentMount!.readonly).toBe(true);
+  });
+
+  it('omits /workspace/agent mount when agentName is set but dir does not exist', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const mounts = buildVolumeMounts(testGroup, false, 'researcher');
+
+    const agentMount = mounts.find(
+      (m) => m.containerPath === '/workspace/agent',
+    );
+    expect(agentMount).toBeUndefined();
+  });
+
+  it('omits /workspace/agent mount when agentName is not provided', () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+
+    const mounts = buildVolumeMounts(testGroup, false);
+
+    const agentMount = mounts.find(
+      (m) => m.containerPath === '/workspace/agent',
+    );
+    expect(agentMount).toBeUndefined();
   });
 });

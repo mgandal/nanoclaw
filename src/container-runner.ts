@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  AGENTS_DIR,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -92,6 +93,7 @@ export interface VolumeMount {
 export function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  agentName?: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -276,6 +278,18 @@ export function buildVolumeMounts(
       isMain,
     );
     mounts.push(...validatedMounts);
+  }
+
+  // Agent identity mount (read-only) for compound group containers
+  if (agentName) {
+    const agentDir = path.join(AGENTS_DIR, agentName);
+    if (fs.existsSync(agentDir)) {
+      mounts.push({
+        hostPath: agentDir,
+        containerPath: '/workspace/agent',
+        readonly: true,
+      });
+    }
   }
 
   // Guardrail: detect duplicate container paths before they reach the runtime.
@@ -506,7 +520,7 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.agentName);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
