@@ -135,21 +135,21 @@ describe('assembleContextPacket', () => {
   });
 
   it('truncated packet ends with [...]truncated] marker', async () => {
-    // memory.md (2000 chars) + current.md (1500 chars) + 30 messages (~7000 chars) > 8000
+    // Generate enough content to exceed CONTEXT_PACKET_MAX_SIZE (16000)
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue('X'.repeat(3000));
+    vi.mocked(fs.readFileSync).mockReturnValue('X'.repeat(10000));
     vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
     vi.mocked(getRecentMessages).mockReturnValue(
-      Array.from({ length: 30 }, (_, i) => ({
+      Array.from({ length: 100 }, (_, i) => ({
         sender: `user${i}`,
-        content: 'A'.repeat(200),
+        content: 'A'.repeat(2000),
         timestamp: '2026-03-20T10:00:00Z',
       })),
     );
     vi.mocked(getAllTasks).mockReturnValue(
-      Array.from({ length: 50 }, (_, i) => ({
+      Array.from({ length: 100 }, (_, i) => ({
         id: `task-${i}`,
-        prompt: 'B'.repeat(80),
+        prompt: 'B'.repeat(500),
         schedule_type: 'cron',
         schedule_value: '0 9 * * *',
         status: 'active' as const,
