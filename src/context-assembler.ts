@@ -14,11 +14,13 @@ import http from 'http';
 import path from 'path';
 
 import {
+  AGENTS_DIR,
   CONTEXT_PACKET_MAX_SIZE,
   DATA_DIR,
   GROUPS_DIR,
   TIMEZONE,
 } from './config.js';
+import { compoundKey, compoundKeyToFsPath } from './compound-key.js';
 import { getRecentMessages, getAllTasks } from './db.js';
 import { logger } from './logger.js';
 
@@ -146,6 +148,7 @@ async function queryQmdForContext(query: string): Promise<string> {
 export async function assembleContextPacket(
   groupFolder: string,
   isMain: boolean,
+  agentName?: string,
 ): Promise<string> {
   const sections: string[] = [];
 
@@ -280,6 +283,58 @@ export async function assembleContextPacket(
       })
       .join('\n');
     sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
+  }
+
+  // Agent identity sections (if compound group)
+  if (agentName) {
+    const agentDir = path.join(AGENTS_DIR, agentName);
+
+    // Identity
+    const identityPath = path.join(agentDir, 'identity.md');
+    if (fs.existsSync(identityPath)) {
+      const identity = fs.readFileSync(identityPath, 'utf-8');
+      sections.push(`<agent-identity>\n${identity}\n</agent-identity>`);
+    }
+
+    // State
+    const statePath = path.join(agentDir, 'state.md');
+    if (fs.existsSync(statePath)) {
+      const state = fs.readFileSync(statePath, 'utf-8').slice(0, 2000);
+      sections.push(`<agent-state>\n${state}\n</agent-state>`);
+    }
+
+    // Trust
+    const trustPath = path.join(agentDir, 'trust.yaml');
+    if (fs.existsSync(trustPath)) {
+      const trust = fs.readFileSync(trustPath, 'utf-8');
+      sections.push(`<agent-trust>\n${trust}\n</agent-trust>`);
+    }
+
+    // Pending bus messages (read-only scan — do NOT claim or delete)
+    const busFsKey = compoundKeyToFsPath(compoundKey(groupFolder, agentName));
+    const busDir = path.join(DATA_DIR, 'bus', 'agents', busFsKey);
+    if (fs.existsSync(busDir)) {
+      const pendingFiles = fs
+        .readdirSync(busDir)
+        .filter((f: string) => f.endsWith('.json'));
+      if (pendingFiles.length > 0) {
+        const pending = pendingFiles
+          .slice(0, 5)
+          .map((f: string) => {
+            try {
+              return JSON.parse(fs.readFileSync(path.join(busDir, f), 'utf-8'));
+            } catch {
+              return null;
+            }
+          })
+          .filter(Boolean);
+        if (pending.length > 0) {
+          sections.push(
+            `<pending-bus-messages count="${pendingFiles.length}">\n${JSON.stringify(pending, null, 2)}\n</pending-bus-messages>`,
+          );
+        }
+      }
+    }
   }
 
   // Assemble and truncate
