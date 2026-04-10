@@ -224,7 +224,7 @@ function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput):
         HONCHO_URL: process.env.HONCHO_URL,
         HONCHO_WORKSPACE: 'nanoclaw',
         HONCHO_USER_PEER: 'mgandal',
-        HONCHO_AI_PEER: containerInput.groupFolder.replace(/^telegram_/, ''),
+        HONCHO_AI_PEER: containerInput.agentName || containerInput.groupFolder.replace(/^telegram_/, ''),
       },
     };
   }
@@ -767,7 +767,7 @@ async function main(): Promise<void> {
   let honchoSession: HonchoSession | null = null;
   if (process.env.HONCHO_URL && !containerInput.isScheduledTask) {
     const honchoClient = createHonchoClient(process.env.HONCHO_URL);
-    const aiPeer = containerInput.groupFolder.replace(/^telegram_/, '');
+    const aiPeer = containerInput.agentName || containerInput.groupFolder.replace(/^telegram_/, '');
     honchoSession = new HonchoSession(honchoClient, {
       workspace: 'nanoclaw',
       userPeer: 'mgandal',
