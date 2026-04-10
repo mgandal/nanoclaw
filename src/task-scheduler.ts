@@ -3,6 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import { parseCompoundKey } from './compound-key.js';
 import {
   ContainerOutput,
   runContainerAgent,
@@ -112,9 +113,11 @@ async function runTask(
   deps: SchedulerDependencies,
 ): Promise<void> {
   const startTime = Date.now();
+  // Extract base group for compound keys (e.g., "telegram_lab-claw:einstein" → "telegram_lab-claw")
+  const { group: baseGroupFolder } = parseCompoundKey(task.group_folder);
   let groupDir: string;
   try {
-    groupDir = resolveGroupFolderPath(task.group_folder);
+    groupDir = resolveGroupFolderPath(baseGroupFolder);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     // Stop retry churn for malformed legacy rows.
@@ -141,9 +144,7 @@ async function runTask(
   );
 
   const groups = deps.registeredGroups();
-  const group = Object.values(groups).find(
-    (g) => g.folder === task.group_folder,
-  );
+  const group = Object.values(groups).find((g) => g.folder === baseGroupFolder);
 
   if (!group) {
     updateTask(task.id, { status: 'paused' });

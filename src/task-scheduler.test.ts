@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseCompoundKey } from './compound-key.js';
 
 import {
   _initTestDatabase,
@@ -1012,5 +1013,12 @@ describe('computeNextRun — interval drift prevention', () => {
     // Verify grid alignment
     const offset = (nextMs - new Date(scheduledTime).getTime()) % intervalMs;
     expect(offset).toBe(0);
+  });
+});
+
+describe('compound key task support', () => {
+  it('extracts base group from compound key', () => {
+    const { group } = parseCompoundKey('telegram_lab-claw:einstein');
+    expect(group).toBe('telegram_lab-claw');
   });
 });
