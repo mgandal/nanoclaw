@@ -39,6 +39,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  agentName?: string;
   script?: string;
   images?: ImageAttachment[];
 }
