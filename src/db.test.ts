@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   _initTestDatabase,
   _closeDatabase,
+  _getTestDb,
   createTask,
   deleteSession,
   deleteTask,
@@ -1838,5 +1839,26 @@ describe('database initialization edge cases', () => {
     expect(() => getAllTasks()).not.toThrow();
     expect(() => getRouterState('test')).not.toThrow();
     expect(() => getTaskRunLogs('2024-01-01T00:00:00.000Z')).not.toThrow();
+  });
+});
+
+describe('agent tables', () => {
+  it('creates agent_registry table', () => {
+    const rows = _getTestDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_registry'")
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('creates agent_actions table', () => {
+    const rows = _getTestDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_actions'")
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('has agent_name column on scheduled_tasks', () => {
+    const info = _getTestDb().prepare('PRAGMA table_info(scheduled_tasks)').all() as Array<{ name: string }>;
+    expect(info.map((c) => c.name)).toContain('agent_name');
   });
 });

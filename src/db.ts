@@ -88,6 +88,24 @@ function createSchema(database: Database): void {
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
     );
+    CREATE TABLE IF NOT EXISTS agent_registry (
+      agent_name TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (agent_name, group_folder)
+    );
+    CREATE TABLE IF NOT EXISTS agent_actions (
+      id TEXT PRIMARY KEY,
+      agent_name TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      trust_level TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      target TEXT,
+      outcome TEXT DEFAULT 'completed',
+      created_at TEXT NOT NULL
+    );
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
@@ -104,6 +122,7 @@ function createSchema(database: Database): void {
     `ALTER TABLE scheduled_tasks ADD COLUMN context_mode TEXT DEFAULT 'isolated'`,
   );
   addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN script TEXT`);
+  addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN agent_name TEXT`);
   addColumn(`ALTER TABLE sessions ADD COLUMN last_used TEXT`);
   addColumn(`ALTER TABLE sessions ADD COLUMN created_at TEXT`);
 
@@ -202,6 +221,11 @@ export function initDatabase(): void {
 export function _initTestDatabase(): void {
   db = new Database(':memory:');
   createSchema(db);
+}
+
+/** @internal - for tests only. Returns the current database instance for raw queries. */
+export function _getTestDb(): Database {
+  return db;
 }
 
 /** @internal - for tests only. */
