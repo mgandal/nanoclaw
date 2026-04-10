@@ -54,7 +54,7 @@ function isQmdReachable(): boolean {
 
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
-    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|GITHUB_TOKEN)=/i;
+    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|GITHUB_TOKEN|SUPADATA_API_KEY)=/i;
   return args.map((arg, i) => {
     if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
       const eqIdx = arg.indexOf('=');
@@ -490,6 +490,14 @@ function buildContainerArgs(
   const ghRepo = process.env.GH_REPO || githubEnv.GH_REPO;
   if (ghRepo) {
     args.push('-e', `GH_REPO=${ghRepo}`);
+  }
+
+  // Pass Supadata API key (for follow-builders podcast transcripts)
+  const supadataEnv = readEnvFile(['SUPADATA_API_KEY']);
+  const supadataKey =
+    process.env.SUPADATA_API_KEY || supadataEnv.SUPADATA_API_KEY;
+  if (supadataKey) {
+    args.push('-e', `SUPADATA_API_KEY=${supadataKey}`);
   }
 
   // Pass Ollama host URL for container access
