@@ -142,7 +142,7 @@ export const MAX_ERRORS_PER_HOUR = 20;
 
 // Ollama classification
 export const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
-export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3-coder-next';
+export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
 export const OLLAMA_TIMEOUT = parseInt(
   process.env.OLLAMA_TIMEOUT || '30000',
   10,

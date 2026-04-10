@@ -1032,12 +1032,7 @@ async function handleSlackDmIpc(
     return true;
   }
 
-  const resultsDir = path.join(
-    DATA_DIR,
-    'ipc',
-    sourceGroup,
-    'slack_results',
-  );
+  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'slack_results');
   fs.mkdirSync(resultsDir, { recursive: true });
 
   const writeResult = (result: {
@@ -1059,7 +1054,8 @@ async function handleSlackDmIpc(
     if (!text || (!userId && !userEmail)) {
       writeResult({
         success: false,
-        message: 'Missing required parameters: text and either user_id or user_email',
+        message:
+          'Missing required parameters: text and either user_id or user_email',
       });
       return true;
     }
@@ -1085,7 +1081,8 @@ async function handleSlackDmIpc(
     } else {
       writeResult({
         success: false,
-        message: (result.error as string) || `Bridge returned ${response.status}`,
+        message:
+          (result.error as string) || `Bridge returned ${response.status}`,
       });
     }
 
@@ -1120,12 +1117,7 @@ async function handleSlackDmReadIpc(
     return true;
   }
 
-  const resultsDir = path.join(
-    DATA_DIR,
-    'ipc',
-    sourceGroup,
-    'slack_results',
-  );
+  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'slack_results');
   fs.mkdirSync(resultsDir, { recursive: true });
 
   const writeResult = (result: {
@@ -1172,7 +1164,8 @@ async function handleSlackDmReadIpc(
     } else {
       writeResult({
         success: false,
-        message: (result.error as string) || `Bridge returned ${response.status}`,
+        message:
+          (result.error as string) || `Bridge returned ${response.status}`,
       });
     }
 
