@@ -32,6 +32,11 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @readwise/cli
 
+# Install blogwatcher CLI for RSS feed monitoring (Go binary from GitHub release)
+RUN curl -fsSL https://github.com/Hyaxia/blogwatcher/releases/download/v0.0.2/blogwatcher_0.0.2_linux_amd64.tar.gz \
+    | tar -xz -C /usr/local/bin blogwatcher \
+    && chmod +x /usr/local/bin/blogwatcher
+
 # Install agent-reach: gives agents read/search access to 15+ platforms
 # (Twitter/X, YouTube, Reddit, GitHub, RSS, web, Bilibili, Weibo, Douyin, etc.)
 RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*

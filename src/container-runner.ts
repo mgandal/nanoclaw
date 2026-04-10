@@ -225,6 +225,18 @@ export function buildVolumeMounts(
     });
   }
 
+  // Blogwatcher persistent state directory (for RSS read/unread tracking)
+  // Only mounted for groups that use blogwatcher (VAULT-claw)
+  if (group.folder === 'telegram_vault-claw') {
+    const blogwatcherDir = path.join(DATA_DIR, 'blogwatcher', group.folder);
+    fs.mkdirSync(blogwatcherDir, { recursive: true });
+    mounts.push({
+      hostPath: blogwatcherDir,
+      containerPath: '/home/node/.blogwatcher',
+      readonly: false,
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
