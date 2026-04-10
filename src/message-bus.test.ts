@@ -77,4 +77,68 @@ describe('MessageBus', () => {
     bus.pruneOld(3 * 24 * 3600_000);
     expect(fs.readdirSync(path.join(busDir, 'done'))).toHaveLength(0);
   });
+
+  describe('per-message agent files', () => {
+    it('writeAgentMessage writes individual JSON file', () => {
+      bus.writeAgentMessage('telegram_lab-claw--einstein', {
+        id: 'test-1',
+        from: 'test',
+        topic: 'test_topic',
+        timestamp: new Date().toISOString(),
+        summary: 'Test',
+      });
+      const dir = path.join(busDir, 'agents', 'telegram_lab-claw--einstein');
+      const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      expect(files).toHaveLength(1);
+    });
+
+    it('listAgentMessages reads all pending JSON files', () => {
+      bus.writeAgentMessage('telegram_lab-claw--einstein', {
+        id: '1',
+        from: 'a',
+        topic: 't1',
+        timestamp: new Date().toISOString(),
+      });
+      bus.writeAgentMessage('telegram_lab-claw--einstein', {
+        id: '2',
+        from: 'b',
+        topic: 't2',
+        timestamp: new Date().toISOString(),
+      });
+      expect(bus.listAgentMessages('telegram_lab-claw--einstein')).toHaveLength(
+        2,
+      );
+    });
+
+    it('listAgentMessages ignores .processing files', () => {
+      const dir = path.join(busDir, 'agents', 'telegram_lab-claw--einstein');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, '123-abc.json'),
+        '{"id":"1","from":"x","topic":"y","timestamp":"t"}',
+      );
+      fs.writeFileSync(
+        path.join(dir, '456-def.processing'),
+        '{"id":"2","from":"x","topic":"y","timestamp":"t"}',
+      );
+      expect(bus.listAgentMessages('telegram_lab-claw--einstein')).toHaveLength(
+        1,
+      );
+    });
+
+    it('claimAgentMessage renames to .processing', () => {
+      bus.writeAgentMessage('telegram_lab-claw--einstein', {
+        id: 'c1',
+        from: 'x',
+        topic: 'y',
+        timestamp: new Date().toISOString(),
+      });
+      const dir = path.join(busDir, 'agents', 'telegram_lab-claw--einstein');
+      const [file] = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
+      bus.claimAgentMessage('telegram_lab-claw--einstein', file);
+      const remaining = fs.readdirSync(dir);
+      expect(remaining.some((f) => f.endsWith('.processing'))).toBe(true);
+      expect(remaining.filter((f) => f.endsWith('.json'))).toHaveLength(0);
+    });
+  });
 });
