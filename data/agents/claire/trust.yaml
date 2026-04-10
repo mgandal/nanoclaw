@@ -1,0 +1,6 @@
+actions:
+  send_message: notify
+  publish_to_bus: autonomous
+  write_group_memory: autonomous
+  schedule_task: notify
+  write_agent_state: autonomous

@@ -6,8 +6,10 @@ dist/
 
 # Local data & auth
 store/
-data/
 logs/
+# data/ — ignore runtime contents but track agent config
+data/*
+!data/agents/
 
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
