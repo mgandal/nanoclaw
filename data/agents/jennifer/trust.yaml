@@ -1,0 +1,6 @@
+actions:
+  send_message: notify
+  send_email: draft
+  schedule_meeting: notify
+  publish_to_bus: autonomous
+  write_agent_state: autonomous
