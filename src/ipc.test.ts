@@ -298,33 +298,40 @@ describe('register_group isMain preservation', () => {
   });
 });
 
-// --- 4. bus_publish ---
+// --- 4. publish_to_bus ---
 
-describe('bus_publish', () => {
+describe('publish_to_bus', () => {
   it('publishes message to bus with correct fields', async () => {
-    const publishSpy = vi.fn();
+    const writeAgentMessageSpy = vi.fn();
     const bussDeps = {
       ...deps,
-      messageBus: { publish: publishSpy, subscribe: vi.fn() } as any,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+        subscribe: vi.fn(),
+      } as any,
     };
 
     await processTaskIpc(
       {
-        type: 'bus_publish',
+        type: 'publish_to_bus',
         topic: 'status-update',
-        finding: 'System is healthy',
+        to_agent: 'einstein',
+        summary: 'System is healthy',
         priority: 'low',
       } as any,
-      'telegram_other',
+      'telegram_other--curator',
       false,
       bussDeps,
     );
 
-    expect(publishSpy).toHaveBeenCalledWith(
+    expect(writeAgentMessageSpy).toHaveBeenCalledWith(
+      'telegram_other--einstein',
       expect.objectContaining({
-        from: 'telegram_other',
+        from: 'curator',
         topic: 'status-update',
-        finding: 'System is healthy',
+        to_agent: 'einstein',
+        to_group: 'telegram_other',
         priority: 'low',
       }),
     );
@@ -334,15 +341,63 @@ describe('bus_publish', () => {
     // No messageBus in deps — should not crash
     await processTaskIpc(
       {
-        type: 'bus_publish',
+        type: 'publish_to_bus',
         topic: 'test',
-        finding: 'test',
+        to_agent: 'einstein',
       } as any,
       'telegram_other',
       false,
       deps,
     );
     // No crash is the test
+  });
+
+  it('rejects publish with missing to_agent', async () => {
+    const writeAgentMessageSpy = vi.fn();
+    const bussDeps = {
+      ...deps,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+      } as any,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'publish_to_bus',
+        topic: 'test',
+        // to_agent missing
+      } as any,
+      'telegram_other',
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects publish with path traversal in to_agent', async () => {
+    const writeAgentMessageSpy = vi.fn();
+    const bussDeps = {
+      ...deps,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+      } as any,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'publish_to_bus',
+        topic: 'test',
+        to_agent: '../escape',
+      } as any,
+      'telegram_other',
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).not.toHaveBeenCalled();
   });
 });
 
