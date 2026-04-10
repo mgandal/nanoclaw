@@ -4,12 +4,14 @@ import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 
 import {
+  AGENTS_DIR,
   DATA_DIR,
   GROUPS_DIR,
   IPC_POLL_INTERVAL,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
+import { parseCompoundKey, fsPathToCompoundKey } from './compound-key.js';
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import {
@@ -130,6 +132,15 @@ function resolveContainerFilePathToHost(
     }
   }
 
+  // /workspace/agent/... → data/agents/{agentName}/...
+  if (containerFilePath.startsWith('/workspace/agent/')) {
+    const { agent } = parseCompoundKey(fsPathToCompoundKey(sourceGroup));
+    if (!agent) return null;
+    const rel = containerFilePath.slice('/workspace/agent/'.length);
+    if (rel.includes('..')) return null;
+    return path.join(AGENTS_DIR, agent, rel);
+  }
+
   return null;
 }
 
@@ -197,9 +208,12 @@ export function startIpcWatcher(deps: IpcDeps): void {
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
+                // For compound groups, extract base group for authorization
+                const baseKey = fsPathToCompoundKey(sourceGroup);
+                const { group: baseGroupFolder } = parseCompoundKey(baseKey);
                 if (
                   isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
+                  (targetGroup && targetGroup.folder === baseGroupFolder)
                 ) {
                   if (
                     data.webAppUrl &&
@@ -728,21 +742,64 @@ export async function processTaskIpc(
       }
       break;
 
-    case 'bus_publish': {
+    case 'publish_to_bus': {
+      const d = data as Record<string, unknown>;
+      const toAgent = d.to_agent as string;
+      const toGroup = (d.to_group as string) || '';
+      const topic = d.topic as string;
+
+      if (!toAgent || !topic) break;
+      if (toAgent.includes('..') || toAgent.includes('/')) break;
+      if (toGroup.includes('..') || toGroup.includes('/')) break;
+
+      const { agent: sourceAgent, group: pubBaseGroup } = parseCompoundKey(
+        fsPathToCompoundKey(sourceGroup),
+      );
+
       if (deps.messageBus) {
-        const d = data as Record<string, unknown>;
-        deps.messageBus.publish({
-          from: (d.from as string) || sourceGroup,
-          topic: d.topic as string,
-          finding: d.finding as string,
-          action_needed: d.action_needed as string | undefined,
+        // Use the base group folder if to_group not specified
+        const targetGroup = toGroup || pubBaseGroup;
+        const targetFsKey = `${targetGroup}--${toAgent}`;
+        deps.messageBus.writeAgentMessage(targetFsKey, {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          from: sourceAgent || sourceGroup,
+          topic,
           priority: d.priority as 'low' | 'medium' | 'high' | undefined,
+          summary: d.summary as string,
+          to_agent: toAgent,
+          to_group: targetGroup,
+          payload: d.payload,
+          timestamp: new Date().toISOString(),
         });
         logger.info(
-          { from: d.from, topic: d.topic },
+          { from: sourceAgent, to: toAgent, topic },
           'Bus message published via IPC',
         );
       }
+      break;
+    }
+
+    case 'write_agent_state': {
+      const d = data as Record<string, unknown>;
+      const content = d.content as string;
+      if (!content) break;
+
+      const { agent } = parseCompoundKey(
+        fsPathToCompoundKey(sourceGroup),
+      );
+      if (!agent) {
+        logger.warn({ sourceGroup }, 'write_agent_state from non-compound group');
+        break;
+      }
+
+      const statePath = path.join(AGENTS_DIR, agent, 'state.md');
+      const tmpPath = `${statePath}.tmp`;
+      const finalContent = d.append
+        ? (fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : '') + '\n' + content
+        : content;
+      fs.writeFileSync(tmpPath, finalContent);
+      fs.renameSync(tmpPath, statePath);
+      logger.info({ agent }, 'Agent state updated via IPC');
       break;
     }
 
