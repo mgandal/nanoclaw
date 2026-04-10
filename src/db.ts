@@ -910,6 +910,26 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
   return result;
 }
 
+// --- Agent registry accessors ---
+
+export function getAgentRegistry(): Array<{
+  agent_name: string;
+  group_folder: string;
+  enabled: number;
+}> {
+  try {
+    return db
+      .prepare('SELECT agent_name, group_folder, enabled FROM agent_registry')
+      .all() as Array<{
+      agent_name: string;
+      group_folder: string;
+      enabled: number;
+    }>;
+  } catch {
+    return [];
+  }
+}
+
 // --- JSON migration ---
 
 function migrateJsonState(): void {

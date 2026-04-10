@@ -580,7 +580,12 @@ export async function runContainerAgent(
 
   // Pre-assemble context packet for the agent
   const groupIpcDir = resolveGroupIpcPath(group.folder);
-  await writeContextPacket(group.folder, input.isMain, groupIpcDir);
+  await writeContextPacket(
+    group.folder,
+    input.isMain,
+    groupIpcDir,
+    input.agentName,
+  );
 
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {

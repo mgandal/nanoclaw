@@ -3,6 +3,7 @@ import { createServer } from 'http';
 import path from 'path';
 
 import {
+  AGENTS_DIR,
   ASSISTANT_NAME,
   CALENDAR_LOOKAHEAD_DAYS,
   CALENDAR_NAMES,
@@ -50,6 +51,7 @@ import {
 } from './container-runtime.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import {
+  getAgentRegistry,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -108,6 +110,14 @@ import {
   isStaleSessionError,
   parseLastAgentSeq,
 } from './index-helpers.js';
+import {
+  scanAgents,
+  getAgentsForGroup,
+  type AgentIdentity,
+  type AgentRegistryRow,
+} from './agent-registry.js';
+import { compoundKey, parseCompoundKey } from './compound-key.js';
+import { BusWatcher } from './bus-watcher.js';
 
 let lastSeq = 0;
 let sessions: Record<string, string> = {};
@@ -115,6 +125,9 @@ let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentSeq: Record<string, number> = {};
 let messageLoopRunning = false;
 let healthMonitor: HealthMonitor;
+let loadedAgents: AgentIdentity[] = [];
+let agentRegistry: AgentRegistryRow[] = [];
+let busWatcher: BusWatcher | null = null;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -292,7 +305,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) =>
-        runAgent(group, prompt, chatJid, undefined, onOutput),
+        runAgent(group, prompt, chatJid, undefined, undefined, onOutput),
       closeStdin: () => queue.closeStdin(chatJid),
       advanceCursor: (seq) => {
         lastAgentSeq[chatJid] = seq;
@@ -329,6 +342,29 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   }
 
+  // Agent detection: check for @AgentName mentions in available agents
+  const availableAgents = getAgentsForGroup(
+    group.folder,
+    loadedAgents,
+    agentRegistry,
+  );
+  let targetAgent: string | undefined;
+
+  if (availableAgents.length > 0) {
+    const combinedText = missedMessages.map((m) => m.content).join(' ');
+    for (const agent of availableAgents) {
+      if (new RegExp(`@${agent.name}\\b`, 'i').test(combinedText)) {
+        targetAgent = agent.dirName;
+        break;
+      }
+    }
+    // Fall back to Claire if registered and no explicit mention
+    if (!targetAgent) {
+      const claire = availableAgents.find((a) => a.dirName === 'claire');
+      if (claire) targetAgent = claire.dirName;
+    }
+  }
+
   const prompt = formatMessages(missedMessages, TIMEZONE);
 
   // Collect images from in-memory cache (populated by onMessage handler)
@@ -349,7 +385,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   saveState();
 
   logger.info(
-    { group: group.name, messageCount: missedMessages.length },
+    { group: group.name, messageCount: missedMessages.length, targetAgent },
     'Processing messages',
   );
 
@@ -376,6 +412,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     prompt,
     chatJid,
     images.length > 0 ? images : undefined,
+    targetAgent,
     async (result) => {
       // Streaming output callback — called for each agent result
       if (result.result) {
@@ -435,9 +472,15 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   images?: Array<{ base64: string; mediaType: string }>,
+  agentName?: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
+
+  // When an agent is targeted, use compound key for session isolation
+  const effectiveGroupFolder = agentName
+    ? compoundKey(group.folder, agentName)
+    : group.folder;
 
   // Check if group is paused by health monitor
   if (healthMonitor?.isGroupPaused(group.folder)) {
@@ -453,9 +496,9 @@ async function runAgent(
   //   IDLE: no activity for 2 hours → expire (prevents stale sessions)
   //   MAX_AGE: session older than 4 hours total → expire (prevents active sessions from growing forever)
   // Session thresholds imported from config.ts
-  let sessionId: string | undefined = sessions[group.folder];
+  let sessionId: string | undefined = sessions[effectiveGroupFolder];
   if (sessionId) {
-    const { lastUsed, createdAt } = getSessionTimestamps(group.folder);
+    const { lastUsed, createdAt } = getSessionTimestamps(effectiveGroupFolder);
     const expireReason = checkSessionExpiry(
       createdAt,
       lastUsed,
@@ -472,14 +515,15 @@ async function runAgent(
       logger.info(
         {
           group: group.name,
+          agentName,
           reason: expireReason,
           idleMinutes: lastUsed ? Math.round(idleAge / 60000) : 'unknown',
           totalMinutes: createdAt ? Math.round(totalAge / 60000) : 'unknown',
         },
         'Session expired, starting fresh',
       );
-      delete sessions[group.folder];
-      deleteSession(group.folder);
+      delete sessions[effectiveGroupFolder];
+      deleteSession(effectiveGroupFolder);
       sessionId = undefined;
     }
   }
@@ -514,8 +558,8 @@ async function runAgent(
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
         if (output.newSessionId) {
-          sessions[group.folder] = output.newSessionId;
-          setSession(group.folder, output.newSessionId);
+          sessions[effectiveGroupFolder] = output.newSessionId;
+          setSession(effectiveGroupFolder, output.newSessionId);
         }
         await onOutput(output);
       }
@@ -532,6 +576,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         images,
+        agentName,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -541,11 +586,11 @@ async function runAgent(
     healthMonitor?.recordSpawn(group.folder);
 
     if (output.newSessionId) {
-      sessions[group.folder] = output.newSessionId;
-      setSession(group.folder, output.newSessionId);
-    } else if (sessions[group.folder]) {
+      sessions[effectiveGroupFolder] = output.newSessionId;
+      setSession(effectiveGroupFolder, output.newSessionId);
+    } else if (sessions[effectiveGroupFolder]) {
       // Session resumed without new ID — still update last_used
-      touchSession(group.folder);
+      touchSession(effectiveGroupFolder);
     }
 
     if (output.status === 'error') {
@@ -560,8 +605,8 @@ async function runAgent(
           { group: group.name, staleSessionId: sessionId, error: output.error },
           'Stale session detected — clearing for next retry',
         );
-        delete sessions[group.folder];
-        deleteSession(group.folder);
+        delete sessions[effectiveGroupFolder];
+        deleteSession(effectiveGroupFolder);
       }
 
       logger.error(
@@ -807,6 +852,18 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
+  // Load agent identities from data/agents/
+  loadedAgents = scanAgents(AGENTS_DIR);
+  if (loadedAgents.length > 0) {
+    logger.info(
+      { agents: loadedAgents.map((a) => a.name) },
+      'Loaded agent identities',
+    );
+  }
+
+  // Load agent registry from DB
+  agentRegistry = getAgentRegistry();
+
   // Health monitor — tracks spawn/error rates, alerts on anomalies
   healthMonitor = new HealthMonitor({
     maxSpawnsPerHour: MAX_CONTAINER_SPAWNS_PER_HOUR,
@@ -991,6 +1048,37 @@ async function main(): Promise<void> {
   const messageBus = new MessageBus(path.join(process.cwd(), 'data', 'bus'));
   setInterval(() => messageBus.pruneOld(72 * 3600_000), 6 * 3600_000);
 
+  // Bus watcher: dispatch pending bus messages to agents
+  if (loadedAgents.length > 0) {
+    busWatcher = new BusWatcher(
+      path.join(DATA_DIR, 'bus'),
+      async (cKey, messages) => {
+        const { group: baseGroup, agent } = parseCompoundKey(cKey);
+        if (!agent) return;
+
+        const chatJid = Object.entries(registeredGroups).find(
+          ([, g]) => g.folder === baseGroup,
+        )?.[0];
+        if (!chatJid) {
+          logger.warn(
+            { compoundKey: cKey },
+            'Bus dispatch: no chat JID for base group',
+          );
+          return;
+        }
+
+        logger.info(
+          { compoundKey: cKey, messageCount: messages.length },
+          'Bus dispatching to agent',
+        );
+
+        // Enqueue for processing through the normal queue system
+        queue.enqueueMessageCheck(cKey);
+      },
+    );
+    busWatcher.start();
+  }
+
   // Event router and watchers (Phase 2)
   if (EVENT_ROUTER_ENABLED) {
     // Load trust matrix
@@ -1131,9 +1219,11 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    // 1. Stop accepting new work (signals containers to wind down)
+    // 1. Stop bus watcher
+    busWatcher?.stop();
+    // 2. Stop accepting new work (signals containers to wind down)
     await queue.shutdown(15000);
-    // 2. Now close proxy and channels (containers are done)
+    // 3. Now close proxy and channels (containers are done)
     proxyServer.close();
     for (const ch of channels) await ch.disconnect();
     process.exit(0);

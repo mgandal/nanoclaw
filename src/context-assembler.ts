@@ -402,8 +402,9 @@ export async function writeContextPacket(
   groupFolder: string,
   isMain: boolean,
   ipcDir: string,
+  agentName?: string,
 ): Promise<void> {
-  const packet = await assembleContextPacket(groupFolder, isMain);
+  const packet = await assembleContextPacket(groupFolder, isMain, agentName);
   fs.mkdirSync(ipcDir, { recursive: true });
   const packetPath = path.join(ipcDir, 'context-packet.txt');
   const tmpPacketPath = `${packetPath}.tmp`;
