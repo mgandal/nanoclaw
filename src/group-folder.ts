@@ -11,6 +11,7 @@ export function isValidGroupFolder(folder: string): boolean {
   if (!GROUP_FOLDER_PATTERN.test(folder)) return false;
   if (folder.includes('/') || folder.includes('\\')) return false;
   if (folder.includes('..')) return false;
+  if (folder.includes('--')) return false;
   if (RESERVED_FOLDERS.has(folder.toLowerCase())) return false;
   return true;
 }
