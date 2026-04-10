@@ -53,7 +53,7 @@ function isQmdReachable(): boolean {
 
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
-    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN)=/i;
+    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|GITHUB_TOKEN)=/i;
   return args.map((arg, i) => {
     if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
       const eqIdx = arg.indexOf('=');
@@ -445,6 +445,18 @@ function buildContainerArgs(
     process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
   if (readwiseToken) {
     args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
+  }
+
+  // Pass GitHub credentials (for gh CLI in container)
+  const githubEnv = readEnvFile(['GITHUB_TOKEN', 'GH_REPO']);
+  const githubToken =
+    process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
+  if (githubToken) {
+    args.push('-e', `GITHUB_TOKEN=${githubToken}`);
+  }
+  const ghRepo = process.env.GH_REPO || githubEnv.GH_REPO;
+  if (ghRepo) {
+    args.push('-e', `GH_REPO=${ghRepo}`);
   }
 
   // Pass Ollama host URL for container access
