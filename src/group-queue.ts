@@ -25,6 +25,7 @@ interface GroupState {
   containerName: string | null;
   groupFolder: string | null;
   retryCount: number;
+  agentName?: string;
 }
 
 export class GroupQueue {
@@ -57,6 +58,15 @@ export class GroupQueue {
 
   setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
     this.processMessagesFn = fn;
+  }
+
+  getGroupState(groupJid: string): GroupState | undefined {
+    return this.groups.get(groupJid);
+  }
+
+  setAgentName(groupJid: string, agentName: string): void {
+    const state = this.getGroup(groupJid);
+    state.agentName = agentName;
   }
 
   enqueueMessageCheck(groupJid: string): void {
