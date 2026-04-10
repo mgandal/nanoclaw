@@ -19,7 +19,8 @@
     "lint:fix": "eslint src/ --fix",
     "test": "bun --bun vitest run",
     "test:watch": "bun --bun vitest",
-    "setup:pageindex": "cd scripts/pageindex && python3 -m venv venv && venv/bin/pip install -r requirements.txt"
+    "setup:pageindex": "cd scripts/pageindex && python3 -m venv venv && venv/bin/pip install -r requirements.txt",
+    "setup:paperpile-wiki": "cd scripts/paperpile-wiki && python3 -m venv venv && venv/bin/pip install -r requirements.txt"
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",
