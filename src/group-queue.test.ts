@@ -1061,4 +1061,30 @@ describe('GroupQueue', () => {
 
     expect(taskRan).not.toHaveBeenCalled();
   });
+
+  // --- Compound key support ---
+
+  describe('compound key support', () => {
+    it('tracks compound key state separately from base group', () => {
+      // setAgentName creates the state entry via getGroup (lazy init)
+      queue.setAgentName('telegram_lab-claw:einstein', 'einstein');
+      const state = queue.getGroupState('telegram_lab-claw:einstein');
+      expect(state).toBeDefined();
+    });
+
+    it('stores agentName on GroupState', () => {
+      queue.setAgentName('telegram_lab-claw:einstein', 'einstein');
+      const state = queue.getGroupState('telegram_lab-claw:einstein');
+      expect(state?.agentName).toBe('einstein');
+    });
+
+    it('compound key state is isolated from the base group', () => {
+      queue.setAgentName('telegram_lab-claw:einstein', 'einstein');
+      queue.setAgentName('telegram_lab-claw', 'base');
+      const compoundState = queue.getGroupState('telegram_lab-claw:einstein');
+      const baseState = queue.getGroupState('telegram_lab-claw');
+      expect(compoundState?.agentName).toBe('einstein');
+      expect(baseState?.agentName).toBe('base');
+    });
+  });
 });
