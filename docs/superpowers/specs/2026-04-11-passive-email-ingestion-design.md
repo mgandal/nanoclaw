@@ -1,7 +1,7 @@
 # Passive Email Knowledge Ingestion
 
 **Date:** 2026-04-11
-**Status:** Approved
+**Status:** Approved (revised after peer review + feasibility audit)
 **Goal:** NanoClaw passively reads, classifies, and ingests knowledge from all emails (Gmail + Exchange) so any agent can recall email context without the sender addressing the message to an agent alias.
 
 ## Problem
@@ -14,22 +14,22 @@ This means grant updates, collaborator replies, scheduling threads, paper notifi
 
 ## Architecture
 
-A new Python script `scripts/sync/email-ingest.py` runs as a step in the existing `sync-all.sh` pipeline (cadence changed from 8h → 4h). It fetches recent emails from two sources, classifies each with source-specific Ollama classifiers, filters by relevance, generates enriched summaries, and writes markdown files to a QMD collection.
+A new Python script `scripts/sync/email-ingest.py` runs as a step in the existing `sync-all.sh` pipeline (cadence changed from 8h to 4h). It fetches recent emails from two sources, classifies and summarizes each in a single Ollama call with source-specific prompts, filters by relevance, and writes enriched markdown files to a QMD collection.
 
 ```
-Gmail API ──┐
-            ├──→ Normalize ──→ Source-specific    ──→ Threshold filter
-Exchange  ──┘                  Ollama classifier          │
-(Mac Mail)                                         relevant emails
+Gmail API ──┐                                              
+            ├──→ Normalize ──→ Truncate body ──→ Source-specific     ──→ Threshold filter
+Exchange  ──┘                  (max 16K chars)   Ollama classify+       │
+(Mac Mail)                                       summarize (1 call)  relevant emails
+                                                                        │
+                                                              Write enriched markdown
+                                                                        │
+                                                          ┌─────────────┴──────────────┐
+                                                    QMD collection           Hindsight retain
+                                                    (durable layer)          (optional, >= 0.7)
                                                           │
-                                                 Ollama summarize + extract
-                                                          │
-                                            ┌─────────────┴──────────────┐
-                                      Write markdown              Hindsight retain
-                                      to QMD collection           (optional, ≥0.7 only)
-                                            │
-                                      qmd update + embed
-                                      (existing sync steps)
+                                                    qmd update + embed
+                                                    (existing sync steps)
 ```
 
 ### Source Adapters
@@ -45,40 +45,51 @@ interface NormalizedEmail {
   cc: string[];
   subject: string;
   date: string;        // ISO 8601
-  body: string;        // plain text
+  body: string;        // plain text, truncated to 16,000 chars
   labels: string[];    // Gmail labels or Exchange mailbox name
   metadata: Record<string, any>;  // source-specific signals
 }
 ```
 
 **Gmail adapter:**
-- Uses `google-auth` + `google-api-python-client` (same credentials as `gmail-sync.py`: `~/.gmail-mcp/credentials.json`)
-- Fetches messages after `last_gmail_epoch`
+- Uses `google-auth` + `google-api-python-client` (same credentials as `gmail-sync.py`)
+- Credential loading: try `~/.google_workspace_mcp/credentials/mgandal@gmail.com.json` first, fall back to `~/.gmail-mcp/credentials.json` (same fallback chain as `gmail-sync.py` lines 30-108)
+- Fetches messages after `last_gmail_epoch` using `q=after:{epoch}`
+- Read-only API calls only — must NOT call `messages.modify` or mark emails as read
 - Extracts: category, labels, starred, thread ID
+- Uses a dedicated token file (`~/.cache/email-ingest/gmail-token.json`) to avoid OAuth token refresh contention with GmailChannel's live 60s polling
 
 **Exchange adapter:**
-- Shells out to `~/claire-tools/exchange-mail.sh search --since <days>` to list messages
-- Shells out to `~/claire-tools/exchange-mail.sh read <message-id>` for full body
-- Extracts: mailbox name, flagged status, read status, internal vs external sender
+- Shells out to `~/claire-tools/exchange-mail.sh search --since <days> --limit 500 --mailbox <name>` for each target mailbox
+- Target mailboxes: **Inbox** and **Sent Items** (covers both received and sent context)
+- Other mailboxes (custom folders, Archive) are out of scope
+- Shells out to `~/claire-tools/exchange-mail.sh read <message-id>` for full body per message
+- Extracts: mailbox name, flagged status, read status, internal vs external sender (domain check)
+- Per-run batch limit: max 100 Exchange emails processed per run to keep AppleScript overhead bounded (~5 min). Remaining emails are picked up on next run via epoch tracking.
+- `--since` days computed as: `ceil((now - last_exchange_epoch) / 86400)`, minimum 1 day
+
+**Body truncation:** Both adapters truncate email body to 16,000 characters (~4K tokens) before passing to Ollama. This ensures the combined classify+summarize call completes in ~5-8 seconds per email, keeping the pipeline within the 10-minute target for typical volumes.
 
 ## Classification
 
-### Two Classifiers, Shared Output Schema
+### Two Classifiers, Single Combined Call
 
-Separate classifiers for Gmail and Exchange, each tuned to their source's signal space.
+Separate system prompts for Gmail and Exchange, each tuned to their source's signal space. Classification and summarization are combined into a **single Ollama call** per email (not two separate calls) to halve inference time.
 
 **Gmail classifier** inputs:
-- From, To, Subject, Date, Snippet
+- From, To, Subject, Date
+- Body (truncated to 16K chars)
 - Category (Primary/Updates/Social/Promotions/Forums)
-- Labels, starred status, thread length
+- Labels, starred status
 
 **Exchange classifier** inputs:
-- From, To, Subject, Date, Snippet
-- Mailbox name (Inbox, Sent, specific folders)
+- From, To, Subject, Date
+- Body (truncated to 16K chars)
+- Mailbox name (Inbox or Sent Items)
 - Flagged status, read/unread
-- Internal domain detection (@upenn.edu, @chop.edu, @pennmedicine.upenn.edu)
+- Internal domain flag (true if sender/recipient @upenn.edu, @chop.edu, @pennmedicine.upenn.edu)
 
-**Shared output schema:**
+**Shared output schema (single combined response):**
 
 ```json
 {
@@ -86,11 +97,12 @@ Separate classifiers for Gmail and Exchange, each tuned to their source's signal
   "topic": "grant | hiring | research | admin | scheduling | collaboration | review | notification",
   "summary": "2-3 sentence summary of email content and significance",
   "entities": ["person names", "deadlines", "action items", "project names"],
+  "action_items": ["specific next steps if any"],
   "skip_reason": null
 }
 ```
 
-**Model:** phi4-mini via Ollama (localhost:11434). Same model used by event-router classification.
+**Model:** phi4-mini via Ollama (localhost:11434). The script explicitly sets `model=phi4-mini` in the Ollama API call — it does NOT use the `OLLAMA_MODEL` env var (which defaults to `qwen3:8b` in NanoClaw config and is intended for the event-router).
 
 ### Fast-Skip Rules (No Ollama Call)
 
@@ -101,8 +113,9 @@ Skip these outright to save inference time:
 - Sender matches automated patterns: `noreply@`, `notifications@`, `no-reply@`, `*@github.com` CI notifications, `*@docs.google.com` (edit notifications)
 
 **Exchange:**
-- Mailbox is Junk, Deleted Items, or Drafts
-- Auto-generated headers (X-Auto-Response-Suppress)
+- Mailbox is Junk, Deleted Items, or Drafts (skipped at the mailbox selection level — we only search Inbox and Sent Items)
+
+Note: The original spec proposed checking `X-Auto-Response-Suppress` headers for Exchange fast-skip, but `exchange-mail.sh search` does not return headers. This rule has been removed. Auto-generated Exchange emails will be filtered by the Ollama relevance score instead.
 
 ### Relevance Threshold
 
@@ -141,7 +154,7 @@ remains Apr 17 for the full submission.
 
 ---
 
-[Original email body]
+[Original email body, truncated to 16K chars]
 ```
 
 ### Directory Structure
@@ -158,9 +171,14 @@ remains Apr 17 for the full submission.
 │   └── exchange/
 │       └── 2026-04/
 │           └── jkl012.md
+├── gmail-token.json          # Separate OAuth token (avoids contention with GmailChannel)
 ├── email-ingest-state.json
 └── email-ingest.log
 ```
+
+### Filesystem Security
+
+`~/.cache/email-ingest/` must be created with `chmod 700` permissions. Email bodies contain sensitive content (grant financials, hiring discussions, institutional admin). All agent groups can query QMD collections, so the `email` collection is accessible to CLAIRE, LAB-claw, SCIENCE-claw, etc. This is consistent with the existing Apple Notes collection which has the same access profile.
 
 ## State Management
 
@@ -183,31 +201,32 @@ remains Apr 17 for the full submission.
 }
 ```
 
-- **Rolling window:** Each run fetches emails since last epoch
-- **Dedup:** Message IDs tracked per-source, capped at 10,000 (oldest evicted)
-- **First run:** If no state file, fetches last 14 days
+### Dedup Strategy
 
-## Backfill
+- **Primary gate:** Epoch timestamp. Only fetch emails after `last_{source}_epoch`.
+- **Secondary gate:** Processed ID set (capped at 10,000 per source, oldest evicted). Catches duplicates within the epoch window.
+- **Epoch advancement rule:** Epoch is ONLY advanced after at least one email is successfully exported, OR after the fetch returns zero new emails. If Ollama is down and classification fails, the epoch is NOT advanced — the same window will be retried on the next run.
 
-One-time manual backfill to seed the last 6 months of context:
+### First Run vs Backfill
 
-```bash
-python3 scripts/sync/email-ingest.py --backfill 180
-```
-
-Uses the same pipeline — just overrides the date range. May take 30-60 minutes depending on volume and Ollama throughput. Can be interrupted and resumed (state tracks processed IDs).
+- **First run** (no state file): Fetches last 14 days from both sources.
+- **Backfill** (`--backfill 180`): Overrides the epoch to 180 days ago regardless of existing state. Processes emails from that point forward. For Exchange, backfill is limited by what Mac Mail has synced locally (typically 90 days for Exchange ActiveSync — check Mac Mail settings if more history is needed).
+- **Backfill + existing state:** `--backfill` always overrides the existing epoch. It does NOT reset the processed ID set, so already-exported emails won't be re-processed.
+- **Exchange backfill throughput:** Expect 1-3 hours for a 6-month window depending on mailbox size (per-message AppleScript calls at ~2-4 seconds each). Exchange backfill can be interrupted — it saves state after each batch. Use `--exchange-batch-size 50` to limit per-run processing (default: 100).
 
 ## Sync Integration
 
 ### Changes to sync-all.sh
 
-Add email-ingest as step 2 (after Gmail migration sync, before QMD update):
+Insert email-ingest as a new step between the Gmail migration sync (current step 2) and Apple Notes export (current step 4). Uses `$PYTHON3` (the anaconda Python already configured in sync-all.sh), not a separate venv:
 
 ```bash
-# Step 2: Email knowledge ingestion
-log "=== Email ingestion ==="
-python3 scripts/sync/email-ingest.py 2>&1 | tee -a "$LOG" || warn "Email ingest failed"
+# Step 3: Email knowledge ingestion (new)
+log "=== [3/7] Email knowledge ingestion ==="
+$PYTHON3 scripts/sync/email-ingest.py 2>&1 | tee -a "$LOG" || warn "Email ingest failed"
 ```
+
+All required Python packages (`google-auth`, `google-api-python-client`, `requests`) are already available in the anaconda environment used by `gmail-sync.py`. No new venv needed.
 
 ### Launchd Cadence Change
 
@@ -216,13 +235,13 @@ Update `~/Library/LaunchAgents/com.nanoclaw.sync.plist`:
 
 ### New QMD Collection
 
-Add `email` collection to QMD config pointing at `~/.cache/email-ingest/exported/`:
+Register the email collection using the same pattern as the apple-notes collection:
 
 ```bash
-qmd add email ~/.cache/email-ingest/exported/ --glob "**/*.md"
+qmd add email ~/.cache/email-ingest/exported/
 ```
 
-Existing `qmd update` + `qmd embed` steps in sync-all.sh will pick up new/changed email files automatically.
+Verify the collection is registered with `qmd status`. Existing `qmd update` + `qmd embed` steps in sync-all.sh will pick up new/changed email markdown files automatically.
 
 ## Hindsight Integration (Optional Layer)
 
@@ -231,42 +250,56 @@ For emails with `relevance >= 0.7`, after writing markdown, fire a Hindsight `re
 ```python
 requests.post(f"{HINDSIGHT_URL}/retain", json={
     "bank": "hermes",
-    "content": f"Email from {email.from} re: {email.subject}\n{classification.summary}\nEntities: {classification.entities}",
-    "metadata": {"source": "email-ingest", "message_id": email.id}
-})
+    "content": f"Email from {email['from']} re: {email['subject']}\n{result['summary']}\nEntities: {result['entities']}",
+    "metadata": {"source": "email-ingest", "message_id": email['id']}
+}, timeout=10)
 ```
 
 This is fire-and-forget. Failures are logged but do not block the pipeline. If Hindsight is unavailable or removed in the future, the QMD collection remains the authoritative source.
 
 ## Dependencies
 
-**Python packages** (new venv at `scripts/sync/email-ingest-venv/`):
-- `google-auth`, `google-auth-oauthlib`, `google-api-python-client` (already used by gmail-sync.py — share or copy)
-- `requests` (for Ollama + Hindsight HTTP calls)
-- No new system-level dependencies
+**Python packages** (all already in anaconda env via `$PYTHON3`):
+- `google-auth`, `google-auth-oauthlib`, `google-api-python-client` (used by gmail-sync.py)
+- `requests` (verified present by sync-health-check.sh)
+- No new venv needed. No new system-level dependencies.
 
 **External services:**
-- Ollama on localhost:11434 (phi4-mini)
+- Ollama on localhost:11434 (phi4-mini — loaded explicitly, not via OLLAMA_MODEL config)
 - Mac Mail with Exchange account configured (for Exchange adapter)
 - QMD on localhost:8181
 - Hindsight on localhost:8889 (optional)
 
 ## Error Handling
 
-- **Gmail API auth failure:** Log error, skip Gmail source, continue with Exchange
-- **Exchange Mac Mail not running:** Log error, skip Exchange source, continue with Gmail
-- **Ollama down:** Log error, skip classification, export nothing (don't export unclassified emails)
-- **Single email failure:** Log and continue to next email (don't abort batch)
-- **QMD collection not configured:** Warn on first run with setup instructions
-- **Hindsight down:** Log, continue (non-blocking)
+- **Gmail API auth failure:** Log error, skip Gmail source, continue with Exchange. Do NOT advance Gmail epoch.
+- **Exchange Mac Mail not running or AppleScript timeout:** Log error, skip Exchange source, continue with Gmail. Do NOT advance Exchange epoch.
+- **Ollama down:** Log error, export nothing, do NOT advance either epoch. The missed window will be retried on next run.
+- **Single email failure** (body fetch, classification, or write): Log and continue to next email. Do not abort batch.
+- **QMD collection not configured:** Warn on first run with setup instructions.
+- **Hindsight down:** Log, continue (non-blocking).
+- **OAuth token refresh:** Uses dedicated token file at `~/.cache/email-ingest/gmail-token.json` to avoid contention with GmailChannel's token at `~/.gmail-mcp/credentials.json`.
+
+## Concurrency Safety
+
+Three systems read from the same Gmail account:
+
+| System | Query | Writes to Gmail? | State File |
+|--------|-------|:-:|---|
+| GmailChannel (live) | `is:unread category:primary` | Yes (marks read) | `data/gmail-channel-state.json` |
+| GmailWatcher (live) | `labelIds: ['INBOX']` | No | `gmail-state.json` |
+| email-ingest (batch) | `q=after:{epoch}` | **No** | `~/.cache/email-ingest/email-ingest-state.json` |
+
+**email-ingest is strictly read-only on Gmail.** It never modifies labels, marks read, or writes back to the API. The separate token file prevents OAuth refresh contention. Gmail API quota (250 units/s per user) is not a concern at batch volumes (50-200 emails every 4h).
 
 ## Success Criteria
 
 1. After backfill + 2 sync cycles, an agent asked "what's the status of the scRBP grant?" can find the answer via QMD search without the user forwarding the email
-2. Exchange institutional emails (from @upenn.edu, @chop.edu) are ingested alongside Gmail
+2. Exchange institutional emails (from @upenn.edu, @chop.edu) are ingested alongside Gmail, including Sent Items
 3. Promotional/automated emails are filtered out without Ollama calls
-4. Pipeline completes within 10 minutes for a typical 4-hour window (~50-200 emails)
+4. Pipeline completes within 10 minutes for a typical 4-hour window (~50-200 emails) using a single combined classify+summarize Ollama call
 5. No impact on NanoClaw runtime — script runs independently of whether the service is up
+6. Ollama failure does not cause permanent data loss — missed windows are retried
 
 ## Out of Scope
 
@@ -274,3 +307,4 @@ This is fire-and-forget. Failures are logged but do not block the pipeline. If H
 - Email reply/send capability — existing Gmail Channel handles that
 - Attachment processing — text body only for now (PDFs handled separately by PageIndex)
 - Thread reconstruction — each email is a standalone document; thread context comes from QMD's semantic search finding related emails
+- Exchange folders beyond Inbox and Sent Items — custom folders, Archive, etc. can be added later by extending the mailbox list
