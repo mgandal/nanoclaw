@@ -1,6 +1,12 @@
 # NanoClaw Agent Container
 # Runs Claude Agent SDK in isolated Linux VM with browser automation
 
+# Build blogwatcher from source for native architecture (ARM64 on Apple Silicon)
+FROM golang:1.24-bookworm AS blogwatcher-build
+RUN git clone --depth 1 --branch v0.0.2 https://github.com/Hyaxia/blogwatcher.git /src
+WORKDIR /src
+RUN CGO_ENABLED=1 go build -o /blogwatcher ./cmd/blogwatcher
+
 FROM node:22-slim
 
 # Install system dependencies for Chromium
@@ -32,10 +38,8 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @readwise/cli
 
-# Install blogwatcher CLI for RSS feed monitoring (Go binary from GitHub release)
-RUN curl -fsSL https://github.com/Hyaxia/blogwatcher/releases/download/v0.0.2/blogwatcher_0.0.2_linux_amd64.tar.gz \
-    | tar -xz -C /usr/local/bin blogwatcher \
-    && chmod +x /usr/local/bin/blogwatcher
+# Install blogwatcher CLI for RSS feed monitoring (built from source in stage above)
+COPY --from=blogwatcher-build /blogwatcher /usr/local/bin/blogwatcher
 
 # Install agent-reach: gives agents read/search access to 15+ platforms
 # (Twitter/X, YouTube, Reddit, GitHub, RSS, web, Bilibili, Weibo, Douyin, etc.)
