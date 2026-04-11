@@ -294,22 +294,38 @@ Examples:
 
     args = parser.parse_args()
 
-    # Step 2: Check ANTHROPIC_BASE_URL env var
-    if not args.dry_run and not os.environ.get('ANTHROPIC_BASE_URL'):
-        print(
-            "ERROR: ANTHROPIC_BASE_URL is not set.\n"
-            "This script routes through the credential proxy. Set ANTHROPIC_BASE_URL\n"
-            "to the proxy endpoint before running synthesis (not needed for --dry-run).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Step 2: Load auth credentials
+    if not args.dry_run:
+        # Load OAuth token from .env if not already set
+        env_path = os.path.join(PROJECT_ROOT, '.env')
+        if not (os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')
+                or os.environ.get('ANTHROPIC_BASE_URL')
+                or os.environ.get('ANTHROPIC_API_KEY')):
+            if os.path.exists(env_path):
+                with open(env_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('CLAUDE_CODE_OAUTH_TOKEN='):
+                            os.environ['CLAUDE_CODE_OAUTH_TOKEN'] = line.split('=', 1)[1]
+                            break
+
+        if not (os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')
+                or os.environ.get('ANTHROPIC_BASE_URL')
+                or os.environ.get('ANTHROPIC_API_KEY')):
+            print(
+                "ERROR: No auth credentials found.\n"
+                "Set CLAUDE_CODE_OAUTH_TOKEN in .env, or ANTHROPIC_BASE_URL for proxy mode.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Step 3: Init Claude client (or None for dry-run)
     client = None
     if not args.dry_run:
         try:
             import anthropic
-            client = anthropic.Anthropic()
+            from clusterer import _make_anthropic_client
+            client = _make_anthropic_client()
         except ImportError:
             print("ERROR: 'anthropic' package not installed. Run: pip install anthropic",
                   file=sys.stderr)
