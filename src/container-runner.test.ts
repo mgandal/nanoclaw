@@ -17,6 +17,7 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   OLLAMA_ADMIN_TOOLS: false,
+  OLLAMA_DEFAULT_MODEL: '',
   TIMEZONE: 'America/Los_Angeles',
 }));
 
@@ -44,6 +45,7 @@ vi.mock('fs', async () => {
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
+      cpSync: vi.fn(),
     },
   };
 });
@@ -120,6 +122,7 @@ import {
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 import { spawn } from 'child_process';
+import fs from 'fs';
 import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { stopContainer } from './container-runtime.js';
@@ -1003,6 +1006,51 @@ describe('container-runner volume mount construction', () => {
     // But should have /workspace/group
     const groupMount = mountArgs.find((a) => a.includes('/workspace/group'));
     expect(groupMount).toBeDefined();
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('syncs group-level skills from groups/{folder}/skills/', async () => {
+    const mockCpSync = vi.mocked(fs.cpSync);
+    mockCpSync.mockClear();
+
+    // existsSync: true for group skills dir, false for others (default)
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.endsWith('/skills')) return true; // both container/ and group/ skills dirs
+      return false;
+    });
+
+    // readdirSync: return a skill dir for the group skills path
+    vi.mocked(fs.readdirSync).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.includes('groups/') && s.endsWith('/skills'))
+        return ['autoresearch'] as any;
+      if (s.includes('container/skills'))
+        return ['status'] as any;
+      return [] as any;
+    });
+
+    vi.mocked(fs.statSync).mockReturnValue({
+      isDirectory: () => true,
+    } as any);
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    // cpSync should have been called for both container skills AND group skills
+    const calls = mockCpSync.mock.calls.map((c) => ({
+      src: String(c[0]),
+      dst: String(c[1]),
+    }));
+
+    // Group skills dir (groups/test-group/skills/autoresearch) should be synced
+    const groupSync = calls.find(
+      (c) => c.src.includes('groups/') && c.src.includes('autoresearch'),
+    );
+    expect(groupSync).toBeDefined();
+    expect(groupSync!.dst).toContain('.claude/skills/autoresearch');
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
