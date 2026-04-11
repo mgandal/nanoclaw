@@ -130,7 +130,7 @@ class ExchangeAdapter:
         # Fetch full body for each
         emails = []
         for stub in new_stubs:
-            raw = _run_exchange(["read", stub["id"]], timeout=30)
+            raw = _run_exchange(["read", stub["id"]], timeout=90)
             full = parse_read_output(raw)
             if not full:
                 log.warning("Failed to read Exchange message %s", stub.get("id"))

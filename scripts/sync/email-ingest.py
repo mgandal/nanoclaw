@@ -64,7 +64,11 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
     gmail = GmailAdapter()
     if gmail.connect():
         processed = set(state.processed_gmail_ids)
-        emails = gmail.fetch_since(gmail_epoch, processed)
+        try:
+            emails = gmail.fetch_since(gmail_epoch, processed)
+        except Exception as e:
+            log.error("Gmail fetch failed: %s", e)
+            emails = []
         gmail_fetched = len(emails)
         stats["total_fetched"] += gmail_fetched
 

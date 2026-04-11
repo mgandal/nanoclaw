@@ -37,10 +37,14 @@ def _load_credentials():
             client_secret=data.get("client_secret"),
             scopes=data.get("scopes", []),
         )
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            _save_token(creds, data)
-        return creds
+        try:
+            if creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                _save_token(creds, data)
+            return creds
+        except Exception as e:
+            log.warning("Dedicated token refresh failed: %s — trying credential files", e)
+            GMAIL_TOKEN_FILE.unlink(missing_ok=True)
 
     # Bootstrap from existing credential files
     for cred_path in CRED_PATHS:
@@ -58,19 +62,23 @@ def _load_credentials():
             client_id = installed.get("client_id")
             client_secret = installed.get("client_secret")
 
-        if not (token and refresh_token and client_id):
+        if not (refresh_token and client_id):
             continue
 
         creds = Credentials(
-            token=token,
+            token=token,  # May be None — will be refreshed
             refresh_token=refresh_token,
             token_uri=data.get("token_uri", "https://oauth2.googleapis.com/token"),
             client_id=client_id,
             client_secret=client_secret,
             scopes=data.get("scopes", []),
         )
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+        try:
+            if (not creds.token or creds.expired) and creds.refresh_token:
+                creds.refresh(Request())
+        except Exception as e:
+            log.warning("Credential refresh failed for %s: %s — trying next", cred_path, e)
+            continue
 
         # Save to dedicated token file for future runs
         _save_token(creds, {
@@ -157,14 +165,24 @@ class GmailAdapter:
         self._service = None
 
     def connect(self) -> bool:
-        """Initialize Gmail API service. Returns False if credentials missing."""
+        """Initialize Gmail API service. Returns False if credentials missing.
+        Verifies credentials with a lightweight API call to catch stale tokens early."""
         creds = _load_credentials()
         if not creds:
             log.error("No Gmail credentials found")
             return False
         from googleapiclient.discovery import build
-        self._service = build("gmail", "v1", credentials=creds)
-        log.info("Gmail API connected")
+        service = build("gmail", "v1", credentials=creds)
+        # Verify credentials actually work with a lightweight call
+        try:
+            service.users().getProfile(userId="me").execute()
+        except Exception as e:
+            log.warning("Gmail credential verification failed: %s", e)
+            # Delete stale dedicated token so next run retries from source creds
+            GMAIL_TOKEN_FILE.unlink(missing_ok=True)
+            return False
+        self._service = service
+        log.info("Gmail API connected and verified")
         return True
 
     def fetch_since(self, epoch: int, processed_ids: set[str]) -> list[NormalizedEmail]:
