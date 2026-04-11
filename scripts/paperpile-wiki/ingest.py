@@ -7,6 +7,7 @@ Orchestrates the full ingest pipeline:
   3. Embed with SPECTER2 → update embeddings in DB
   4. Cluster with BERTopic → write clusters + assignments to DB
   5. Relabel clusters with Claude → higher-quality topic names
+  6. Summarize PDFs with local LLM → fulltext embeddings (optional)
 
 Usage:
     python3 ingest.py                      # Full ingest (first run or re-embed all)
@@ -52,6 +53,7 @@ def _import_pipeline_modules():
     global embed_papers, bytes_to_embedding, embedding_to_bytes
     global cluster_papers, assign_noise_to_nearest, assign_new_papers_to_clusters
     global slugify, build_hierarchy, _compute_centroids
+    global batch_summarize, embed_summaries
 
     from db import (
         init_db,
@@ -68,6 +70,7 @@ def _import_pipeline_modules():
     )
     from bibtex_parser import parse_bib_file
     from pdf_matcher import match_papers_to_pdfs
+    from summarizer import batch_summarize, embed_summaries
     from embedder import embed_papers, bytes_to_embedding, embedding_to_bytes
     from clusterer import (
         cluster_papers,
@@ -460,6 +463,13 @@ def main() -> None:
         help="Skip Claude-based cluster relabeling (keep Ollama labels).",
     )
     parser.add_argument(
+        "--summarize",
+        type=int,
+        metavar="N",
+        default=0,
+        help="Summarize up to N papers with local LLM (fulltext PDF → summary → SPECTER2 embedding). 0 = skip.",
+    )
+    parser.add_argument(
         "--bib",
         metavar="PATH",
         default=BIB_PATH,
@@ -573,6 +583,27 @@ def main() -> None:
                 print("[relabel] Set CLAUDE_CODE_OAUTH_TOKEN in .env or ANTHROPIC_BASE_URL to enable.")
                 summary["relabeled"] = 0
 
+        # --- Stage 6: Fulltext summarization (local LLM) ---
+        if args.summarize > 0:
+            print(f"\n--- Stage 6: Fulltext summarization (up to {args.summarize} papers) ---")
+            try:
+                summaries = batch_summarize(db, batch_size=args.summarize)
+                summary["summarized"] = len(summaries)
+                if summaries:
+                    print(f"\n--- Stage 6b: Embedding summaries with SPECTER2 ---")
+                    n_embedded = embed_summaries(db)
+                    summary["ft_embedded"] = n_embedded
+                else:
+                    summary["ft_embedded"] = 0
+            except Exception as e:
+                print(f"[summarize] WARNING: Summarization failed ({e})")
+                summary["summarized"] = 0
+                summary["ft_embedded"] = 0
+        else:
+            print("\n--- Stage 6: Fulltext summarization [SKIPPED] (use --summarize N) ---")
+            summary["summarized"] = 0
+            summary["ft_embedded"] = 0
+
     finally:
         db.close()
 
@@ -590,6 +621,8 @@ def main() -> None:
     print(f"  Papers embedded    : {summary.get('embedded', 0)}")
     print(f"  Clusters           : {summary.get('clusters', 0)}")
     print(f"  Relabeled (Claude) : {summary.get('relabeled', 0)}")
+    print(f"  Summarized (LLM)   : {summary.get('summarized', 0)}")
+    print(f"  FT embedded        : {summary.get('ft_embedded', 0)}")
     print(f"  Elapsed            : {t_elapsed:.1f}s")
     print()
 
