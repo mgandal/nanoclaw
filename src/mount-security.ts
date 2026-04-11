@@ -243,8 +243,10 @@ function isValidContainerPath(containerPath: string): boolean {
     return false;
   }
 
-  // Must not contain colons — prevents Docker -v option injection (e.g., "repo:rw")
-  if (containerPath.includes(':')) {
+  // Must not contain control characters (newlines, tabs, null bytes, etc.)
+  // These can break shell argument parsing and inject flags into container commands
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(containerPath)) {
     return false;
   }
 

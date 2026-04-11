@@ -203,15 +203,24 @@ export class HealthMonitor {
   private async verifyFix(verify: FixVerify): Promise<boolean> {
     if (!this.fixActions) return false;
 
-    if (verify.type === 'http' && verify.url) {
-      const result = await this.fixActions.httpCheck(verify.url);
-      const expectedStatus = verify.expectStatus ?? 200;
-      return result.reachable && result.statusCode === expectedStatus;
-    }
+    try {
+      if (verify.type === 'http' && verify.url) {
+        const result = await this.fixActions.httpCheck(verify.url);
+        const expectedStatus = verify.expectStatus ?? 200;
+        return result.reachable && result.statusCode === expectedStatus;
+      }
 
-    if (verify.type === 'command' && verify.cmd) {
-      const result = await this.fixActions.execScript(verify.cmd, verify.args);
-      return result.ok;
+      if (verify.type === 'command' && verify.cmd) {
+        const result = await this.fixActions.execScript(
+          verify.cmd,
+          verify.args,
+        );
+        return result.ok;
+      }
+    } catch {
+      // Treat any verification error (network timeout, ECONNREFUSED, etc.)
+      // as a failed verification rather than crashing the fix loop
+      return false;
     }
 
     return false;

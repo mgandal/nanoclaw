@@ -1076,3 +1076,244 @@ describe('HealthMonitor regression tests', () => {
     expect(monitor.isGroupPaused('orphan')).toBe(false);
   });
 });
+
+describe('HealthMonitor edge cases (TDD hardening)', () => {
+  let monitor: HealthMonitor;
+  let alertFn: ReturnType<typeof vi.fn> & ((alert: HealthAlert) => void);
+  let mockActions: FixActions;
+
+  beforeEach(() => {
+    alertFn = vi.fn() as ReturnType<typeof vi.fn> &
+      ((alert: HealthAlert) => void);
+    monitor = new HealthMonitor({
+      maxSpawnsPerHour: 5,
+      maxErrorsPerHour: 5,
+      onAlert: alertFn,
+    });
+    mockActions = {
+      execScript: vi
+        .fn()
+        .mockResolvedValue({ ok: true, stdout: '', stderr: '' }),
+      httpCheck: vi
+        .fn()
+        .mockResolvedValue({ reachable: true, statusCode: 200 }),
+      acquireLock: vi.fn().mockResolvedValue(true),
+      releaseLock: vi.fn().mockResolvedValue(undefined),
+    };
+    monitor.setFixActions(mockActions);
+  });
+
+  it('flapping service: rapid clear-then-fail cycles never reach threshold', () => {
+    // Simulate a service that alternates: 2 failures, then clear, repeat
+    // It should never reach 3 consecutive failures and never trigger an alert
+    for (let cycle = 0; cycle < 5; cycle++) {
+      monitor.recordInfraEvent('mcp:Flappy', 'unreachable');
+      monitor.recordInfraEvent('mcp:Flappy', 'unreachable');
+      monitor.clearInfraEvent('mcp:Flappy'); // service briefly recovers
+    }
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(0);
+    expect(monitor.getInfraFailureCount('mcp:Flappy')).toBe(0);
+  });
+
+  it('all services down simultaneously: each gets its own infra alert', () => {
+    const services = [
+      'mcp:QMD',
+      'mcp:Honcho',
+      'mcp:Gmail',
+      'mcp:Todoist',
+      'mcp:Calendar',
+    ];
+    for (const svc of services) {
+      for (let i = 0; i < 3; i++) {
+        monitor.recordInfraEvent(svc, `${svc} unreachable`);
+      }
+    }
+    const alerts = monitor.checkThresholds();
+    const infraAlerts = alerts.filter((a) => a.type === 'infra_error');
+    expect(infraAlerts).toHaveLength(services.length);
+    const alertServices = infraAlerts.map((a) => a.group).sort();
+    expect(alertServices).toEqual([...services].sort());
+  });
+
+  it('verify returns false when http verify has no URL', async () => {
+    monitor.addFixHandler({
+      id: 'no-url',
+      service: 'svc:nourl',
+      fixScript: '/fix.sh',
+      verify: { type: 'http' }, // missing url
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    const result = await monitor.attemptFix('svc:nourl');
+    // Script succeeds but verification should fail because no URL provided
+    expect(result).toBe('verify-failed');
+    // httpCheck should NOT have been called (no URL to check)
+    expect(mockActions.httpCheck).not.toHaveBeenCalled();
+  });
+
+  it('verify returns false when command verify has no cmd', async () => {
+    monitor.addFixHandler({
+      id: 'no-cmd',
+      service: 'svc:nocmd',
+      fixScript: '/fix.sh',
+      verify: { type: 'command' }, // missing cmd
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    const result = await monitor.attemptFix('svc:nocmd');
+    expect(result).toBe('verify-failed');
+  });
+
+  it('repeated script failures increment attempt count and eventually escalate', async () => {
+    (mockActions.execScript as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: false,
+      stdout: '',
+      stderr: 'crash',
+    });
+    monitor.addFixHandler({
+      id: 'script-escalate',
+      service: 'svc:se',
+      fixScript: '/fail.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 3,
+    });
+
+    const r1 = await monitor.attemptFix('svc:se'); // count 0 -> script fails -> count 1
+    expect(r1).toBe('script-failed');
+    const r2 = await monitor.attemptFix('svc:se'); // count 1 -> script fails -> count 2
+    expect(r2).toBe('script-failed');
+    const r3 = await monitor.attemptFix('svc:se'); // count 2 -> script fails -> count 3
+    expect(r3).toBe('script-failed');
+    // Now count is 3 which equals maxAttempts, next call should escalate
+    const r4 = await monitor.attemptFix('svc:se');
+    expect(r4).toBe('escalated');
+    expect(
+      (alertFn as ReturnType<typeof vi.fn>).mock.calls.some(
+        (c: unknown[]) => (c[0] as HealthAlert).type === 'fix_escalation',
+      ),
+    ).toBe(true);
+  });
+
+  it('group paused by both spawns AND errors stays paused when only spawns drop', () => {
+    // Exceed both thresholds
+    for (let i = 0; i < 6; i++) {
+      monitor.recordSpawn('dual');
+      monitor.recordError('dual', 'fail');
+    }
+    monitor.checkThresholds();
+    expect(monitor.isGroupPaused('dual')).toBe(true);
+
+    // Clear spawn log but errors remain
+    monitor['spawnLog'] = [];
+    monitor.checkThresholds();
+    // Group should STILL be paused because error count exceeds threshold
+    expect(monitor.isGroupPaused('dual')).toBe(true);
+  });
+
+  it('lock is released even when execScript throws an exception', async () => {
+    (mockActions.execScript as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('unexpected crash'),
+    );
+    monitor.addFixHandler({
+      id: 'throw-test',
+      service: 'svc:throw',
+      fixScript: '/crash.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    // Should reject with the error, but lock must still be released
+    await expect(monitor.attemptFix('svc:throw')).rejects.toThrow(
+      'unexpected crash',
+    );
+    expect(mockActions.releaseLock).toHaveBeenCalled();
+  });
+
+  it('same group can have both spawn and error alerts simultaneously', () => {
+    for (let i = 0; i < 6; i++) {
+      monitor.recordSpawn('both');
+      monitor.recordError('both', 'fail');
+    }
+    const alerts = monitor.checkThresholds();
+    const spawnAlerts = alerts.filter(
+      (a) => a.type === 'excessive_spawns' && a.group === 'both',
+    );
+    const errorAlerts = alerts.filter(
+      (a) => a.type === 'excessive_errors' && a.group === 'both',
+    );
+    expect(spawnAlerts).toHaveLength(1);
+    expect(errorAlerts).toHaveLength(1);
+  });
+
+  it('cooldown expires and allows retry after time elapses', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockResolvedValue({
+      reachable: false,
+    });
+    monitor.addFixHandler({
+      id: 'cooldown-expire',
+      service: 'svc:ce',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 60_000,
+      maxAttempts: 5,
+    });
+
+    // First attempt
+    await monitor.attemptFix('svc:ce');
+    // Blocked by cooldown
+    const r2 = await monitor.attemptFix('svc:ce');
+    expect(r2).toBe('cooldown');
+
+    // Backdate the lastAttempt to simulate cooldown expiry
+    monitor['fixLastAttempt'].set('svc:ce', Date.now() - 61_000);
+
+    // Now should be allowed through
+    const r3 = await monitor.attemptFix('svc:ce');
+    expect(r3).toBe('verify-failed'); // goes through (not cooldown)
+    expect(mockActions.execScript).toHaveBeenCalledTimes(2); // first + this one
+  });
+
+  it('P95 latency calculation with exactly 20 entries', () => {
+    // 19 entries at 100ms, 1 entry at 15000ms
+    // Sorted: [100, 100, ...(19x), 15000]
+    // idx = floor(20 * 0.95) = 19, which is the last element (15000)
+    for (let i = 0; i < 19; i++) monitor.recordOllamaLatency(100);
+    monitor.recordOllamaLatency(15000);
+    const p95 = monitor.getOllamaP95Latency(3600_000);
+    expect(p95).toBe(15000);
+  });
+
+  it('P95 latency calculation with exactly 100 entries selects correct percentile', () => {
+    // 95 entries at 50ms, 5 entries at 20000ms
+    // idx = floor(100 * 0.95) = 95, sorted[95] = 20000
+    for (let i = 0; i < 95; i++) monitor.recordOllamaLatency(50);
+    for (let i = 0; i < 5; i++) monitor.recordOllamaLatency(20000);
+    const p95 = monitor.getOllamaP95Latency(3600_000);
+    expect(p95).toBe(20000);
+  });
+
+  it('httpCheck throwing during verify should be treated as verify-failed, not crash', async () => {
+    (mockActions.httpCheck as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('ECONNREFUSED'),
+    );
+    monitor.addFixHandler({
+      id: 'http-throw',
+      service: 'svc:httpthrow',
+      fixScript: '/fix.sh',
+      verify: { type: 'http', url: 'http://localhost:1234', expectStatus: 200 },
+      cooldownMs: 0,
+      maxAttempts: 5,
+    });
+
+    // Should return verify-failed rather than throwing
+    const result = await monitor.attemptFix('svc:httpthrow');
+    expect(result).toBe('verify-failed');
+    expect(mockActions.releaseLock).toHaveBeenCalled();
+  });
+});

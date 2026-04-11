@@ -132,7 +132,9 @@ export function cleanupOrphans(): void {
     const orphans = containers
       .filter(
         (c) =>
-          c.status === 'running' && c.configuration.id.startsWith('nanoclaw-'),
+          c.status === 'running' &&
+          typeof c.configuration?.id === 'string' &&
+          c.configuration.id.startsWith('nanoclaw-'),
       )
       .map((c) => c.configuration.id);
     for (const name of orphans) {

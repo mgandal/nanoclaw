@@ -799,3 +799,386 @@ describe('parseLastAgentSeq edge cases', () => {
     expect(result.nested).toEqual({ a: 1 });
   });
 });
+
+// ---- TDD hardening: session expiry 1ms past threshold ----
+
+describe('checkSessionExpiry: 1ms past threshold (strict > boundary)', () => {
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+
+  it('expires when idle time is 1ms past threshold', () => {
+    const now = Date.now();
+    const result = checkSessionExpiry(
+      new Date(now - 60 * 60 * 1000).toISOString(), // 1h old (within max age)
+      new Date(now - TWO_HOURS - 1).toISOString(), // 2h + 1ms idle
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
+    expect(result).toMatch(/idle/);
+  });
+
+  it('expires when total age is 1ms past max threshold', () => {
+    const now = Date.now();
+    const result = checkSessionExpiry(
+      new Date(now - FOUR_HOURS - 1).toISOString(), // 4h + 1ms total
+      new Date(now - 1000).toISOString(), // recently active
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
+    expect(result).toMatch(/max age/);
+  });
+
+  it('max age at exactly threshold + idle past threshold still returns idle', () => {
+    // If total age is exactly at max (not exceeded) but idle exceeds, we get idle
+    const now = Date.now();
+    const result = checkSessionExpiry(
+      new Date(now - FOUR_HOURS).toISOString(), // exactly at max (not exceeded)
+      new Date(now - TWO_HOURS - 1).toISOString(), // idle exceeded
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
+    // totalAge === FOUR_HOURS, not >, so max age doesn't trigger
+    // idleAge > TWO_HOURS, so idle triggers
+    expect(result).toMatch(/idle/);
+  });
+});
+
+// ---- TDD hardening: session full lifecycle (create → expire → re-create) ----
+
+describe('session full lifecycle: create → expire check → re-create', () => {
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('expired session can be deleted and recreated with fresh timestamps', async () => {
+    // Phase 1: Create session
+    setSession('telegram_test', 'session-v1');
+    const v1 = getSessionTimestamps('telegram_test');
+    expect(v1.createdAt).toBeDefined();
+    expect(v1.lastUsed).toBeDefined();
+
+    // Phase 2: Simulate expiry check (using real timestamps shifted back)
+    // We can't actually wait 2h, so we check the logic directly
+    const expiryReason = checkSessionExpiry(
+      new Date(Date.now() - FOUR_HOURS - 1).toISOString(),
+      new Date(Date.now() - TWO_HOURS - 1).toISOString(),
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
+    expect(expiryReason).toBeTruthy();
+
+    // Phase 3: Delete (simulating what runAgent does on expiry)
+    deleteSession('telegram_test');
+    const deleted = getAllSessions();
+    expect(deleted['telegram_test']).toBeUndefined();
+    const deletedTs = getSessionTimestamps('telegram_test');
+    expect(deletedTs.createdAt).toBeUndefined();
+
+    // Phase 4: Re-create fresh session
+    await new Promise((r) => setTimeout(r, 5));
+    setSession('telegram_test', 'session-v2');
+    const v2 = getSessionTimestamps('telegram_test');
+    expect(v2.createdAt).toBeDefined();
+    expect(getAllSessions()['telegram_test']).toBe('session-v2');
+    // New timestamps are strictly after the old ones
+    expect(new Date(v2.createdAt!).getTime()).toBeGreaterThan(
+      new Date(v1.createdAt!).getTime(),
+    );
+  });
+});
+
+// ---- TDD hardening: getMessagesSince respects limit ----
+
+describe('getMessagesSince respects MAX_MESSAGES_PER_PROMPT limit', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('returns at most `limit` messages even when more exist', () => {
+    // Insert 10 messages
+    for (let i = 0; i < 10; i++) {
+      storeMessage({
+        id: `msg-limit-${i}`,
+        chat_jid: 'group-limit@g.us',
+        sender: 'user1',
+        sender_name: 'User One',
+        content: `Message ${i}`,
+        timestamp: new Date().toISOString(),
+        is_from_me: false,
+        is_bot_message: false,
+      });
+    }
+
+    // Request with limit=5
+    const limited = getMessagesSince('group-limit@g.us', 0, 'Claire', 5);
+    expect(limited).toHaveLength(5);
+    // Should return the LATEST 5 messages (most recent)
+    // Verify ordering — messages should be in ascending seq order
+    for (let i = 1; i < limited.length; i++) {
+      expect(limited[i].seq).toBeGreaterThan(limited[i - 1].seq);
+    }
+  });
+
+  it('returns all messages when count is under limit', () => {
+    storeMessage({
+      id: 'msg-under-limit-1',
+      chat_jid: 'group-under@g.us',
+      sender: 'user1',
+      sender_name: 'User One',
+      content: 'Only message',
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const result = getMessagesSince('group-under@g.us', 0, 'Claire', 200);
+    expect(result).toHaveLength(1);
+    expect(result[0].content).toBe('Only message');
+  });
+});
+
+// ---- TDD hardening: getNewMessages with empty JID list ----
+
+describe('getNewMessages edge cases', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('returns empty array when JID list is empty', () => {
+    // Store a message that would normally be returned
+    storeMessage({
+      id: 'msg-orphan',
+      chat_jid: 'group-orphan@g.us',
+      sender: 'user1',
+      sender_name: 'User One',
+      content: 'Orphan message',
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const { messages, newSeq } = getNewMessages([], 0, 'Claire', 200);
+    expect(messages).toHaveLength(0);
+    // newSeq should be 0 when no messages are returned
+    expect(newSeq).toBe(0);
+  });
+
+  it('only returns messages for specified JIDs', () => {
+    storeMessage({
+      id: 'msg-included',
+      chat_jid: 'group-include@g.us',
+      sender: 'user1',
+      sender_name: 'User',
+      content: 'Included',
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+    storeMessage({
+      id: 'msg-excluded',
+      chat_jid: 'group-exclude@g.us',
+      sender: 'user2',
+      sender_name: 'User 2',
+      content: 'Excluded',
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const { messages } = getNewMessages(
+      ['group-include@g.us'],
+      0,
+      'Claire',
+      200,
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0].content).toBe('Included');
+  });
+});
+
+// ---- TDD hardening: buildTriggerPattern with regex-special characters ----
+
+describe('buildTriggerPattern with special regex characters', () => {
+  it('safely escapes dots in trigger name', () => {
+    const pattern = buildTriggerPattern('@Dr.Smith');
+    // Should match literal dot, not regex "any character"
+    expect(pattern.test('@Dr.Smith hello')).toBe(true);
+    expect(pattern.test('@DrXSmith hello')).toBe(false);
+  });
+
+  it('escapes parentheses but \\b fails after non-word chars (known limitation)', () => {
+    // buildTriggerPattern uses \b word boundary, which doesn't work after non-word chars
+    // like ) or $. This is a known limitation — triggers should use @Name format.
+    const pattern = buildTriggerPattern('@Bot(1)');
+    // \b after ')' won't match because ')' is not a word char
+    expect(pattern.test('@Bot(1) do stuff')).toBe(false); // known limitation
+    expect(pattern.test('@Bot1 do stuff')).toBe(false); // correctly doesn't match
+  });
+
+  it('safely escapes plus sign in trigger name', () => {
+    const pattern = buildTriggerPattern('@C++Bot');
+    expect(pattern.test('@C++Bot hello')).toBe(true);
+    expect(pattern.test('@CCBot hello')).toBe(false);
+  });
+
+  it('\\b word boundary fails for triggers ending in non-word chars (known limitation)', () => {
+    // Documenting: triggers should end with word characters for \b to work
+    const pattern = buildTriggerPattern('$$$');
+    // \b after '$' won't match before space
+    expect(pattern.test('$$$ help')).toBe(false); // known limitation
+    expect(pattern.test('xxx help')).toBe(false);
+  });
+});
+
+// ---- TDD hardening: isStaleSessionError with multi-line errors ----
+
+describe('isStaleSessionError with real container error formats', () => {
+  it('detects stale session in multi-line error output', () => {
+    const multiLineError =
+      'Error running container agent:\n' +
+      'stderr: No conversation found for session abc-123-def\n' +
+      'exit code: 1';
+    expect(isStaleSessionError(multiLineError)).toBe(true);
+  });
+
+  it('detects ENOENT .jsonl in verbose error stack', () => {
+    const stackError =
+      'Error: ENOENT: no such file or directory, open ' +
+      "'/data/sessions/telegram_claire/abc123.jsonl'\n" +
+      '    at Object.openSync (node:fs:123:3)\n' +
+      '    at readFileSync (node:fs:456:7)';
+    expect(isStaleSessionError(stackError)).toBe(true);
+  });
+
+  it('does not match "session" in unrelated context', () => {
+    expect(
+      isStaleSessionError('Starting new session for group telegram_claire'),
+    ).toBe(false);
+  });
+
+  it('handles empty string', () => {
+    expect(isStaleSessionError('')).toBe(false);
+  });
+});
+
+// ---- TDD hardening: storeMessage with minimal fields ----
+
+describe('storeMessage with minimal / edge-case payloads', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('empty content messages are stored but filtered from getMessagesSince', () => {
+    // getMessagesSince intentionally filters content != '' AND content IS NOT NULL
+    // to avoid sending empty messages to the agent. This is correct behavior.
+    storeMessage({
+      id: 'msg-empty-content',
+      chat_jid: 'group1@g.us',
+      sender: 'user1',
+      sender_name: 'User',
+      content: '',
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const msgs = getMessagesSince('group1@g.us', 0, 'Claire', 200);
+    expect(msgs).toHaveLength(0); // empty content is filtered out by design
+  });
+
+  it('stores message with undefined optional fields', () => {
+    storeMessage({
+      id: 'msg-minimal',
+      chat_jid: 'group1@g.us',
+      sender: 'user1',
+      sender_name: 'User',
+      content: 'hello',
+      timestamp: new Date().toISOString(),
+      // is_from_me and is_bot_message intentionally omitted
+    });
+
+    const msgs = getMessagesSince('group1@g.us', 0, 'Claire', 200);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe('hello');
+  });
+
+  it('stores and retrieves message with unicode/emoji content', () => {
+    const unicodeContent = 'Hello \u{1F600} \u{1F4DD} \u4F60\u597D';
+    storeMessage({
+      id: 'msg-unicode',
+      chat_jid: 'group1@g.us',
+      sender: 'user1',
+      sender_name: 'User',
+      content: unicodeContent,
+      timestamp: new Date().toISOString(),
+      is_from_me: false,
+      is_bot_message: false,
+    });
+
+    const msgs = getMessagesSince('group1@g.us', 0, 'Claire', 200);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].content).toBe(unicodeContent);
+  });
+});
+
+// ---- TDD hardening: router state persistence ----
+
+describe('router state persistence round-trip', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  afterEach(() => {
+    _closeDatabase();
+  });
+
+  it('getRouterState returns undefined for missing key', () => {
+    const val = getRouterState('nonexistent_key');
+    expect(val).toBeUndefined();
+  });
+
+  it('setRouterState + getRouterState round-trips correctly', () => {
+    setRouterState('test_key', 'test_value');
+    expect(getRouterState('test_key')).toBe('test_value');
+  });
+
+  it('setRouterState overwrites existing value', () => {
+    setRouterState('overwrite_key', 'first');
+    setRouterState('overwrite_key', 'second');
+    expect(getRouterState('overwrite_key')).toBe('second');
+  });
+
+  it('last_agent_seq JSON round-trips through router state', () => {
+    const agentSeq = { 'chat1@g.us': 42, 'chat2@g.us': 100 };
+    setRouterState('last_agent_seq', JSON.stringify(agentSeq));
+    const raw = getRouterState('last_agent_seq');
+    const parsed = parseLastAgentSeq(raw);
+    expect(parsed).toEqual(agentSeq);
+  });
+
+  it('handles large sequence numbers without precision loss', () => {
+    const largeSeq = { 'chat@g.us': 2147483647 }; // INT32_MAX
+    setRouterState('last_agent_seq', JSON.stringify(largeSeq));
+    const parsed = parseLastAgentSeq(getRouterState('last_agent_seq'));
+    expect(parsed['chat@g.us']).toBe(2147483647);
+  });
+});

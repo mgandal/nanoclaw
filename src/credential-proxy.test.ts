@@ -856,4 +856,281 @@ describe('credential-proxy', () => {
       lastUpstreamHeaders['anthropic-dangerous-direct-browser-access'],
     ).toBe('true');
   });
+
+  // --- TDD hardening pass #2: additional edge-case regression tests ---
+
+  it('falls back to ANTHROPIC_AUTH_TOKEN when CLAUDE_CODE_OAUTH_TOKEN is missing', async () => {
+    proxyPort = await startProxy({
+      ANTHROPIC_AUTH_TOKEN: 'fallback-auth-token',
+    });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: `/${proxyToken}/v1/messages`,
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['authorization']).toBe(
+      'Bearer fallback-auth-token',
+    );
+  });
+
+  it('CLAUDE_CODE_OAUTH_TOKEN takes precedence over ANTHROPIC_AUTH_TOKEN', async () => {
+    proxyPort = await startProxy({
+      CLAUDE_CODE_OAUTH_TOKEN: 'primary-token',
+      ANTHROPIC_AUTH_TOKEN: 'fallback-token',
+    });
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: `/${proxyToken}/v1/messages`,
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    expect(lastUpstreamHeaders['authorization']).toBe('Bearer primary-token');
+  });
+
+  it('appends beta=true with & when /v1/messages path already has query params', async () => {
+    let lastUpstreamPath = '';
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      lastUpstreamHeaders = { ...req.headers };
+      lastUpstreamPath = req.url || '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: `/${proxyToken}/v1/messages?stream=true`,
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    // Should use & not ? since there's already a query param
+    expect(lastUpstreamPath).toContain('stream=true&beta=true');
+    expect(lastUpstreamPath).not.toContain('?beta=true');
+  });
+
+  it('does not append beta=true to non-messages endpoints in OAuth mode', async () => {
+    let lastUpstreamPath = '';
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      lastUpstreamHeaders = { ...req.headers };
+      lastUpstreamPath = req.url || '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: `/${proxyToken}/api/oauth/claude_cli/create_api_key`,
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    // Non-messages endpoint should NOT get beta=true
+    expect(lastUpstreamPath).not.toContain('beta=true');
+  });
+
+  it('mixed 401 and 403 responses both count toward auth failure threshold', async () => {
+    let requestCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      requestCount++;
+      // Alternate 401 and 403
+      const status = requestCount % 2 === 1 ? 401 : 403;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: status === 401 ? 'unauthorized' : 'forbidden' }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    const authFailureCodes: number[] = [];
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'some-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0, '127.0.0.1', (code) => {
+      authFailureCodes.push(code);
+    });
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    // Send 3 requests: 401, 403, 401 — all auth failures, should fire at 3
+    for (let i = 0; i < 3; i++) {
+      await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: `/${proxyToken}/v1/messages`,
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+    }
+
+    expect(authFailureCodes).toHaveLength(1);
+    // The third request (401) triggers the callback
+    expect(authFailureCodes[0]).toBe(401);
+  });
+
+  it('does not crash when auth failure threshold reached without onAuthFailure callback', async () => {
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'expired-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    // No onAuthFailure callback provided
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    // Send 5 requests past the threshold — should not crash
+    const results = [];
+    for (let i = 0; i < 5; i++) {
+      results.push(
+        await makeRequest(
+          proxyPort,
+          {
+            method: 'POST',
+            path: `/${proxyToken}/v1/messages`,
+            headers: { 'content-type': 'application/json' },
+          },
+          '{}',
+        ),
+      );
+    }
+
+    // All requests should still get proxied (returning 401 from upstream)
+    for (const r of results) {
+      expect(r.statusCode).toBe(401);
+    }
+  });
+
+  it('proxies GET requests correctly', async () => {
+    let lastUpstreamMethod = '';
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      lastUpstreamHeaders = { ...req.headers };
+      lastUpstreamMethod = req.method || '';
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ models: [] }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      ANTHROPIC_API_KEY: 'sk-ant-real-key',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    const res = await makeRequest(proxyPort, {
+      method: 'GET',
+      path: `/${proxyToken}/v1/models`,
+      headers: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(lastUpstreamMethod).toBe('GET');
+    expect(lastUpstreamHeaders['x-api-key']).toBe('sk-ant-real-key');
+  });
+
+  it('detectAuthMode returns oauth when no ANTHROPIC_API_KEY is set', async () => {
+    const { detectAuthMode } = await import('./credential-proxy.js');
+    // mockEnv has no ANTHROPIC_API_KEY at this point (cleared in afterEach)
+    expect(detectAuthMode()).toBe('oauth');
+  });
+
+  it('detectAuthMode returns api-key when ANTHROPIC_API_KEY is set', async () => {
+    mockEnv['ANTHROPIC_API_KEY'] = 'sk-ant-test';
+    const { detectAuthMode } = await import('./credential-proxy.js');
+    expect(detectAuthMode()).toBe('api-key');
+  });
+
+  it('upstream response headers are forwarded to the client', async () => {
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((req, res) => {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'x-request-id': 'req-abc-123',
+        'retry-after': '30',
+      });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'real-oauth-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0);
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    const res = await makeRequest(
+      proxyPort,
+      {
+        method: 'POST',
+        path: `/${proxyToken}/v1/messages`,
+        headers: { 'content-type': 'application/json' },
+      },
+      '{}',
+    );
+
+    // Upstream response headers should be forwarded to the client
+    expect(res.headers['x-request-id']).toBe('req-abc-123');
+    expect(res.headers['retry-after']).toBe('30');
+  });
 });
