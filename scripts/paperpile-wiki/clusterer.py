@@ -263,7 +263,7 @@ def _get_ollama_labeler():
 
         return BertopicOpenAI(
             client,
-            model="qwen3:8b",
+            model="phi4-mini",  # phi4-mini works via OpenAI endpoint; qwen3:8b returns empty due to thinking mode
             prompt=prompt,
             nr_docs=5,
             delay_in_seconds=0,
