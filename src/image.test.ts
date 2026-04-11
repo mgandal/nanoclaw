@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import sharp from 'sharp';
 import { processImage } from './image.js';
 

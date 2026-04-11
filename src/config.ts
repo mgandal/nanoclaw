@@ -94,7 +94,13 @@ function escapeRegex(str: string): string {
 }
 
 export function buildTriggerPattern(trigger: string): RegExp {
-  return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
+  const trimmed = trigger.trim();
+  const escaped = escapeRegex(trimmed);
+  // \b only works when the trigger ends with a word char (\w).
+  // For non-word endings like ) or $, use a lookahead for whitespace/end.
+  const lastChar = trimmed[trimmed.length - 1];
+  const boundary = /\w/.test(lastChar) ? '\\b' : '(?=\\s|$)';
+  return new RegExp(`^${escaped}${boundary}`, 'i');
 }
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;

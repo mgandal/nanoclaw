@@ -31,7 +31,7 @@ interface ImageAttachment {
   mediaType: string;
 }
 
-interface ContainerInput {
+export interface ContainerInput {
   prompt: string;
   sessionId?: string;
   groupFolder: string;
@@ -44,7 +44,7 @@ interface ContainerInput {
   images?: ImageAttachment[];
 }
 
-interface ContainerOutput {
+export interface ContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
@@ -83,7 +83,7 @@ const IPC_POLL_MS = 500;
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
  */
-class MessageStream {
+export class MessageStream {
   private queue: SDKUserMessage[] = [];
   private waiting: (() => void) | null = null;
   private done = false;
@@ -145,10 +145,10 @@ async function readStdin(): Promise<string> {
   });
 }
 
-const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
-const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+export const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
+export const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
-function writeOutput(output: ContainerOutput): void {
+export function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
@@ -158,7 +158,7 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
-function getSessionSummary(
+export function getSessionSummary(
   sessionId: string,
   transcriptPath: string,
 ): string | null {
@@ -191,7 +191,7 @@ function getSessionSummary(
  * Build the mcpServers config imperatively to avoid TS union-type issues
  * with conditional spread patterns.
  */
-function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput): Record<string, any> {
+export function buildMcpServers(mcpServerPath: string, containerInput: ContainerInput): Record<string, any> {
   const servers: Record<string, any> = {
     nanoclaw: {
       command: 'node',
@@ -332,7 +332,7 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
-function sanitizeFilename(summary: string): string {
+export function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -340,7 +340,7 @@ function sanitizeFilename(summary: string): string {
     .slice(0, 50);
 }
 
-function generateFallbackName(): string {
+export function generateFallbackName(): string {
   const time = new Date();
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
@@ -350,7 +350,7 @@ interface ParsedMessage {
   content: string;
 }
 
-function parseTranscript(content: string): ParsedMessage[] {
+export function parseTranscript(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
 
   for (const line of content.split('\n')) {
@@ -378,7 +378,7 @@ function parseTranscript(content: string): ParsedMessage[] {
   return messages;
 }
 
-function formatTranscriptMarkdown(
+export function formatTranscriptMarkdown(
   messages: ParsedMessage[],
   title?: string | null,
   assistantName?: string,
@@ -1018,4 +1018,9 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+// Guard: only run when executed directly, not when imported for testing
+const isMainModule = process.argv[1] &&
+  (process.argv[1].endsWith('/index.js') || process.argv[1].endsWith('/index.ts'));
+if (isMainModule) {
+  main();
+}

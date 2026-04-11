@@ -1021,13 +1021,11 @@ describe('buildTriggerPattern with special regex characters', () => {
     expect(pattern.test('@DrXSmith hello')).toBe(false);
   });
 
-  it('escapes parentheses but \\b fails after non-word chars (known limitation)', () => {
-    // buildTriggerPattern uses \b word boundary, which doesn't work after non-word chars
-    // like ) or $. This is a known limitation — triggers should use @Name format.
+  it('matches triggers ending in non-word chars like parentheses', () => {
     const pattern = buildTriggerPattern('@Bot(1)');
-    // \b after ')' won't match because ')' is not a word char
-    expect(pattern.test('@Bot(1) do stuff')).toBe(false); // known limitation
-    expect(pattern.test('@Bot1 do stuff')).toBe(false); // correctly doesn't match
+    expect(pattern.test('@Bot(1) do stuff')).toBe(true);
+    expect(pattern.test('@Bot(1)')).toBe(true); // trigger at end of string
+    expect(pattern.test('@Bot1 do stuff')).toBe(false);
   });
 
   it('safely escapes plus sign in trigger name', () => {
@@ -1036,11 +1034,11 @@ describe('buildTriggerPattern with special regex characters', () => {
     expect(pattern.test('@CCBot hello')).toBe(false);
   });
 
-  it('\\b word boundary fails for triggers ending in non-word chars (known limitation)', () => {
-    // Documenting: triggers should end with word characters for \b to work
+  it('matches triggers ending in $ using lookahead boundary', () => {
     const pattern = buildTriggerPattern('$$$');
-    // \b after '$' won't match before space
-    expect(pattern.test('$$$ help')).toBe(false); // known limitation
+    expect(pattern.test('$$$ help')).toBe(true);
+    expect(pattern.test('$$$')).toBe(true); // trigger at end of string
+    expect(pattern.test('$$$extra')).toBe(false); // no boundary — should not match
     expect(pattern.test('xxx help')).toBe(false);
   });
 });
