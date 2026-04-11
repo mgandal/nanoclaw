@@ -14,7 +14,7 @@ from typing import Optional
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(_REPO_ROOT, "store", "paperpile.db")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _CREATE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS papers (
     keywords           TEXT,
     pdf_path           TEXT,
     embedding          BLOB,
+    fulltext_summary   TEXT,
+    fulltext_embedding BLOB,
     cluster_id         INTEGER REFERENCES clusters(id),
     cluster_confidence REAL    NOT NULL DEFAULT 1.0,
     is_new             INTEGER NOT NULL DEFAULT 1,
@@ -95,6 +97,32 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _migrate(con) -> None:
+    """Apply schema migrations for existing databases."""
+    # Check current version
+    try:
+        row = con.execute("SELECT version FROM schema_version ORDER BY rowid DESC LIMIT 1").fetchone()
+        current = row[0] if row else 0
+    except Exception:
+        current = 0
+
+    if current < 2:
+        # Add fulltext columns to papers table
+        try:
+            con.execute("ALTER TABLE papers ADD COLUMN fulltext_summary TEXT")
+        except Exception:
+            pass  # column already exists
+        try:
+            con.execute("ALTER TABLE papers ADD COLUMN fulltext_embedding BLOB")
+        except Exception:
+            pass
+        con.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+            (2, _now_utc()),
+        )
+        con.commit()
+
+
 def init_db(db_path: str = DB_PATH) -> None:
     """Create all tables and insert schema_version row if missing."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -109,6 +137,7 @@ def init_db(db_path: str = DB_PATH) -> None:
                 "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                 (SCHEMA_VERSION, _now_utc()),
             )
+        _migrate(con)
         con.commit()
     finally:
         con.close()
