@@ -24,21 +24,29 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 MODEL = "claude-sonnet-4-6"
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 MAX_RETRIES = 5
 MAX_EVIDENCE_PAPERS = 40
 
 
 def _api_call_with_retry(client, **kwargs):
-    """Call client.messages.create with exponential backoff on rate limits."""
+    """Call client.messages.create with exponential backoff on rate limits.
+
+    After exhausting retries on the primary model, falls back to FALLBACK_MODEL.
+    """
     for attempt in range(MAX_RETRIES):
         try:
             return client.messages.create(**kwargs)
         except Exception as e:
             if '429' in str(e) and attempt < MAX_RETRIES - 1:
-                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                wait = 2 ** attempt * 3  # 3s, 6s, 12s, 24s
                 print(f"    [rate-limit] Waiting {wait}s before retry ({attempt + 1}/{MAX_RETRIES})...")
                 time.sleep(wait)
                 continue
+            if '429' in str(e) and kwargs.get('model') != FALLBACK_MODEL:
+                print(f"    [rate-limit] {kwargs.get('model')} exhausted, falling back to {FALLBACK_MODEL}")
+                kwargs['model'] = FALLBACK_MODEL
+                return client.messages.create(**kwargs)
             raise
 GANDAL_ENRICHMENT_WORDS = 1000
 PDFTOTEXT = '/opt/homebrew/bin/pdftotext'

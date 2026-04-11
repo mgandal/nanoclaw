@@ -289,10 +289,17 @@ Examples:
                         help='Synthesize one specific cluster by ID')
     parser.add_argument('--concurrency', type=int, default=1, metavar='N',
                         help='Max concurrent API calls (default: 1)')
+    parser.add_argument('--model', type=str, default=None, metavar='MODEL',
+                        help='Claude model to use (default: claude-sonnet-4-6, falls back to haiku on 429)')
     parser.add_argument('--db', metavar='PATH', default=DB_PATH,
                         help=f'Path to SQLite database (default: {DB_PATH})')
 
     args = parser.parse_args()
+
+    # Override model if specified
+    if args.model:
+        import synthesizer
+        synthesizer.MODEL = args.model
 
     # Step 2: Load auth credentials
     if not args.dry_run:
