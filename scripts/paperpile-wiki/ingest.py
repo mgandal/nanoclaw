@@ -287,6 +287,17 @@ def _run_full_cluster(db) -> int:
 
     print("[cluster] Full clustering mode.")
 
+    # Clean old cluster data before re-clustering
+    old_count = db.execute("SELECT COUNT(*) FROM clusters").fetchone()[0]
+    if old_count > 0:
+        print(f"[cluster] Removing {old_count} old clusters...")
+        db.execute("DELETE FROM paper_synthesis")
+        db.execute("DELETE FROM synthesis_history")
+        db.execute("DELETE FROM synthesis_pages")
+        db.execute("UPDATE papers SET cluster_id = NULL, cluster_confidence = 1.0")
+        db.execute("DELETE FROM clusters")
+        db.commit()
+
     # Load all papers with embeddings
     rows = db.execute(
         "SELECT id, abstract, embedding FROM papers WHERE embedding IS NOT NULL"
@@ -342,6 +353,9 @@ def _run_full_cluster(db) -> int:
                 label = str(label_raw)
         else:
             label = str(info_row["Name"])
+        # Strip BERTopic's "N_" prefix from labels (e.g. "0_RNA-seq..." → "RNA-seq...")
+        import re
+        label = re.sub(r'^\d+_', '', label).strip().strip('"').strip("'")
         topic_name_map[t_id] = label
 
     # Build hierarchy
