@@ -995,6 +995,7 @@ async function main(): Promise<void> {
     { name: 'Honcho', url: undefined as string | undefined },
     { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
     { name: 'Todoist', url: process.env.TODOIST_URL },
+    { name: 'Hindsight', url: process.env.HINDSIGHT_URL, healthUrl: 'http://127.0.0.1:8888/health' },
   ];
 
   // Read URLs from .env if not in process.env
@@ -1003,12 +1004,17 @@ async function main(): Promise<void> {
       'HONCHO_URL',
       'APPLE_NOTES_URL',
       'TODOIST_URL',
+      'HINDSIGHT_URL',
     ]);
     if (!mcpEndpoints[1].url && envUrls.HONCHO_URL) {
       mcpEndpoints[1].url = `${envUrls.HONCHO_URL}/v3/workspaces/list`;
     }
     if (!mcpEndpoints[2].url) mcpEndpoints[2].url = envUrls.APPLE_NOTES_URL;
     if (!mcpEndpoints[3].url) mcpEndpoints[3].url = envUrls.TODOIST_URL;
+    if (!mcpEndpoints[4].url) mcpEndpoints[4].url = envUrls.HINDSIGHT_URL;
+    if (!mcpEndpoints[4].healthUrl && mcpEndpoints[4].url) {
+      mcpEndpoints[4].healthUrl = 'http://127.0.0.1:8888/health';
+    }
   }
 
   setInterval(async () => {

@@ -125,9 +125,17 @@ If memory.md is missing or Hindsight returns zero results, note this internally 
 
 ### Hindsight (conversational memory — personal facts, preferences, decisions)
 
+Honcho auto-injects user context into your prompt (the `<memory-context>` fence) — you do not need to call anything for that. Hindsight is different: you must explicitly call `retain` to store and `recall` to retrieve. **Honcho = automatic user profile. Hindsight = facts you explicitly store and search.**
+
 Use `mcp__hindsight__*` as your primary memory for anything learned in conversation.
 
 **MANDATORY: End-of-session retain.** Before your final response in any session where something meaningful happened, call `mcp__hindsight__retain` with a summary of what was discussed, decided, or learned. This is not optional. If you are uncertain whether the session was "substantive enough," retain anyway — false positives are cheap, lost context is expensive.
+
+**Retain call format — always include these fields:**
+- `content` — the raw text to retain (do NOT pre-summarize; Hindsight extracts facts from raw content)
+- `document_id` — use a stable ID to prevent duplicates. For end-of-session retains, use the group folder name + date: `"claire-2026-04-11"`. For mid-session retains about a specific topic, use a descriptive slug: `"grant-r01-mh123456"`. Same document_id = upsert (replaces previous).
+- `context` — short label describing the source. Examples: `"telegram conversation with Mike"`, `"lab meeting notes"`, `"infrastructure maintenance"`. High impact on extraction quality.
+- `timestamp` — ISO 8601 timestamp of when the content happened (not when you're retaining). Enables temporal queries like "what happened last week".
 
 **When to retain (during the session):**
 - User shares personal facts, preferences, or context — retain immediately, don't wait for end of session
