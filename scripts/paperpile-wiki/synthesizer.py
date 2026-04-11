@@ -15,6 +15,7 @@ Typical usage:
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -23,7 +24,22 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 MODEL = "claude-sonnet-4-6"
+MAX_RETRIES = 5
 MAX_EVIDENCE_PAPERS = 40
+
+
+def _api_call_with_retry(client, **kwargs):
+    """Call client.messages.create with exponential backoff on rate limits."""
+    for attempt in range(MAX_RETRIES):
+        try:
+            return client.messages.create(**kwargs)
+        except Exception as e:
+            if '429' in str(e) and attempt < MAX_RETRIES - 1:
+                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                print(f"    [rate-limit] Waiting {wait}s before retry ({attempt + 1}/{MAX_RETRIES})...")
+                time.sleep(wait)
+                continue
+            raise
 GANDAL_ENRICHMENT_WORDS = 1000
 PDFTOTEXT = '/opt/homebrew/bin/pdftotext'
 PAPERPILE_PDF_DIR = os.path.expanduser(
@@ -530,9 +546,8 @@ def synthesize_cluster(
     if len(evidence_cards) <= 25:
         # Small cluster: single call
         prompt = build_prompt_small(cluster_name, cluster_description, evidence_cards)
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4096,
+        response = _api_call_with_retry(
+            client, model=MODEL, max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
         body_text = response.content[0].text
@@ -541,9 +556,8 @@ def synthesize_cluster(
     else:
         # Large cluster: outline then sections
         outline_prompt = build_prompt_outline(cluster_name, cluster_description, evidence_cards)
-        outline_response = client.messages.create(
-            model=MODEL,
-            max_tokens=2048,
+        outline_response = _api_call_with_retry(
+            client, model=MODEL, max_tokens=2048,
             messages=[{"role": "user", "content": outline_prompt}],
         )
         outline = outline_response.content[0].text
@@ -551,9 +565,8 @@ def synthesize_cluster(
         total_output_tokens += outline_response.usage.output_tokens
 
         sections_prompt = build_prompt_sections(cluster_name, outline, evidence_cards)
-        sections_response = client.messages.create(
-            model=MODEL,
-            max_tokens=6144,
+        sections_response = _api_call_with_retry(
+            client, model=MODEL, max_tokens=6144,
             messages=[{"role": "user", "content": sections_prompt}],
         )
         body_text = sections_response.content[0].text
