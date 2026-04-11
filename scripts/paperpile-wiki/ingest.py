@@ -6,12 +6,14 @@ Orchestrates the full ingest pipeline:
   2. Match PDFs → update pdf_path in DB
   3. Embed with SPECTER2 → update embeddings in DB
   4. Cluster with BERTopic → write clusters + assignments to DB
+  5. Relabel clusters with Claude → higher-quality topic names
 
 Usage:
     python3 ingest.py                      # Full ingest (first run or re-embed all)
     python3 ingest.py --incremental        # Only new papers, assign to existing clusters
     python3 ingest.py --full-recluster     # Re-cluster entire corpus
     python3 ingest.py --skip-pdf           # Skip PDF matching
+    python3 ingest.py --skip-relabel       # Keep Ollama labels (no Claude API call)
     python3 ingest.py --bib PATH           # Custom BibTeX path
     python3 ingest.py --db PATH            # Custom DB path
 """
@@ -74,6 +76,7 @@ def _import_pipeline_modules():
         slugify,
         build_hierarchy,
         _compute_centroids,
+        relabel_clusters_with_claude,
     )
 
 
@@ -451,6 +454,12 @@ def main() -> None:
         help="Skip the PDF-matching stage.",
     )
     parser.add_argument(
+        "--skip-relabel",
+        action="store_true",
+        default=False,
+        help="Skip Claude-based cluster relabeling (keep Ollama labels).",
+    )
+    parser.add_argument(
         "--bib",
         metavar="PATH",
         default=BIB_PATH,
@@ -477,6 +486,7 @@ def main() -> None:
     print(f"  DB     : {args.db}")
     print(f"  Mode   : {'incremental' if args.incremental else 'full-recluster' if args.full_recluster else 'default'}")
     print(f"  PDF    : {'skip' if args.skip_pdf else 'enabled'}")
+    print(f"  Relabel: {'skip' if args.skip_relabel else 'enabled (Claude)'}")
     print()
 
     t_start = time.time()
@@ -529,6 +539,40 @@ def main() -> None:
 
         summary["clusters"] = n_clusters
 
+        # --- Stage 5: Claude relabeling ---
+        if args.skip_relabel:
+            print("\n--- Stage 5: Cluster relabeling [SKIPPED] ---")
+            summary["relabeled"] = 0
+        else:
+            print("\n--- Stage 5: Cluster relabeling (Claude) ---")
+            # Load OAuth token from .env if not already set
+            env_path = os.path.join(PROJECT_ROOT, '.env')
+            if not (os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')
+                    or os.environ.get('ANTHROPIC_BASE_URL')
+                    or os.environ.get('ANTHROPIC_API_KEY')):
+                if os.path.exists(env_path):
+                    with open(env_path) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith('CLAUDE_CODE_OAUTH_TOKEN='):
+                                os.environ['CLAUDE_CODE_OAUTH_TOKEN'] = line.split('=', 1)[1]
+                                break
+
+            if (os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')
+                    or os.environ.get('ANTHROPIC_BASE_URL')
+                    or os.environ.get('ANTHROPIC_API_KEY')):
+                try:
+                    results = relabel_clusters_with_claude(db)
+                    summary["relabeled"] = len(results)
+                    print(f"[relabel] Relabeled {len(results)} clusters with Claude.")
+                except Exception as e:
+                    print(f"[relabel] WARNING: Claude relabeling failed ({e}), keeping Ollama labels.")
+                    summary["relabeled"] = 0
+            else:
+                print("[relabel] No auth credentials found — keeping Ollama labels.")
+                print("[relabel] Set CLAUDE_CODE_OAUTH_TOKEN in .env or ANTHROPIC_BASE_URL to enable.")
+                summary["relabeled"] = 0
+
     finally:
         db.close()
 
@@ -545,6 +589,7 @@ def main() -> None:
     print(f"  PDFs matched       : {summary.get('pdf_matched', 0)}")
     print(f"  Papers embedded    : {summary.get('embedded', 0)}")
     print(f"  Clusters           : {summary.get('clusters', 0)}")
+    print(f"  Relabeled (Claude) : {summary.get('relabeled', 0)}")
     print(f"  Elapsed            : {t_elapsed:.1f}s")
     print()
 
