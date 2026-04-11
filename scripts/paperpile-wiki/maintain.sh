@@ -24,17 +24,13 @@ if [ $EC -ne 0 ]; then
 fi
 
 # Stage 2: Synthesize stale clusters
-# Note: ANTHROPIC_BASE_URL must be set by the caller (NanoClaw process or manual)
-if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
-    echo "[2/3] Synthesize stale clusters..."
-    $PYTHON "$SCRIPT_DIR/synthesize.py" --stale-only 2>&1
-    EC=$?
-    if [ $EC -ne 0 ]; then
-        echo "[2/3] WARNING: Synthesis had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
-    fi
-else
-    echo "[2/3] SKIPPED: ANTHROPIC_BASE_URL not set (synthesis requires credential proxy)"
+# synthesize.py reads CLAUDE_CODE_OAUTH_TOKEN from .env directly (no proxy needed)
+echo "[2/3] Synthesize stale clusters..."
+$PYTHON "$SCRIPT_DIR/synthesize.py" --stale-only 2>&1
+EC=$?
+if [ $EC -ne 0 ]; then
+    echo "[2/3] WARNING: Synthesis had errors (exit $EC)"
+    ERRORS=$((ERRORS + 1))
 fi
 
 # Stage 3: QMD re-index
