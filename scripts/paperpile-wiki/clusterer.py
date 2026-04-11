@@ -273,6 +273,134 @@ def _get_ollama_labeler():
 
 
 # ---------------------------------------------------------------------------
+# Claude-based relabeling (post-hoc, higher quality)
+# ---------------------------------------------------------------------------
+
+RELABEL_MODEL = "claude-haiku-4-5-20251001"
+
+_RELABEL_PROMPT = """\
+You are labeling topic clusters in an academic paper library for a neuroscience/genetics researcher.
+
+Below are {n} representative paper titles from a single topic cluster:
+
+{titles}
+
+Provide a concise 3-7 word label for this research topic. The label should:
+- Describe the *research area*, not a single paper
+- Use standard scientific terminology
+- NOT include journal names, author names, or methodology artifacts
+- Be title-cased
+
+Output ONLY the label, nothing else."""
+
+
+def _make_anthropic_client():
+    """Create an Anthropic client, supporting both proxy and direct OAuth.
+
+    Priority:
+      1. ANTHROPIC_BASE_URL set → use proxy (standard for containers)
+      2. CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_AUTH_TOKEN set → direct OAuth
+      3. ANTHROPIC_API_KEY set → direct API key (not recommended)
+    """
+    import os
+    import anthropic
+
+    if os.environ.get('ANTHROPIC_BASE_URL'):
+        return anthropic.Anthropic()
+
+    oauth_token = (
+        os.environ.get('CLAUDE_CODE_OAUTH_TOKEN')
+        or os.environ.get('ANTHROPIC_AUTH_TOKEN')
+    )
+    if oauth_token:
+        return anthropic.Anthropic(
+            auth_token=oauth_token,
+            default_headers={
+                'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+                'anthropic-dangerous-direct-browser-access': 'true',
+            },
+            default_query={'beta': 'true'},
+        )
+
+    return anthropic.Anthropic()
+
+
+def relabel_clusters_with_claude(db, dry_run: bool = False) -> list[dict]:
+    """Re-label all clusters using Claude Sonnet for higher-quality labels.
+
+    Reads representative paper titles per cluster from the DB, sends them
+    to Claude, and updates the cluster name and slug. Supports both proxy
+    mode (ANTHROPIC_BASE_URL) and direct OAuth (CLAUDE_CODE_OAUTH_TOKEN).
+
+    Args:
+        db:      Open sqlite3 connection (from db.get_db()).
+        dry_run: If True, print proposed labels without updating DB.
+
+    Returns:
+        List of dicts with keys: id, old_name, new_name.
+    """
+    import time
+
+    client = None if dry_run else _make_anthropic_client()
+    clusters = db.execute(
+        "SELECT id, name FROM clusters ORDER BY id"
+    ).fetchall()
+
+    results = []
+    for i, cluster in enumerate(clusters):
+        cid = cluster['id']
+        old_name = cluster['name']
+
+        # Get representative titles — sample up to 20 from different years
+        rows = db.execute(
+            "SELECT title, year FROM papers WHERE cluster_id = ? "
+            "ORDER BY year DESC, RANDOM() LIMIT 20",
+            (cid,),
+        ).fetchall()
+        titles = "\n".join(
+            f"- {r['title'].replace('{', '').replace('}', '')}" for r in rows
+        )
+
+        if dry_run:
+            new_name = f"<would call Claude with {len(rows)} titles>"
+        else:
+            prompt = _RELABEL_PROMPT.format(n=len(rows), titles=titles)
+            for attempt in range(3):
+                try:
+                    response = client.messages.create(
+                        model=RELABEL_MODEL,
+                        max_tokens=60,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    new_name = response.content[0].text.strip().strip('"').strip("'")
+                    break
+                except Exception as e:
+                    if attempt < 2 and '429' in str(e):
+                        time.sleep(2 ** attempt)
+                        continue
+                    raise
+
+        if dry_run:
+            print(f"  [{cid}] {old_name}")
+            print(f"    → {new_name}")
+        else:
+            new_slug = slugify(new_name)
+            db.execute(
+                "UPDATE clusters SET name = ?, slug = ?, "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') "
+                "WHERE id = ?",
+                (new_name, new_slug, cid),
+            )
+
+        results.append({"id": cid, "old_name": old_name, "new_name": new_name})
+
+    if not dry_run:
+        db.commit()
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Full BERTopic pipeline
 # ---------------------------------------------------------------------------
 
