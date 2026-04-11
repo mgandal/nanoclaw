@@ -116,7 +116,7 @@ class ExchangeAdapter:
                 "--since", str(since_days),
                 "--limit", "500",
                 "--mailbox", mailbox,
-            ], timeout=60)
+            ], timeout=120)
             stubs = parse_search_output(raw)
             for s in stubs:
                 s["_mailbox"] = mailbox
