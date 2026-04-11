@@ -307,7 +307,6 @@ def cluster_papers(
         - probs:       Array of topic probabilities, shape (n_papers,).
     """
     from bertopic import BERTopic
-    from bertopic.representation import KeyBERTInspired
     from sklearn.feature_extraction.text import CountVectorizer
     from bertopic.vectorizers import ClassTfidfTransformer
     from umap import UMAP
@@ -344,11 +343,15 @@ def cluster_papers(
     ctfidf_model = ClassTfidfTransformer(reduce_frequent_words=True)
 
     # --- Representation ---
-    representation_models = [KeyBERTInspired()]
+    # Note: KeyBERTInspired requires an embedding model to embed representative
+    # docs, but we use pre-computed SPECTER2 embeddings (no embedding_model set
+    # on BERTopic). So we skip KeyBERTInspired and use only the Ollama labeler
+    # (falling back to c-TF-IDF keywords if Ollama is unavailable).
+    representation_model = None
     if use_ollama:
         ollama_labeler = _get_ollama_labeler()
         if ollama_labeler is not None:
-            representation_models.append(ollama_labeler)
+            representation_model = ollama_labeler
 
     # --- BERTopic ---
     topic_model = BERTopic(
@@ -356,7 +359,7 @@ def cluster_papers(
         hdbscan_model=hdbscan_model,
         vectorizer_model=vectorizer_model,
         ctfidf_model=ctfidf_model,
-        representation_model=representation_models,
+        representation_model=representation_model,
         calculate_probabilities=True,
         verbose=True,
     )
