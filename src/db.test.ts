@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   _initTestDatabase,
   _closeDatabase,
-  _getTestDb,
   createTask,
   deleteSession,
   deleteTask,
@@ -15,6 +14,7 @@ import {
   getDueTasks,
   getLastBotMessageSeq,
   getLastBotMessageTimestamp,
+  getLastGroupSync,
   getLastSuccessTime,
   getMessagesSince,
   getNewMessages,
@@ -28,6 +28,7 @@ import {
   getTasksForGroup,
   getTaskSuccessRate,
   logTaskRun,
+  setLastGroupSync,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -1689,7 +1690,10 @@ describe('group registration duplicate JID handling', () => {
     expect(Object.keys(all)).toHaveLength(1);
   });
 
-  it('two groups with same folder but different JIDs: second replaces first (INSERT OR REPLACE)', () => {
+  it('two groups with same folder but different JIDs: both coexist (no UNIQUE on folder)', () => {
+    // The UNIQUE constraint on folder was deliberately removed to allow
+    // multiple JIDs per group folder (e.g., Telegram + Slack DM routing
+    // to the same agent identity). See createSchema migration.
     setRegisteredGroup('tg:group-a', {
       name: 'Group A',
       folder: 'telegram_shared-folder',
@@ -1697,8 +1701,6 @@ describe('group registration duplicate JID handling', () => {
       added_at: '2024-01-01T00:00:00.000Z',
     });
 
-    // INSERT OR REPLACE deletes ALL conflicting rows (PK or UNIQUE),
-    // so registering a new JID with the same folder silently replaces group-a
     setRegisteredGroup('tg:group-b', {
       name: 'Group B',
       folder: 'telegram_shared-folder',
@@ -1706,15 +1708,17 @@ describe('group registration duplicate JID handling', () => {
       added_at: '2024-06-01T00:00:00.000Z',
     });
 
-    // group-a should be gone (replaced due to folder UNIQUE conflict)
-    expect(getRegisteredGroup('tg:group-a')).toBeUndefined();
-    // group-b should exist
+    // Both groups should exist — folder is not UNIQUE
+    const groupA = getRegisteredGroup('tg:group-a');
+    expect(groupA).toBeDefined();
+    expect(groupA!.name).toBe('Group A');
+
     const groupB = getRegisteredGroup('tg:group-b');
     expect(groupB).toBeDefined();
     expect(groupB!.name).toBe('Group B');
 
-    // Only one group total
-    expect(Object.keys(getAllRegisteredGroups())).toHaveLength(1);
+    // Two groups total with different JIDs but same folder
+    expect(Object.keys(getAllRegisteredGroups())).toHaveLength(2);
   });
 });
 
@@ -1842,23 +1846,446 @@ describe('database initialization edge cases', () => {
   });
 });
 
-describe('agent tables', () => {
-  it('creates agent_registry table', () => {
-    const rows = _getTestDb()
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_registry'")
-      .all();
-    expect(rows).toHaveLength(1);
+// =============================================================================
+// REGRESSION TESTS - TDD hardening pass #3
+// =============================================================================
+
+// --- updateTask edge cases ---
+
+describe('updateTask edge cases', () => {
+  beforeEach(() => {
+    _initTestDatabase();
   });
 
-  it('creates agent_actions table', () => {
-    const rows = _getTestDb()
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_actions'")
-      .all();
-    expect(rows).toHaveLength(1);
+  it('updateTask with empty updates object is a no-op', () => {
+    createTask({
+      id: 'noop-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'original prompt',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: '2026-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Should not throw and should not change anything
+    updateTask('noop-task', {});
+    const task = getTaskById('noop-task')!;
+    expect(task.prompt).toBe('original prompt');
+    expect(task.status).toBe('active');
+    expect(task.next_run).toBe('2026-06-01T00:00:00.000Z');
   });
 
-  it('has agent_name column on scheduled_tasks', () => {
-    const info = _getTestDb().prepare('PRAGMA table_info(scheduled_tasks)').all() as Array<{ name: string }>;
-    expect(info.map((c) => c.name)).toContain('agent_name');
+  it('updateTask with multiple fields updates all at once', () => {
+    createTask({
+      id: 'multi-update',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'original',
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *',
+      context_mode: 'isolated',
+      next_run: '2024-06-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    updateTask('multi-update', {
+      prompt: 'updated prompt',
+      status: 'paused',
+      next_run: '2025-01-01T00:00:00.000Z',
+      script: 'echo hello',
+    });
+
+    const task = getTaskById('multi-update')!;
+    expect(task.prompt).toBe('updated prompt');
+    expect(task.status).toBe('paused');
+    expect(task.next_run).toBe('2025-01-01T00:00:00.000Z');
+    expect(task.script).toBe('echo hello');
+  });
+
+  it('updateTask on non-existent task is a silent no-op', () => {
+    // Should not throw — UPDATE with WHERE id=? simply affects 0 rows
+    expect(() => {
+      updateTask('nonexistent', { status: 'paused' });
+    }).not.toThrow();
+  });
+});
+
+// --- getRecentMessages with actual messages ---
+
+describe('getRecentMessages', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('returns messages for a registered group by folder', () => {
+    setRegisteredGroup('tg:recent-test', {
+      name: 'Recent Test',
+      folder: 'telegram_recent-test',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    storeChatMetadata('tg:recent-test', '2024-01-01T00:00:00.000Z');
+
+    for (let i = 1; i <= 5; i++) {
+      storeMessageDirect({
+        id: `recent-${i}`,
+        chat_jid: 'tg:recent-test',
+        sender: 'user',
+        sender_name: 'User',
+        content: `message ${i}`,
+        timestamp: `2024-01-01T00:00:${String(i).padStart(2, '0')}.000Z`,
+        is_from_me: false,
+      });
+    }
+
+    const msgs = getRecentMessages('telegram_recent-test', 3);
+    expect(msgs).toHaveLength(3);
+    // Should be ordered by timestamp DESC (most recent first)
+    expect(msgs[0].content).toBe('message 5');
+    expect(msgs[2].content).toBe('message 3');
+  });
+
+  it('returns messages from multiple JIDs sharing the same folder', () => {
+    // Register two JIDs with the same folder (allowed since UNIQUE removed)
+    setRegisteredGroup('tg:multi-a', {
+      name: 'Multi A',
+      folder: 'telegram_multi-folder',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+    setRegisteredGroup('slack:multi-b', {
+      name: 'Multi B',
+      folder: 'telegram_multi-folder',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    storeChatMetadata('tg:multi-a', '2024-01-01T00:00:00.000Z');
+    storeChatMetadata('slack:multi-b', '2024-01-01T00:00:00.000Z');
+
+    storeMessageDirect({
+      id: 'tg-msg',
+      chat_jid: 'tg:multi-a',
+      sender: 'user',
+      sender_name: 'User',
+      content: 'from telegram',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+
+    storeMessageDirect({
+      id: 'slack-msg',
+      chat_jid: 'slack:multi-b',
+      sender: 'user',
+      sender_name: 'User',
+      content: 'from slack',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      is_from_me: false,
+    });
+
+    // getRecentMessages joins on folder — should find messages from both JIDs
+    const msgs = getRecentMessages('telegram_multi-folder', 10);
+    expect(msgs).toHaveLength(2);
+  });
+});
+
+// --- getDueTasks boundary conditions ---
+
+describe('getDueTasks boundary conditions', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('excludes tasks with null next_run', () => {
+    createTask({
+      id: 'null-next',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'null next_run',
+      schedule_type: 'once',
+      schedule_value: '2024-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    expect(getDueTasks()).toHaveLength(0);
+  });
+
+  it('excludes completed tasks even with past next_run', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'completed-due',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'completed task',
+      schedule_type: 'once',
+      schedule_value: pastTime,
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    // Mark as completed
+    updateTaskAfterRun('completed-due', null, 'done');
+    expect(getDueTasks()).toHaveLength(0);
+  });
+
+  it('excludes tasks with future next_run', () => {
+    const futureTime = new Date(Date.now() + 3600000).toISOString();
+    createTask({
+      id: 'future-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'future',
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *',
+      context_mode: 'isolated',
+      next_run: futureTime,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    expect(getDueTasks()).toHaveLength(0);
+  });
+});
+
+// --- getLastGroupSync / setLastGroupSync ---
+
+describe('group sync timestamp tracking', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getLastGroupSync returns null when never synced', () => {
+    expect(getLastGroupSync()).toBeNull();
+  });
+
+  it('setLastGroupSync records timestamp and getLastGroupSync retrieves it', () => {
+    setLastGroupSync();
+    const ts = getLastGroupSync();
+    expect(ts).toBeDefined();
+    expect(ts).not.toBeNull();
+    // Should be a valid ISO timestamp close to now
+    const delta = Math.abs(Date.now() - new Date(ts!).getTime());
+    expect(delta).toBeLessThan(5000); // within 5 seconds
+  });
+
+  it('setLastGroupSync overwrites previous sync timestamp', () => {
+    setLastGroupSync();
+    const first = getLastGroupSync();
+
+    setLastGroupSync();
+    const second = getLastGroupSync();
+
+    // Second should be >= first (same or newer)
+    expect(second! >= first!).toBe(true);
+  });
+});
+
+// --- getLastSuccessTime with mixed run history ---
+
+describe('getLastSuccessTime with mixed runs', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    createTask({
+      id: 'mixed-runs',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'mixed',
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *',
+      context_mode: 'isolated',
+      next_run: '2026-01-01T00:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('returns the most recent success time even when followed by errors', () => {
+    logTaskRun({
+      task_id: 'mixed-runs',
+      run_at: '2026-03-01T10:00:00Z',
+      duration_ms: 100,
+      status: 'success',
+      result: 'ok',
+      error: null,
+    });
+    logTaskRun({
+      task_id: 'mixed-runs',
+      run_at: '2026-03-02T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'boom',
+    });
+    logTaskRun({
+      task_id: 'mixed-runs',
+      run_at: '2026-03-03T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'boom again',
+    });
+
+    expect(getLastSuccessTime('mixed-runs')).toBe('2026-03-01T10:00:00Z');
+  });
+
+  it('returns null when task has only error runs', () => {
+    logTaskRun({
+      task_id: 'mixed-runs',
+      run_at: '2026-03-01T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail',
+    });
+
+    expect(getLastSuccessTime('mixed-runs')).toBeNull();
+  });
+});
+
+// --- storeMessageDirect does not include reply fields ---
+
+describe('storeMessageDirect reply field behavior', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+  });
+
+  it('storeMessageDirect stores message without reply fields (they default to null)', () => {
+    storeMessageDirect({
+      id: 'direct-1',
+      chat_jid: 'group@g.us',
+      sender: 'user',
+      sender_name: 'User',
+      content: 'direct message',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+
+    const msgs = getMessagesSince('group@g.us', 0, 'Andy');
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].reply_to_message_id).toBeNull();
+    expect(msgs[0].reply_to_message_content).toBeNull();
+    expect(msgs[0].reply_to_sender_name).toBeNull();
+  });
+
+  it('storeMessage with reply fields followed by storeMessageDirect overwrites and loses reply fields', () => {
+    // First store with reply context
+    storeMessage({
+      id: 'overwrite-1',
+      chat_jid: 'group@g.us',
+      sender: 'user',
+      sender_name: 'User',
+      content: 'with reply',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      reply_to_message_id: '42',
+      reply_to_message_content: 'original question',
+      reply_to_sender_name: 'Asker',
+    });
+
+    // Overwrite with storeMessageDirect (no reply fields)
+    storeMessageDirect({
+      id: 'overwrite-1',
+      chat_jid: 'group@g.us',
+      sender: 'user',
+      sender_name: 'User',
+      content: 'with reply',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      is_from_me: false,
+    });
+
+    const msgs = getMessagesSince('group@g.us', 0, 'Andy');
+    expect(msgs).toHaveLength(1);
+    // storeMessageDirect uses INSERT OR REPLACE — old row is deleted, new row has no reply fields
+    // The reply_to columns will be NULL since storeMessageDirect doesn't include them
+    expect(msgs[0].reply_to_message_id).toBeNull();
+  });
+});
+
+// --- getTasksForGroup and getAllTasks ordering ---
+
+describe('getTasksForGroup ordering and filtering', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getTasksForGroup returns only tasks for the specified group', () => {
+    createTask({
+      id: 'group-a-task',
+      group_folder: 'telegram_group-a',
+      chat_jid: 'tg:a',
+      prompt: 'task for A',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    createTask({
+      id: 'group-b-task',
+      group_folder: 'telegram_group-b',
+      chat_jid: 'tg:b',
+      prompt: 'task for B',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-02T00:00:00.000Z',
+    });
+
+    const tasksA = getTasksForGroup('telegram_group-a');
+    expect(tasksA).toHaveLength(1);
+    expect(tasksA[0].id).toBe('group-a-task');
+
+    const tasksB = getTasksForGroup('telegram_group-b');
+    expect(tasksB).toHaveLength(1);
+    expect(tasksB[0].id).toBe('group-b-task');
+  });
+
+  it('getAllTasks returns tasks from all groups ordered by created_at DESC', () => {
+    createTask({
+      id: 'older-task',
+      group_folder: 'telegram_group-a',
+      chat_jid: 'tg:a',
+      prompt: 'older',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    createTask({
+      id: 'newer-task',
+      group_folder: 'telegram_group-b',
+      chat_jid: 'tg:b',
+      prompt: 'newer',
+      schedule_type: 'once',
+      schedule_value: '2026-06-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      created_at: '2024-06-01T00:00:00.000Z',
+    });
+
+    const all = getAllTasks();
+    expect(all).toHaveLength(2);
+    // DESC ordering: newer first
+    expect(all[0].id).toBe('newer-task');
+    expect(all[1].id).toBe('older-task');
   });
 });

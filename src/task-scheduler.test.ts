@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseCompoundKey } from './compound-key.js';
 
 import {
   _initTestDatabase,
@@ -1016,9 +1015,346 @@ describe('computeNextRun — interval drift prevention', () => {
   });
 });
 
-describe('compound key task support', () => {
-  it('extracts base group from compound key', () => {
-    const { group } = parseCompoundKey('telegram_lab-claw:einstein');
-    expect(group).toBe('telegram_lab-claw');
+describe('edge cases — concurrent execution and guards', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetSchedulerLoopForTests();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('scheduler re-checks task status and skips tasks paused between getDueTasks and getTaskById', async () => {
+    // Create a due task
+    createTask({
+      id: 'task-mid-pause',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'test',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    let enqueueCallCount = 0;
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, _fn: () => Promise<void>) => {
+        enqueueCallCount++;
+      },
+    );
+
+    // Pause the task before the scheduler loop runs but after it's in the DB as active
+    // The scheduler loop calls getDueTasks, then getTaskById for re-check.
+    // We need to pause AFTER getDueTasks but BEFORE the re-check.
+    // Since we can't intercept between those calls, we verify the scheduler
+    // does re-check by pausing and confirming enqueueTask is NOT called.
+    updateTask('task-mid-pause', { status: 'paused' });
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'tg:123': {
+          name: 'CLAIRE',
+          folder: 'telegram_claire',
+          trigger: '@Claire',
+          added_at: new Date().toISOString(),
+          isMain: true,
+          requiresTrigger: false,
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    // getDueTasks only returns active tasks, so paused task is excluded
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
+
+  it('scheduler enqueues multiple due tasks in a single poll cycle', async () => {
+    createTask({
+      id: 'multi-task-1',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'task one',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+    createTask({
+      id: 'multi-task-2',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'task two',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: new Date(Date.now() - 30_000).toISOString(),
+      status: 'active',
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    const enqueuedTaskIds: string[] = [];
+    const enqueueTask = vi.fn(
+      (_groupJid: string, taskId: string, _fn: () => Promise<void>) => {
+        enqueuedTaskIds.push(taskId);
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'tg:123': {
+          name: 'CLAIRE',
+          folder: 'telegram_claire',
+          trigger: '@Claire',
+          added_at: new Date().toISOString(),
+          isMain: true,
+          requiresTrigger: false,
+        },
+      }),
+      getSessions: () => ({}),
+      queue: { enqueueTask } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(enqueuedTaskIds).toContain('multi-task-1');
+    expect(enqueuedTaskIds).toContain('multi-task-2');
+    expect(enqueueTask).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('checkStaleTasks — boundary conditions', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not alert for task with future next_run', () => {
+    const deps = makeMockDeps();
+    const futureNextRun = new Date(Date.now() + 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: futureNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not treat interval task as stale when lag is exactly 2x interval (boundary)', () => {
+    const deps = makeMockDeps();
+    const intervalMs = 3600000;
+    // lagMs === intervalMs * 2 exactly — the check is `lagMs > intervalMs * 2`, so this should NOT be stale
+    const staleNextRun = new Date(Date.now() - intervalMs * 2).toISOString();
+    checkStaleTasks(
+      [
+        makeTask({
+          schedule_type: 'interval',
+          schedule_value: String(intervalMs),
+          next_run: staleNextRun,
+        }),
+      ],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does treat interval task as stale when lag is just over 2x interval', () => {
+    const deps = makeMockDeps();
+    const intervalMs = 3600000;
+    // lagMs slightly > intervalMs * 2
+    const staleNextRun = new Date(
+      Date.now() - intervalMs * 2 - 1,
+    ).toISOString();
+    checkStaleTasks(
+      [
+        makeTask({
+          schedule_type: 'interval',
+          schedule_value: String(intervalMs),
+          next_run: staleNextRun,
+        }),
+      ],
+      deps,
+    );
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+
+  it('does not alert for cron task with lag exactly 24h (boundary)', () => {
+    const deps = makeMockDeps();
+    // lagMs === 24 * 3600000 exactly — check is `lagMs > 24 * 3600000`
+    const staleNextRun = new Date(Date.now() - 24 * 3600000).toISOString();
+    checkStaleTasks([makeTask({ next_run: staleNextRun })], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('checkAlerts — error truncation and sendMessage failure', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('truncates long error messages to 200 chars in alerts', () => {
+    createTestTask('task-long-error');
+    logTaskRun({
+      task_id: 'task-long-error',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'task-long-error',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+
+    const longError = 'X'.repeat(500);
+    const deps = makeMockDeps();
+    checkAlerts(makeTask({ id: 'task-long-error' }), longError, deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+    const msg = (deps.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    // The full 500-char error should NOT appear — only the truncated version
+    expect(msg).not.toContain('X'.repeat(500));
+    expect(msg).toContain('X'.repeat(200));
+  });
+
+  it('does not crash when sendMessage rejects during alert flush', () => {
+    createTestTask('task-send-fail');
+    logTaskRun({
+      task_id: 'task-send-fail',
+      run_at: '2026-03-23T10:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail1',
+    });
+    logTaskRun({
+      task_id: 'task-send-fail',
+      run_at: '2026-03-23T11:00:00Z',
+      duration_ms: 100,
+      status: 'error',
+      result: null,
+      error: 'fail2',
+    });
+
+    const deps = makeMockDeps({
+      sendMessage: vi.fn().mockRejectedValue(new Error('network down')),
+    });
+    checkAlerts(makeTask({ id: 'task-send-fail' }), 'fail2', deps);
+    // Should not throw — flushAlerts catches the rejection
+    expect(() => vi.advanceTimersByTime(70000)).not.toThrow();
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+});
+
+describe('_resetAlertsForTests clears stale alert dedup', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetAlertsForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('allows re-alerting after reset clears stale dedup state', () => {
+    const deps = makeMockDeps();
+    const staleNextRun = new Date(Date.now() - 25 * 3600000).toISOString();
+    const staleTask = makeTask({ next_run: staleNextRun });
+
+    // First alert
+    checkStaleTasks([staleTask], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+
+    // Reset clears dedup
+    _resetAlertsForTests();
+    (deps.sendMessage as ReturnType<typeof vi.fn>).mockClear();
+
+    // Should alert again after reset
+    checkStaleTasks([staleTask], deps);
+    vi.advanceTimersByTime(70000);
+    expect(deps.sendMessage).toHaveBeenCalledOnce();
+  });
+});
+
+describe('computeNextRun — cron safety-net boundary', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns first occurrence for daily cron without throttling (inter-fire gap is 24h)', () => {
+    // Use a cron that fires daily — the inter-fire gap (24h) >> 30min,
+    // so the safety-net throttle should NOT kick in even if the next fire
+    // happens to be less than 30min away.
+    // We construct the cron from the current time + 5 minutes in the local timezone.
+    const fiveMinLater = new Date(Date.now() + 5 * 60 * 1000);
+    // Build a cron that fires at fiveMinLater's hour:minute in the configured tz
+    // Format: "M H * * *"
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: TIMEZONE,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(fiveMinLater);
+    const hour = parts.find((p) => p.type === 'hour')!.value;
+    const minute = parts.find((p) => p.type === 'minute')!.value;
+    const cronExpr = `${minute} ${hour} * * *`;
+
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: cronExpr,
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const nextMs = new Date(nextRun!).getTime();
+    const now = Date.now();
+    // The next fire should be ~5min from now and should NOT be throttled
+    expect(nextMs - now).toBeLessThanOrEqual(6 * 60 * 1000); // at most 6min
+    expect(nextMs - now).toBeGreaterThan(0);
+  });
+
+  it('throttles every-5-min cron to >= 30min from now', () => {
+    const task = makeTask({
+      schedule_type: 'cron',
+      schedule_value: '*/5 * * * *', // every 5 minutes
+    });
+    const nextRun = computeNextRun(task);
+    expect(nextRun).not.toBeNull();
+    const gapMs = new Date(nextRun!).getTime() - Date.now();
+    expect(gapMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
   });
 });

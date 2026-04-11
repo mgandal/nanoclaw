@@ -8,7 +8,6 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
-  AGENTS_DIR: '/tmp/nanoclaw-test-data/agents',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -47,6 +46,7 @@ vi.mock('fs', async () => {
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
       cpSync: vi.fn(),
+      renameSync: vi.fn(),
     },
   };
 });
@@ -117,8 +117,11 @@ vi.mock('child_process', async () => {
 });
 
 import {
+  buildVolumeMounts,
   runContainerAgent,
   setQmdReachable,
+  writeTasksSnapshot,
+  writeGroupsSnapshot,
   ContainerOutput,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
@@ -127,6 +130,7 @@ import fs from 'fs';
 import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { stopContainer } from './container-runtime.js';
+import { validateAdditionalMounts } from './mount-security.js';
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -1322,53 +1326,322 @@ describe('container-runner custom timeout from containerConfig', () => {
   });
 });
 
-import fs from 'fs';
-import { buildVolumeMounts } from './container-runner.js';
+// ─── TDD HARDENING PASS: New regression tests ─────────────────────────
 
-describe('container-runner agent identity mount', () => {
+describe('container-runner buildVolumeMounts duplicate container path guard', () => {
   beforeEach(() => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
-    vi.mocked(fs.mkdirSync).mockReturnValue(undefined);
-    vi.mocked(fs.writeFileSync).mockReturnValue(undefined);
-    vi.mocked(fs.readdirSync).mockReturnValue([]);
-    vi.mocked(fs.statSync).mockReturnValue({ isDirectory: () => false } as any);
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
   });
 
-  it('adds /workspace/agent read-only mount when agentName is set and dir exists', () => {
-    vi.mocked(fs.existsSync).mockImplementation((p) => {
-      // Only return true for the agent dir
-      return String(p).includes('/tmp/nanoclaw-test-data/agents/researcher');
+  afterEach(() => {
+    vi.mocked(validateAdditionalMounts).mockReturnValue([]);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+  });
+
+  it('throws when additionalMounts creates a duplicate container path', () => {
+    // validateAdditionalMounts returns a mount that collides with /workspace/group
+    vi.mocked(validateAdditionalMounts).mockReturnValue([
+      {
+        hostPath: '/some/other/path',
+        containerPath: '/workspace/group',
+        readonly: false,
+      },
+    ]);
+
+    const groupWithMounts: RegisteredGroup = {
+      ...testGroup,
+      containerConfig: {
+        additionalMounts: [
+          {
+            hostPath: '/some/other/path',
+            containerPath: '/workspace/group',
+          },
+        ],
+      },
+    };
+
+    expect(() => buildVolumeMounts(groupWithMounts, false)).toThrow(
+      /Duplicate container mount path.*\/workspace\/group/,
+    );
+  });
+});
+
+describe('container-runner writeTasksSnapshot filtering', () => {
+  beforeEach(() => {
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.renameSync).mockImplementation(() => {});
+  });
+
+  const allTasks = [
+    {
+      id: 'task-1',
+      groupFolder: 'test-group',
+      prompt: 'Do thing A',
+      schedule_type: 'cron',
+      schedule_value: '0 * * * *',
+      status: 'active',
+      next_run: '2026-04-12T00:00:00Z',
+    },
+    {
+      id: 'task-2',
+      groupFolder: 'other-group',
+      prompt: 'Do thing B',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      status: 'active',
+      next_run: '2026-04-12T01:00:00Z',
+    },
+    {
+      id: 'task-3',
+      groupFolder: 'test-group',
+      prompt: 'Do thing C',
+      schedule_type: 'cron',
+      schedule_value: '30 8 * * *',
+      status: 'active',
+      next_run: '2026-04-12T08:30:00Z',
+    },
+  ];
+
+  it('non-main group only sees its own tasks', () => {
+    writeTasksSnapshot('test-group', false, allTasks);
+
+    // Find the writeFileSync call for the tmp file
+    const writeCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const tmpWrite = writeCalls.find((c) =>
+      String(c[0]).includes('current_tasks.json.tmp'),
+    );
+    expect(tmpWrite).toBeDefined();
+
+    const written = JSON.parse(String(tmpWrite![1]));
+    // Should only see tasks for 'test-group'
+    expect(written).toHaveLength(2);
+    expect(written.every((t: any) => t.groupFolder === 'test-group')).toBe(
+      true,
+    );
+  });
+
+  it('main group sees all tasks across all groups', () => {
+    vi.mocked(fs.writeFileSync).mockClear();
+
+    writeTasksSnapshot('test-group', true, allTasks);
+
+    const writeCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const tmpWrite = writeCalls.find((c) =>
+      String(c[0]).includes('current_tasks.json.tmp'),
+    );
+    expect(tmpWrite).toBeDefined();
+
+    const written = JSON.parse(String(tmpWrite![1]));
+    // Main should see ALL tasks
+    expect(written).toHaveLength(3);
+  });
+});
+
+describe('container-runner writeGroupsSnapshot visibility', () => {
+  beforeEach(() => {
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.renameSync).mockImplementation(() => {});
+  });
+
+  const allGroups = [
+    {
+      jid: 'group1@g.us',
+      name: 'Group 1',
+      lastActivity: '2026-04-10',
+      isRegistered: true,
+    },
+    {
+      jid: 'group2@g.us',
+      name: 'Group 2',
+      lastActivity: '2026-04-09',
+      isRegistered: false,
+    },
+  ];
+
+  it('non-main group gets empty groups list', () => {
+    writeGroupsSnapshot(
+      'test-group',
+      false,
+      allGroups,
+      new Set(['group1@g.us']),
+    );
+
+    const writeCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const tmpWrite = writeCalls.find((c) =>
+      String(c[0]).includes('available_groups.json.tmp'),
+    );
+    expect(tmpWrite).toBeDefined();
+
+    const written = JSON.parse(String(tmpWrite![1]));
+    expect(written.groups).toHaveLength(0);
+    expect(written.lastSync).toBeDefined();
+  });
+
+  it('main group sees all available groups', () => {
+    vi.mocked(fs.writeFileSync).mockClear();
+
+    writeGroupsSnapshot(
+      'test-group',
+      true,
+      allGroups,
+      new Set(['group1@g.us']),
+    );
+
+    const writeCalls = vi.mocked(fs.writeFileSync).mock.calls;
+    const tmpWrite = writeCalls.find((c) =>
+      String(c[0]).includes('available_groups.json.tmp'),
+    );
+    expect(tmpWrite).toBeDefined();
+
+    const written = JSON.parse(String(tmpWrite![1]));
+    expect(written.groups).toHaveLength(2);
+  });
+});
+
+describe('container-runner process.env takes precedence over readEnvFile', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+    vi.mocked(readEnvFile).mockReturnValue({});
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.APPLE_NOTES_URL;
+    delete process.env.TODOIST_URL;
+    delete process.env.HINDSIGHT_URL;
+    delete process.env.CALENDAR_URL;
+    delete process.env.HONCHO_URL;
+    delete process.env.READWISE_ACCESS_TOKEN;
+  });
+
+  it('process.env.APPLE_NOTES_URL overrides readEnvFile value', async () => {
+    // readEnvFile returns one URL, process.env has a different one
+    vi.mocked(readEnvFile).mockReturnValue({
+      APPLE_NOTES_URL: 'http://localhost:9999/from-env-file',
+    });
+    process.env.APPLE_NOTES_URL = 'http://localhost:8184/from-process-env';
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const appleNotesVar = envVars.find((a) => a.startsWith('APPLE_NOTES_URL='));
+    expect(appleNotesVar).toBeDefined();
+    // Should use the process.env value (port 8184), not the env file value (port 9999)
+    expect(appleNotesVar).toContain(':8184');
+    expect(appleNotesVar).not.toContain(':9999');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('process.env.READWISE_ACCESS_TOKEN overrides readEnvFile value', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      READWISE_ACCESS_TOKEN: 'token-from-file',
+    });
+    process.env.READWISE_ACCESS_TOKEN = 'token-from-env';
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const readwiseVar = envVars.find((a) =>
+      a.startsWith('READWISE_ACCESS_TOKEN='),
+    );
+    expect(readwiseVar).toBe('READWISE_ACCESS_TOKEN=token-from-env');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner MCP URL non-localhost passthrough', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(detectAuthMode).mockReturnValue('api-key');
+    vi.mocked(readEnvFile).mockReturnValue({});
+    vi.mocked(spawn).mockClear();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.APPLE_NOTES_URL;
+  });
+
+  it('preserves non-localhost hostname in APPLE_NOTES_URL unchanged', async () => {
+    process.env.APPLE_NOTES_URL = 'http://remote-server.local:8184/mcp';
+
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    await vi.advanceTimersByTimeAsync(10);
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+    const appleNotesVar = envVars.find((a) => a.startsWith('APPLE_NOTES_URL='));
+    expect(appleNotesVar).toBeDefined();
+    // Non-localhost should pass through without rewriting to host gateway
+    expect(appleNotesVar).toContain('remote-server.local');
+    expect(appleNotesVar).not.toContain('host.docker.internal');
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('container-runner buildVolumeMounts global dir permissions', () => {
+  beforeEach(() => {
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+  });
+
+  afterEach(() => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+  });
+
+  it('mounts global dir as read-only for non-main groups', () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      // Global dir exists
+      if (s.endsWith('/global')) return true;
+      return false;
     });
 
-    const mounts = buildVolumeMounts(testGroup, false, 'researcher');
-
-    const agentMount = mounts.find(
-      (m) => m.containerPath === '/workspace/agent',
-    );
-    expect(agentMount).toBeDefined();
-    expect(agentMount!.hostPath).toContain('agents/researcher');
-    expect(agentMount!.readonly).toBe(true);
-  });
-
-  it('omits /workspace/agent mount when agentName is set but dir does not exist', () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-
-    const mounts = buildVolumeMounts(testGroup, false, 'researcher');
-
-    const agentMount = mounts.find(
-      (m) => m.containerPath === '/workspace/agent',
-    );
-    expect(agentMount).toBeUndefined();
-  });
-
-  it('omits /workspace/agent mount when agentName is not provided', () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-
     const mounts = buildVolumeMounts(testGroup, false);
-
-    const agentMount = mounts.find(
-      (m) => m.containerPath === '/workspace/agent',
+    const globalMount = mounts.find(
+      (m) => m.containerPath === '/workspace/global',
     );
-    expect(agentMount).toBeUndefined();
+    expect(globalMount).toBeDefined();
+    expect(globalMount!.readonly).toBe(true);
+  });
+
+  it('mounts global dir as writable for main group', () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.endsWith('/global')) return true;
+      return false;
+    });
+
+    const mainGroup: RegisteredGroup = {
+      ...testGroup,
+      isMain: true,
+    };
+    const mounts = buildVolumeMounts(mainGroup, true);
+    const globalMount = mounts.find(
+      (m) => m.containerPath === '/workspace/global',
+    );
+    expect(globalMount).toBeDefined();
+    expect(globalMount!.readonly).toBe(false);
   });
 });

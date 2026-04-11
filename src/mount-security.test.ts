@@ -903,3 +903,239 @@ describe('validateMount — empty allowedRoots array', () => {
     expect(result.reason).toContain('not under any allowed root');
   });
 });
+
+// ==================== TDD HARDENING: SECURITY EDGE CASES ====================
+
+describe('validateMount — null byte injection', () => {
+  it('rejects host path containing null bytes', () => {
+    const allowedRoot = createTempMountDir('null-root');
+    createTempMountDir('null-root/safe');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Null byte injection: attempt to truncate path resolution
+    const mount: AdditionalMount = {
+      hostPath: path.join(allowedRoot, 'safe\x00../../etc/passwd'),
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    // Should either reject (path doesn't exist after null byte handling) or
+    // resolve safely under the allowed root. Must NOT allow access outside root.
+    if (result.allowed) {
+      // If allowed, the realHostPath must still be under the allowed root
+      expect(result.realHostPath!.startsWith(fs.realpathSync(allowedRoot))).toBe(true);
+    } else {
+      // Rejected is the safe outcome — path with null byte doesn't resolve
+      expect(result.allowed).toBe(false);
+    }
+    // If realHostPath is set, it must not point to /etc/passwd
+    if (result.realHostPath) {
+      expect(result.realHostPath).not.toContain('/etc/passwd');
+    }
+  });
+
+  it('rejects container path containing null bytes', () => {
+    const allowedRoot = createTempMountDir('null-root');
+    const subdir = createTempMountDir('null-root/safe');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = {
+      hostPath: subdir,
+      containerPath: 'safe\x00../../etc',
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    // Container path with null byte should be rejected as it contains
+    // dangerous characters that could confuse container runtimes
+    // Current behavior: the ".." check catches it since the full string contains ".."
+    expect(result.allowed).toBe(false);
+  });
+});
+
+describe('validateMount — control characters in container path', () => {
+  it('rejects container path with newline characters', () => {
+    const allowedRoot = createTempMountDir('ctrl-root');
+    const subdir = createTempMountDir('ctrl-root/safe');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // Newline in container path could break -v flag parsing in Docker/container CLI
+    const mount: AdditionalMount = {
+      hostPath: subdir,
+      containerPath: 'safe\n--privileged',
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    // This SHOULD be rejected — newlines in container paths are dangerous
+    // They could inject additional flags into the container command line
+    expect(result.allowed).toBe(false);
+  });
+
+  it('rejects container path with tab characters', () => {
+    const allowedRoot = createTempMountDir('ctrl-root');
+    const subdir = createTempMountDir('ctrl-root/safe');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = {
+      hostPath: subdir,
+      containerPath: 'safe\t--privileged',
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+  });
+});
+
+describe('validateMount — blocked pattern substring matching', () => {
+  it('blocks directory whose name contains .env as substring (e.g. project.env.local)', () => {
+    const allowedRoot = createTempMountDir('substr-root');
+    const envDir = createTempMountDir('substr-root/project.env.local');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    // "project.env.local" contains ".env" — current implementation blocks via substring match
+    // This is security-correct (err on the side of blocking)
+    const mount: AdditionalMount = { hostPath: envDir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('.env');
+  });
+
+  it('blocks path where blocked pattern appears only in full path (not individual components)', () => {
+    // Test the full-path check on line 187: realPath.includes(pattern)
+    // This catches cases where the pattern spans across path separators
+    const allowedRoot = createTempMountDir('fullpath-root');
+    const dir = createTempMountDir('fullpath-root/id_rsa_backups');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: dir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('id_rsa');
+  });
+});
+
+describe('validateMount — container path single dot escape', () => {
+  it('rejects container path that is exactly ".."', () => {
+    const allowedRoot = createTempMountDir('dot-root');
+    const subdir = createTempMountDir('dot-root/safe');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = {
+      hostPath: subdir,
+      containerPath: '..',
+      readonly: true,
+    };
+    const result = validateMount(mount, true, allowlistPath);
+    expect(result.allowed).toBe(false);
+  });
+});
+
+describe('validateMount — blocked pattern in allowed root path itself', () => {
+  it('blocks mount when allowed root path contains blocked pattern', () => {
+    // Edge case: allowed root is "/tmp/xxx/credentials-safe" which contains "credentials"
+    // Files under this root should be blocked because the real path contains the pattern
+    const allowedRoot = createTempMountDir('credentials-safe');
+    const subdir = createTempMountDir('credentials-safe/data');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: subdir, readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    // The real path will contain "credentials" from the root dir name,
+    // so blocked pattern check will trigger. This is conservative but safe.
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('credentials');
+  });
+});
+
+describe('validateMount — empty hostPath', () => {
+  it('rejects mount with empty string hostPath', () => {
+    const allowedRoot = createTempMountDir('empty-root');
+
+    writeAllowlist({
+      allowedRoots: [
+        { path: allowedRoot, allowReadWrite: true, description: 'test' },
+      ],
+      blockedPatterns: [],
+      nonMainReadOnly: false,
+    });
+
+    const mount: AdditionalMount = { hostPath: '', readonly: true };
+    const result = validateMount(mount, true, allowlistPath);
+    // Empty hostPath should be rejected — either it doesn't exist or resolves to cwd
+    expect(result.allowed).toBe(false);
+  });
+});
+
+describe('loadMountAllowlist — malformed allowlist edge cases', () => {
+  it('returns null for empty JSON object (missing all required fields)', () => {
+    fs.writeFileSync(allowlistPath, '{}');
+    const result = loadMountAllowlist(allowlistPath);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for JSON array instead of object', () => {
+    fs.writeFileSync(allowlistPath, '[]');
+    const result = loadMountAllowlist(allowlistPath);
+    expect(result).toBeNull();
+  });
+
+  it('returns null for empty file', () => {
+    fs.writeFileSync(allowlistPath, '');
+    const result = loadMountAllowlist(allowlistPath);
+    expect(result).toBeNull();
+  });
+});

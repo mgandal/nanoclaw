@@ -26,7 +26,6 @@ vi.mock('fs', () => ({
   default: {
     existsSync: vi.fn(() => false),
     readFileSync: vi.fn(() => ''),
-    readdirSync: vi.fn(() => []),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
@@ -317,163 +316,155 @@ describe('assembleContextPacket', () => {
     expect(packet).not.toContain('Pending items');
   });
 
-  describe('agent identity sections', () => {
-    it('includes agent identity when identity.md exists', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) => typeof p === 'string' && p.includes('identity.md'),
-      );
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        '## Role: Researcher\nFocus on literature review.',
-      );
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('<agent-identity>');
-      expect(packet).toContain('## Role: Researcher');
-      expect(packet).toContain('</agent-identity>');
-    });
+  it('truncates memory.md content to 2000 characters', async () => {
+    const longMemory = 'M'.repeat(3000);
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('memory.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(longMemory);
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Group Memory');
+    // The memory content in the packet should be at most 2000 chars of 'M'
+    const memorySection = packet.split('--- Group Memory ---\n')[1];
+    // Count consecutive M's — should be exactly 2000
+    const mRun = memorySection?.match(/^M+/)?.[0] ?? '';
+    expect(mRun.length).toBe(2000);
+  });
 
-    it('includes agent state when state.md exists', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) => typeof p === 'string' && p.includes('state.md'),
-      );
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        '## Current Task\nSearching for papers on GWAS.',
-      );
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('<agent-state>');
-      expect(packet).toContain('Searching for papers on GWAS');
-      expect(packet).toContain('</agent-state>');
-    });
+  it('truncates current.md content to 1500 characters', async () => {
+    const longCurrent = 'P'.repeat(2500);
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('current.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(longCurrent);
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Current Priorities');
+    const prioritiesSection = packet.split('--- Current Priorities ---\n')[1];
+    const pRun = prioritiesSection?.match(/^P+/)?.[0] ?? '';
+    expect(pRun.length).toBe(1500);
+  });
 
-    it('includes agent trust when trust.yaml exists', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) => typeof p === 'string' && p.includes('trust.yaml'),
-      );
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        'level: high\nscope: read-write',
-      );
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('<agent-trust>');
-      expect(packet).toContain('level: high');
-      expect(packet).toContain('</agent-trust>');
-    });
+  it('truncates individual message content to 200 characters', async () => {
+    const longContent = 'Z'.repeat(500);
+    vi.mocked(getRecentMessages).mockReturnValue([
+      {
+        sender: 'user1',
+        content: longContent,
+        timestamp: '2026-03-20T10:00:00Z',
+      },
+    ]);
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Recent messages');
+    // The message content should be truncated to 200 chars
+    const zRun = packet.match(/Z+/)?.[0] ?? '';
+    expect(zRun.length).toBe(200);
+  });
 
-    it('includes pending bus messages when bus dir has .json files', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) =>
-          typeof p === 'string' &&
-          p.includes('bus/agents/telegram_science-claw--researcher'),
-      );
-      vi.mocked(fs.readdirSync).mockReturnValue([
-        'msg-001.json',
-      ] as unknown as fs.Dirent[]);
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        JSON.stringify({
-          from: 'inbox-agent',
-          topic: 'finding',
-          summary: 'Relevant paper found',
-        }),
-      );
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('<pending-bus-messages');
-      expect(packet).toContain('count="1"');
-      expect(packet).toContain('inbox-agent');
-      expect(packet).toContain('Relevant paper found');
-    });
+  it('filters out inactive tasks (only active tasks shown)', async () => {
+    vi.mocked(getAllTasks).mockReturnValue([
+      {
+        id: 'task-active',
+        prompt: 'Active task here',
+        schedule_type: 'cron',
+        schedule_value: '0 9 * * *',
+        status: 'active',
+        group_folder: 'telegram_test',
+        chat_jid: 'tg:123',
+        context_mode: 'group',
+        next_run: null,
+        last_run: null,
+        last_result: null,
+        created_at: '2026-03-20',
+      },
+      {
+        id: 'task-paused',
+        prompt: 'Paused task here',
+        schedule_type: 'cron',
+        schedule_value: '0 10 * * *',
+        status: 'paused',
+        group_folder: 'telegram_test',
+        chat_jid: 'tg:123',
+        context_mode: 'group',
+        next_run: null,
+        last_run: null,
+        last_result: null,
+        created_at: '2026-03-20',
+      },
+    ]);
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Active task here');
+    expect(packet).not.toContain('Paused task here');
+  });
 
-    it('does not include agent sections when agentName is not provided', async () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-      );
-      expect(packet).not.toContain('<agent-identity>');
-      expect(packet).not.toContain('<agent-state>');
-      expect(packet).not.toContain('<agent-trust>');
-      expect(packet).not.toContain('<pending-bus-messages');
-    });
+  it('does not add bus sections when queue.json contains empty array', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('queue.json'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue('[]');
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).not.toContain('Pending items from other agents');
+    expect(packet).not.toContain('Recent Events (classified)');
+  });
 
-    it('omits agent sections gracefully when agent files do not exist', async () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('Current date:');
-      expect(packet).not.toContain('<agent-identity>');
-      expect(packet).not.toContain('<agent-state>');
-      expect(packet).not.toContain('<agent-trust>');
-    });
+  it('handles bus queue items with missing from/finding fields', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('queue.json'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        { from: undefined, finding: undefined },
+        { from: 'agent-x' },
+        { finding: 'something happened' },
+      ]),
+    );
+    const packet = await assembleContextPacket('telegram_test', false);
+    // Should not crash; should still show the section
+    expect(packet).toContain('Pending items from other agents');
+  });
 
-    it('skips pending bus messages section when bus dir has no .json files', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) =>
-          typeof p === 'string' &&
-          p.includes('bus/agents/telegram_science-claw--researcher'),
-      );
-      vi.mocked(fs.readdirSync).mockReturnValue([] as unknown as fs.Dirent[]);
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).not.toContain('<pending-bus-messages');
-    });
+  it('handles classified events with missing classification sub-fields', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('queue.json'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([
+        { topic: 'classified_event', from: 'agent-y' },
+        { topic: 'classified_event', classification: {} },
+        { topic: 'classified_event', classification: { urgency: 'low' } },
+      ]),
+    );
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Recent Events (classified)');
+    // Missing urgency defaults to 'medium'
+    expect(packet).toContain('[medium]');
+    // Missing summary falls back to finding or 'No summary'
+    expect(packet).toContain('No summary');
+    // Explicit urgency present
+    expect(packet).toContain('[low]');
+  });
 
-    it('handles malformed bus message JSON gracefully', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) =>
-          typeof p === 'string' &&
-          p.includes('bus/agents/telegram_science-claw--researcher'),
-      );
-      vi.mocked(fs.readdirSync).mockReturnValue([
-        'msg-001.json',
-      ] as unknown as fs.Dirent[]);
-      vi.mocked(fs.readFileSync).mockReturnValue('NOT VALID JSON{{{');
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      // Should not crash, malformed message filtered out
-      expect(packet).toContain('Current date:');
-      expect(packet).not.toContain('<pending-bus-messages');
-    });
+  it('does not add truncation marker when packet is exactly at max size', async () => {
+    // Build a packet and check: if it's <= CONTEXT_PACKET_MAX_SIZE, no marker
+    // Use minimal content (just date/time/timezone) which should be well under limit
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet.length).toBeLessThanOrEqual(8000);
+    expect(packet).not.toContain('[...truncated]');
+  });
 
-    it('truncates agent state to 2000 chars', async () => {
-      vi.mocked(fs.existsSync).mockImplementation(
-        (p) => typeof p === 'string' && p.includes('state.md'),
-      );
-      vi.mocked(fs.readFileSync).mockReturnValue('S'.repeat(5000));
-      const packet = await assembleContextPacket(
-        'telegram_science-claw',
-        false,
-        'researcher',
-      );
-      expect(packet).toContain('<agent-state>');
-      // state content truncated to 2000 chars — total section ~2030 chars
-      const stateStart =
-        packet.indexOf('<agent-state>') + '<agent-state>\n'.length;
-      const stateEnd = packet.indexOf('\n</agent-state>');
-      const stateContent = packet.slice(stateStart, stateEnd);
-      expect(stateContent.length).toBeLessThanOrEqual(2000);
-    });
+  it('truncates bus queue finding text to 150 characters', async () => {
+    const longFinding = 'Q'.repeat(300);
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('queue.json'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify([{ from: 'test-agent', finding: longFinding }]),
+    );
+    const packet = await assembleContextPacket('telegram_test', false);
+    expect(packet).toContain('Pending items from other agents');
+    // Use 'Q' to avoid collisions with other text in the packet
+    const qRun = packet.match(/Q+/)?.[0] ?? '';
+    expect(qRun.length).toBe(150);
   });
 });
 

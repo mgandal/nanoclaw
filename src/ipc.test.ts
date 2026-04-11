@@ -1111,3 +1111,333 @@ describe('save_skill result file', () => {
     expect(fs.existsSync(skillDir)).toBe(false);
   });
 });
+
+// --- 19. TDD hardening: edge cases ---
+
+describe('save_skill missing skillContent', () => {
+  let tmpDir: string;
+  let origCwd: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-skill-nocontent-'));
+    origCwd = process.cwd();
+    process.chdir(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, 'container', 'skills'), { recursive: true });
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('rejects save_skill with missing skillContent', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'no-content-skill',
+        // skillContent is missing
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const skillDir = path.join(
+      tmpDir,
+      'container',
+      'skills',
+      'no-content-skill',
+    );
+    expect(fs.existsSync(skillDir)).toBe(false);
+  });
+
+  it('rejects save_skill with empty string skillContent', async () => {
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'empty-content',
+        skillContent: '',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // Empty string is falsy, should be rejected by the !skillContent check
+    const skillDir = path.join(
+      tmpDir,
+      'container',
+      'skills',
+      'empty-content',
+    );
+    expect(fs.existsSync(skillDir)).toBe(false);
+  });
+});
+
+describe('schedule_task with negative interval', () => {
+  it('rejects task with negative interval value', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'negative interval',
+        schedule_type: 'interval',
+        schedule_value: '-5000',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('schedule_task with past once timestamp', () => {
+  it('creates a task even with a past once timestamp', async () => {
+    // The schedule_task code does not reject past timestamps for once tasks.
+    // It converts the date and sets next_run to the past date.
+    // This is arguably valid: the scheduler will pick it up immediately.
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        taskId: 'past-once-task',
+        prompt: 'past once',
+        schedule_type: 'once',
+        schedule_value: '2020-01-01T00:00:00Z',
+        targetJid: 'tg:other456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('past-once-task');
+    expect(task).toBeDefined();
+    expect(task!.next_run).toBe('2020-01-01T00:00:00.000Z');
+    expect(onTasksChangedSpy).toHaveBeenCalled();
+  });
+});
+
+describe('resume_task on already-active task', () => {
+  it('resume on an active task still recomputes next_run for interval', async () => {
+    createTask({
+      id: 'already-active-interval',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'active interval',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      context_mode: 'isolated',
+      next_run: '2020-01-01T00:00:00.000Z', // stale
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    const before = Date.now();
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'already-active-interval' },
+      'telegram_other',
+      false,
+      deps,
+    );
+
+    const task = getTaskById('already-active-interval');
+    // Task should still be active, and next_run should be recomputed
+    expect(task!.status).toBe('active');
+    const nextRun = new Date(task!.next_run!).getTime();
+    expect(nextRun).toBeGreaterThanOrEqual(before + 3600000 - 1000);
+  });
+});
+
+describe('update_task with schedule_value only (no schedule_type)', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-val-only-update',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'original',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T09:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('recomputes next_run when only schedule_value changes', async () => {
+    const before = Date.now();
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-val-only-update',
+        schedule_value: '7200000', // 2 hours
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-val-only-update');
+    expect(task!.schedule_value).toBe('7200000');
+    // next_run should be recomputed (interval type + new value)
+    const nextRun = new Date(task!.next_run!).getTime();
+    expect(nextRun).toBeGreaterThanOrEqual(before + 7200000 - 1000);
+    expect(nextRun).toBeLessThanOrEqual(Date.now() + 7200000 + 1000);
+    expect(onTasksChangedSpy).toHaveBeenCalled();
+  });
+});
+
+describe('publish_to_bus with optional fields', () => {
+  it('publishes message even when optional priority is missing', async () => {
+    const writeAgentMessageSpy = vi.fn();
+    const busDeps = {
+      ...deps,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+      } as any,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'publish_to_bus',
+        topic: 'test-topic',
+        to_agent: 'einstein',
+        summary: 'test summary',
+        // priority is missing
+      } as any,
+      'telegram_other--curator',
+      false,
+      busDeps,
+    );
+
+    expect(writeAgentMessageSpy).toHaveBeenCalledWith(
+      'telegram_other--einstein',
+      expect.objectContaining({
+        from: 'curator',
+        topic: 'test-topic',
+        to_agent: 'einstein',
+        priority: undefined,
+      }),
+    );
+  });
+
+  it('uses source agent name as from field', async () => {
+    const writeAgentMessageSpy = vi.fn();
+    const busDeps = {
+      ...deps,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+      } as any,
+    };
+
+    await processTaskIpc(
+      {
+        type: 'publish_to_bus',
+        topic: 'override-from',
+        to_agent: 'jennifer',
+        summary: 'test',
+      } as any,
+      'telegram_other--custom_sender',
+      false,
+      busDeps,
+    );
+
+    expect(writeAgentMessageSpy).toHaveBeenCalledWith(
+      'telegram_other--jennifer',
+      expect.objectContaining({
+        from: 'custom_sender',
+      }),
+    );
+  });
+});
+
+describe('register_group with requiresTrigger and containerConfig', () => {
+  it('preserves requiresTrigger flag', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:new-trigger',
+        name: 'Trigger Group',
+        folder: 'telegram_trigger',
+        trigger: '@Bot',
+        requiresTrigger: false,
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(registerGroupSpy).toHaveBeenCalled();
+    const call = registerGroupSpy.mock.calls[0];
+    expect(call[1].requiresTrigger).toBe(false);
+  });
+
+  it('passes containerConfig with additionalMounts', async () => {
+    await processTaskIpc(
+      {
+        type: 'register_group',
+        jid: 'tg:with-mounts',
+        name: 'Mount Group',
+        folder: 'telegram_mounts',
+        trigger: '@Bot',
+        containerConfig: {
+          additionalMounts: [
+            { hostPath: '/data/stuff', containerPath: 'stuff', readonly: true },
+          ],
+        },
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(registerGroupSpy).toHaveBeenCalled();
+    const call = registerGroupSpy.mock.calls[0];
+    expect(call[1].containerConfig).toEqual({
+      additionalMounts: [
+        { hostPath: '/data/stuff', containerPath: 'stuff', readonly: true },
+      ],
+    });
+  });
+});
+
+describe('update_task rejects schedule_value change to invalid value for existing type', () => {
+  beforeEach(() => {
+    createTask({
+      id: 'task-reject-invalid-val',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'original',
+      schedule_type: 'interval',
+      schedule_value: '3600000',
+      context_mode: 'isolated',
+      next_run: '2025-06-01T09:00:00.000Z',
+      status: 'active',
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  it('rejects update when new schedule_value is too small for interval type', async () => {
+    // validateTaskSchedule requires interval >= 30 minutes (1800000ms)
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'task-reject-invalid-val',
+        schedule_value: '1000', // 1 second - too small
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const task = getTaskById('task-reject-invalid-val');
+    // Should be rejected - original value preserved
+    expect(task!.schedule_value).toBe('3600000');
+    expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});

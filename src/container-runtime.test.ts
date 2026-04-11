@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Ensure CREDENTIAL_PROXY_HOST is set before container-runtime.ts import
+// (module throws at load time if missing)
+vi.hoisted(() => {
+  if (!process.env.CREDENTIAL_PROXY_HOST) {
+    process.env.CREDENTIAL_PROXY_HOST = '192.168.64.1';
+  }
+});
+
 // Hoisted mocks — vi.hoisted ensures these exist before vi.mock factories run
 const { mockExecSync, mockPlatform, mockNetworkInterfaces } = vi.hoisted(
   () => ({
@@ -254,18 +262,28 @@ describe('cleanupOrphans', () => {
     );
   });
 
-  it('skips containers with missing configuration or id fields', () => {
+  it('skips containers with missing configuration or id fields and still stops valid orphans', () => {
     const lsOutput = JSON.stringify([
       { status: 'running', configuration: { id: 'nanoclaw-valid-1' } },
       { status: 'running', configuration: {} }, // missing id
       { status: 'running' }, // missing configuration entirely
+      { status: 'running', configuration: { id: 'nanoclaw-valid-2' } },
     ]);
     mockExecSync.mockReturnValueOnce(lsOutput);
     mockExecSync.mockReturnValue('');
 
-    // This may throw or handle gracefully depending on implementation
-    // The point is it should not crash the whole cleanup
-    cleanupOrphans();
+    cleanupOrphans(); // should not throw
+
+    // Both valid orphans should still be stopped despite malformed entries
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-valid-1`,
+      { stdio: 'pipe' },
+    );
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-valid-2`,
+      { stdio: 'pipe' },
+    );
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 });
 
@@ -387,5 +405,142 @@ describe('hostGatewayArgs', () => {
     mockPlatform.mockReturnValue('darwin');
     const args = hostGatewayArgs();
     expect(args).toEqual([]);
+  });
+
+  it('returns empty array on Windows (not Linux)', () => {
+    mockPlatform.mockReturnValue('win32');
+    const args = hostGatewayArgs();
+    expect(args).toEqual([]);
+  });
+});
+
+// --- cleanupOrphans additional edge cases ---
+
+describe('cleanupOrphans edge cases', () => {
+  it('handles JSON null literal output gracefully', () => {
+    mockExecSync.mockReturnValueOnce('null');
+
+    cleanupOrphans(); // should not throw
+
+    // JSON.parse('null') returns null; iterating null should be caught
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles whitespace-only output gracefully', () => {
+    mockExecSync.mockReturnValueOnce('   \n  ');
+
+    cleanupOrphans(); // should not throw — outer catch handles parse error
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'Failed to clean up orphaned containers',
+    );
+  });
+
+  it('skips containers with null id field', () => {
+    const lsOutput = JSON.stringify([
+      {
+        status: 'running',
+        configuration: { id: null },
+      },
+      {
+        status: 'running',
+        configuration: { id: 'nanoclaw-good-1' },
+      },
+    ]);
+    mockExecSync.mockReturnValueOnce(lsOutput);
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans(); // should not throw
+
+    // The valid orphan should still be stopped
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-good-1`,
+      { stdio: 'pipe' },
+    );
+  });
+
+  it('skips containers with numeric id (not a string)', () => {
+    const lsOutput = JSON.stringify([
+      {
+        status: 'running',
+        configuration: { id: 12345 },
+      },
+      {
+        status: 'running',
+        configuration: { id: 'nanoclaw-good-2' },
+      },
+    ]);
+    mockExecSync.mockReturnValueOnce(lsOutput);
+    mockExecSync.mockReturnValue('');
+
+    cleanupOrphans(); // should not throw
+
+    // The valid orphan should still be stopped
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} stop nanoclaw-good-2`,
+      { stdio: 'pipe' },
+    );
+  });
+
+  it('does not stop containers with nanoclaw in the middle of the name', () => {
+    const lsOutput = JSON.stringify([
+      {
+        status: 'running',
+        configuration: { id: 'other-nanoclaw-container' },
+      },
+    ]);
+    mockExecSync.mockReturnValueOnce(lsOutput);
+
+    cleanupOrphans();
+
+    // Only the ls call, no stop
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+
+  it('ignores containers in paused/created/exited states', () => {
+    const lsOutput = JSON.stringify([
+      { status: 'paused', configuration: { id: 'nanoclaw-paused-1' } },
+      { status: 'created', configuration: { id: 'nanoclaw-created-1' } },
+      { status: 'exited', configuration: { id: 'nanoclaw-exited-1' } },
+    ]);
+    mockExecSync.mockReturnValueOnce(lsOutput);
+
+    cleanupOrphans();
+
+    // Only the ls call, no stop calls
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+  });
+});
+
+// --- stopContainer propagation ---
+
+describe('stopContainer error propagation', () => {
+  it('propagates execSync errors to caller', () => {
+    const err = new Error('container not found');
+    mockExecSync.mockImplementationOnce(() => {
+      throw err;
+    });
+
+    expect(() => stopContainer('nanoclaw-test-1')).toThrow(
+      'container not found',
+    );
+  });
+
+  it('rejects names with pipe (shell injection)', () => {
+    expect(() => stopContainer('name|cat')).toThrow('Invalid container name');
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects names with redirect (shell injection)', () => {
+    expect(() => stopContainer('name>file')).toThrow('Invalid container name');
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('rejects names with ampersand (shell injection)', () => {
+    expect(() => stopContainer('name&cmd')).toThrow('Invalid container name');
+    expect(mockExecSync).not.toHaveBeenCalled();
   });
 });
