@@ -74,7 +74,9 @@ def _load_credentials():
             scopes=data.get("scopes", []),
         )
         try:
-            if (not creds.token or creds.expired) and creds.refresh_token:
+            # Always force a refresh to verify the token is actually usable.
+            # Tokens can report valid=True locally but be revoked server-side.
+            if creds.refresh_token:
                 creds.refresh(Request())
         except Exception as e:
             log.warning("Credential refresh failed for %s: %s — trying next", cred_path, e)
@@ -166,24 +168,26 @@ class GmailAdapter:
 
     def connect(self) -> bool:
         """Initialize Gmail API service. Returns False if credentials missing.
-        Verifies credentials with a lightweight API call to catch stale tokens early."""
-        creds = _load_credentials()
-        if not creds:
-            log.error("No Gmail credentials found")
-            return False
+        Verifies credentials with a lightweight API call to catch stale tokens early.
+        Retries with next credential source if verification fails."""
         from googleapiclient.discovery import build
-        service = build("gmail", "v1", credentials=creds)
-        # Verify credentials actually work with a lightweight call
-        try:
-            service.users().getProfile(userId="me").execute()
-        except Exception as e:
-            log.warning("Gmail credential verification failed: %s", e)
-            # Delete stale dedicated token so next run retries from source creds
-            GMAIL_TOKEN_FILE.unlink(missing_ok=True)
-            return False
-        self._service = service
-        log.info("Gmail API connected and verified")
-        return True
+
+        for attempt in range(2):
+            creds = _load_credentials()
+            if not creds:
+                log.error("No Gmail credentials found")
+                return False
+            service = build("gmail", "v1", credentials=creds)
+            try:
+                service.users().getProfile(userId="me").execute()
+                self._service = service
+                log.info("Gmail API connected and verified")
+                return True
+            except Exception as e:
+                log.warning("Gmail credential verification failed (attempt %d): %s", attempt + 1, e)
+                # Delete stale dedicated token so _load_credentials retries from source creds
+                GMAIL_TOKEN_FILE.unlink(missing_ok=True)
+        return False
 
     def fetch_since(self, epoch: int, processed_ids: set[str]) -> list[NormalizedEmail]:
         """Fetch all emails since epoch, skipping already-processed IDs.
