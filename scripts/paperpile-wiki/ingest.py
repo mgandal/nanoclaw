@@ -52,7 +52,7 @@ def _import_pipeline_modules():
     global match_papers_to_pdfs
     global embed_papers, bytes_to_embedding, embedding_to_bytes
     global cluster_papers, assign_noise_to_nearest, assign_new_papers_to_clusters
-    global slugify, build_hierarchy, _compute_centroids
+    global slugify, build_hierarchy, _compute_centroids, relabel_clusters_with_claude
     global batch_summarize, embed_summaries
 
     from db import (
