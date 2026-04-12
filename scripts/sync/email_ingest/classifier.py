@@ -6,9 +6,11 @@ import re
 
 import requests
 
-from email_ingest.types import NormalizedEmail, ClassificationResult
+from email_ingest.types import NormalizedEmail, ClassificationResult, STATE_DIR
 
 log = logging.getLogger("email-ingest.classifier")
+
+PROFILE_FILE = STATE_DIR / "classifier-profile.json"
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "phi4-mini"  # Explicit — does NOT use OLLAMA_MODEL env var
@@ -55,6 +57,82 @@ Score relevance based on: direct communication from internal colleagues (0.7+), 
 Exchange-specific: emails from @upenn.edu, @chop.edu, @pennmedicine.upenn.edu are internal — typically higher relevance. Flagged emails are important. Sent Items show what the researcher sent — relevant for context recall.
 
 Respond with ONLY the JSON object."""
+
+
+def _load_profile() -> dict | None:
+    """Load classifier profile. Returns None if missing or corrupt."""
+    if not PROFILE_FILE.exists():
+        return None
+    try:
+        profile = json.loads(PROFILE_FILE.read_text())
+        if profile.get("version") and profile.get("sender_weights") is not None:
+            log.info("Loaded classifier profile (%d sender weights, %d topic weights)",
+                     len(profile.get("sender_weights", {})),
+                     len(profile.get("topic_weights", {})))
+            return profile
+    except Exception as e:
+        log.warning("Failed to load classifier profile: %s", e)
+    return None
+
+
+def _extract_domain(from_addr: str) -> str:
+    """Extract domain from email address."""
+    if "<" in from_addr:
+        addr = from_addr.split("<")[-1].rstrip(">").strip()
+    else:
+        addr = from_addr.strip()
+    return addr.split("@")[-1].lower() if "@" in addr else ""
+
+
+def _format_few_shot(examples: list[dict]) -> str:
+    """Format few-shot examples for prompt injection."""
+    replied = [e for e in examples if e.get("replied")]
+    ignored = [e for e in examples if not e.get("replied")]
+
+    lines = ["Here are examples of emails this researcher replied to vs ignored:", ""]
+    if replied:
+        lines.append("REPLIED:")
+        for e in replied:
+            lines.append(f'- From: {e.get("from_domain", "?")} | Subject: "{e.get("subject", "?")[:50]}" | Topic: {e.get("topic", "?")}')
+    if ignored:
+        lines.append("")
+        lines.append("IGNORED:")
+        for e in ignored:
+            lines.append(f'- From: {e.get("from_domain", "?")} | Subject: "{e.get("subject", "?")[:50]}" | Topic: {e.get("topic", "?")}')
+
+    lines.append("")
+    lines.append("Use these patterns to inform your relevance scoring.")
+    return "\n".join(lines)
+
+
+def _build_system_prompt(source: str) -> str:
+    """Build system prompt, injecting few-shot examples if profile exists."""
+    base = SYSTEM_PROMPT_GMAIL if source == "gmail" else SYSTEM_PROMPT_EXCHANGE
+    if not PROFILE or not PROFILE.get("few_shot_examples"):
+        return base
+    return base + "\n\n" + _format_few_shot(PROFILE["few_shot_examples"])
+
+
+def _apply_weights(
+    relevance: float,
+    email: NormalizedEmail,
+    topic: str,
+    profile: dict | None,
+) -> float:
+    """Apply sender + topic weight adjustments. Returns clamped [0.0, 1.0]."""
+    if not profile:
+        return relevance
+
+    domain = _extract_domain(email.from_addr)
+    sender_adj = profile.get("sender_weights", {}).get(domain, {}).get("weight", 0.0)
+    topic_adj = profile.get("topic_weights", {}).get(topic, {}).get("weight", 0.0)
+
+    adjusted = relevance + sender_adj + topic_adj
+    return max(0.0, min(1.0, round(adjusted, 3)))
+
+
+# Load profile at module import (None if missing — zero behavioral change)
+PROFILE = _load_profile()
 
 
 def should_fast_skip(email: NormalizedEmail) -> str | None:
@@ -147,12 +225,12 @@ def parse_classification(raw: str) -> ClassificationResult:
 
 
 def classify_email(email: NormalizedEmail) -> ClassificationResult:
-    """Classify and summarize an email via Ollama (single combined call)."""
+    """Classify and summarize an email via Ollama (single combined call).
+    Applies personalized weight adjustments if profile exists."""
+    system = _build_system_prompt(email.source)
     if email.source == "gmail":
-        system = SYSTEM_PROMPT_GMAIL
         prompt = build_gmail_prompt(email)
     else:
-        system = SYSTEM_PROMPT_EXCHANGE
         prompt = build_exchange_prompt(email)
 
     try:
@@ -164,7 +242,21 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
             "options": {"temperature": 0.1, "num_predict": 512},
         }, timeout=OLLAMA_TIMEOUT)
         resp.raise_for_status()
-        return parse_classification(resp.json().get("response", ""))
+        result = parse_classification(resp.json().get("response", ""))
+
+        if result.skip_reason:
+            return result
+
+        # Apply personalized weight adjustments
+        original = result.relevance
+        result.relevance = _apply_weights(result.relevance, email, result.topic, PROFILE)
+        if PROFILE and original != result.relevance:
+            domain = _extract_domain(email.from_addr)
+            log.debug("[%.2f → %.2f] %s: %s (sender: %s, topic: %s)",
+                      original, result.relevance, email.source, email.subject[:50],
+                      domain, result.topic)
+
+        return result
     except requests.RequestException as e:
         log.error("Ollama request failed: %s", e)
         return ClassificationResult(
