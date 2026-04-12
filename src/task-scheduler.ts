@@ -1,4 +1,4 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
@@ -108,6 +108,51 @@ export interface SchedulerDependencies {
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
 
+const GUARD_TIMEOUT_MS = 15_000;
+
+export interface GuardResult {
+  shouldRun: boolean;
+  reason?: string;
+}
+
+/**
+ * Run a guard script before spawning the agent container.
+ * Exit 0 → run agent. Non-zero → skip agent. Errors/timeouts → run agent (fail-open).
+ */
+export function runGuardScript(
+  script: string | null | undefined,
+  timeoutMs: number = GUARD_TIMEOUT_MS,
+): Promise<GuardResult> {
+  if (!script) return Promise.resolve({ shouldRun: true });
+
+  return new Promise((resolve) => {
+    execFile(
+      '/bin/bash',
+      ['-c', script],
+      { timeout: timeoutMs, env: { ...process.env, PATH: process.env.PATH } },
+      (error, stdout, stderr) => {
+        if (error) {
+          if (error.killed) {
+            resolve({ shouldRun: true, reason: `Guard timed out after ${timeoutMs}ms` });
+          } else if (
+            (error as NodeJS.ErrnoException).code === 'ENOENT' ||
+            (error as NodeJS.ErrnoException).code === 'EACCES' ||
+            (error as any).code === 127
+          ) {
+            resolve({ shouldRun: true, reason: `Guard script error: ${error.message}` });
+          } else {
+            const code = (error as any).code ?? 'unknown';
+            const output = (stdout || stderr || '').trim();
+            resolve({ shouldRun: false, reason: `Guard exit code ${code}: ${output}` });
+          }
+        } else {
+          resolve({ shouldRun: true });
+        }
+      },
+    );
+  });
+}
+
 async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
@@ -161,6 +206,28 @@ async function runTask(
       error: `Group not found (auto-paused): ${task.group_folder}`,
     });
     return;
+  }
+
+  // --- Guard script pre-check ---
+  if (task.script) {
+    const guard = await runGuardScript(task.script);
+    if (!guard.shouldRun) {
+      logger.info(
+        { taskId: task.id, reason: guard.reason },
+        'Task skipped by guard script',
+      );
+      logTaskRun({
+        task_id: task.id,
+        run_at: new Date().toISOString(),
+        duration_ms: Date.now() - startTime,
+        status: 'skipped',
+        result: guard.reason || 'Guard returned non-zero',
+        error: null,
+      });
+      const nextRun = computeNextRun(task);
+      updateTaskAfterRun(task.id, nextRun, `Skipped: ${guard.reason}`);
+      return;
+    }
   }
 
   // Update tasks snapshot for container to read (filtered by group)
