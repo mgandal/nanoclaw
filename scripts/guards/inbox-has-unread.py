@@ -3,7 +3,7 @@
 
 Exit 0 if there are unread emails at mgandal+cc@gmail.com.
 Exit 1 if the inbox is empty (no agent needed).
-Exit 2 on error (treat as "run the agent" to be safe).
+Exit 0 on error (fail-open — treat as "run the agent" to be safe).
 
 Uses the same credential chain as email_ingest/gmail_adapter.py.
 """
@@ -55,7 +55,7 @@ def load_credentials():
         client_secret = data.get("client_secret")
         if not client_id and OAUTH_KEYS.exists():
             oauth = json.loads(OAUTH_KEYS.read_text())
-            installed = oauth.get("installed", {})
+            installed = oauth.get("installed", oauth.get("web", {}))
             client_id = installed.get("client_id")
             client_secret = installed.get("client_secret")
         creds = Credentials(
