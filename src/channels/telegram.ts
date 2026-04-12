@@ -257,11 +257,16 @@ export class TelegramChannel implements Channel {
     });
 
     this.bot.on('message:text', async (ctx) => {
-      // Skip commands
-      if (ctx.message.text.startsWith('/')) return;
+      // Skip built-in Telegram bot commands (/chatid, /ping); skill commands pass through.
+      const BUILT_IN_CMDS = new Set(['/chatid', '/ping']);
+      const firstToken = ctx.message.text.split(' ')[0].toLowerCase();
+      if (BUILT_IN_CMDS.has(firstToken)) return;
 
       const chatJid = `tg:${ctx.chat.id}`;
-      let content = ctx.message.text;
+      // Strip leading / from skill invocations so the agent sees "eval-repo ..." not "/eval-repo ..."
+      let content = ctx.message.text.startsWith('/')
+        ? ctx.message.text.slice(1)
+        : ctx.message.text;
       const timestamp = new Date(ctx.message.date * 1000).toISOString();
       const senderName =
         ctx.from?.first_name ||
@@ -710,10 +715,80 @@ export class TelegramChannel implements Channel {
           console.log(
             `  Send /chatid to the bot to get a chat's registration ID\n`,
           );
+          // Register skills as Telegram slash commands for autocomplete
+          this.registerSkillCommands().catch((err) =>
+            logger.warn({ err }, 'Failed to register Telegram commands'),
+          );
           resolve();
         },
       });
     });
+  }
+
+  /**
+   * Scan skills directories and register slash commands with Telegram for autocomplete.
+   * Reads SKILL.md frontmatter to extract name and description.
+   * Runs once on bot startup; safe to call again to refresh after skills are installed.
+   */
+  async registerSkillCommands(): Promise<void> {
+    if (!this.bot) return;
+
+    const skillsDirs = [
+      path.join(os.homedir(), '.claude', 'skills'),
+      path.join(process.cwd(), 'container', 'skills'),
+    ];
+
+    const commands: { command: string; description: string }[] = [
+      { command: 'chatid', description: "Get this chat's registration ID" },
+      { command: 'ping', description: 'Check if the bot is online' },
+    ];
+
+    for (const dir of skillsDirs) {
+      if (!fs.existsSync(dir)) continue;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const skillMdPath = path.join(dir, entry.name, 'SKILL.md');
+          if (!fs.existsSync(skillMdPath)) continue;
+          try {
+            const text = fs.readFileSync(skillMdPath, 'utf-8');
+            const nameMatch = text.match(/^name:\s*["']?([^"'\n]+?)["']?\s*$/m);
+            const descMatch = text.match(
+              /^description:\s*["']?([^"'\n]{3,})["']?\s*$/m,
+            );
+            const cmdName = nameMatch?.[1]?.trim();
+            if (!cmdName || !/^[a-z0-9_-]{1,32}$/.test(cmdName)) continue;
+            let description = descMatch?.[1]?.trim() || `${cmdName} skill`;
+            if (description.length > 256)
+              description = description.slice(0, 253) + '...';
+            commands.push({ command: cmdName, description });
+          } catch {
+            // skip malformed SKILL.md
+          }
+        }
+      } catch (err) {
+        logger.debug({ dir, err }, 'Could not scan skills dir');
+      }
+    }
+
+    // Deduplicate by command name (first occurrence wins)
+    const seen = new Set<string>();
+    const unique = commands.filter((c) => {
+      if (seen.has(c.command)) return false;
+      seen.add(c.command);
+      return true;
+    });
+
+    // Telegram max 100 commands
+    const limited = unique.slice(0, 100);
+
+    try {
+      await this.bot.api.setMyCommands(limited);
+      logger.info({ count: limited.length }, 'Telegram commands registered');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to set Telegram commands');
+    }
   }
 
   async sendMessage(jid: string, text: string): Promise<void> {
