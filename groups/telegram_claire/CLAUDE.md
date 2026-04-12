@@ -425,7 +425,7 @@ Before asking Mike for any specific fact, detail, or piece of information, you M
 ### Tier 1 — Search first (always)
 1. **All group memory files** — `/workspace/project/groups/*/memory.md` for every registered group (LAB-claw, SCIENCE-claw, HOME-claw, CODE-claw, VAULT-claw, etc.)
 2. **QMD** — semantic + keyword search across vault, sessions, conversations, state files
-3. **SimpleMem** — query for past conversation context
+3. **Hindsight** — `mcp__hindsight__recall` for past conversation context and personal facts
 4. **Vault** — `/workspace/extra/claire-vault/` notes, journal, projects, contacts
 5. **Conversation logs** — `/workspace/project/groups/*/logs/` for recent session history
 

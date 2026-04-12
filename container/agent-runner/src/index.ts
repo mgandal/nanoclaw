@@ -270,6 +270,14 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     };
   }
 
+  if (process.env.MAIL_BRIDGE_URL) {
+    servers.mail_bridge = {
+      type: 'http',
+      url: process.env.MAIL_BRIDGE_URL,
+      headers: { Accept: 'application/json' },
+    };
+  }
+
   // Gmail MCP (if credentials exist in the container)
   if (fs.existsSync('/home/node/.gmail-mcp/credentials.json')) {
     servers.gmail = {
@@ -617,6 +625,7 @@ async function runQuery(
         'mcp__gmail__*',
         'mcp__calendar__*',
         'mcp__slack__*',
+        'mcp__mail_bridge__*',
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',

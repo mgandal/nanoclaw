@@ -466,6 +466,25 @@ function buildContainerArgs(
     }
   }
 
+  // Pass Exchange Mail Bridge HTTP API URL (macOS host bridge for AppleScript mail access)
+  const mailBridgeEnv = readEnvFile(['MAIL_BRIDGE_URL']);
+  const mailBridgeUrl = process.env.MAIL_BRIDGE_URL || mailBridgeEnv.MAIL_BRIDGE_URL;
+  if (mailBridgeUrl) {
+    try {
+      const parsed = new URL(mailBridgeUrl);
+      const hostname =
+        parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+          ? CONTAINER_HOST_GATEWAY
+          : parsed.hostname;
+      args.push(
+        '-e',
+        `MAIL_BRIDGE_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
+      );
+    } catch {
+      logger.warn({ mailBridgeUrl }, 'Invalid MAIL_BRIDGE_URL, skipping Mail Bridge');
+    }
+  }
+
   // Pass Honcho user-modeling API URL
   const honchoEnv = readEnvFile(['HONCHO_URL']);
   const honchoUrl = process.env.HONCHO_URL || honchoEnv.HONCHO_URL;
