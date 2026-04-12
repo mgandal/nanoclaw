@@ -118,6 +118,26 @@ def test_classify_topic_research():
     assert classify_topic_by_keywords("Manuscript figure revisions") == "research"
 
 
+def test_classify_topic_mentoring():
+    assert classify_topic_by_keywords("PhD student rotation request for mentoring") == "mentoring"
+
+
+def test_classify_topic_admin_expense():
+    assert classify_topic_by_keywords("Expense Report Pending Your Approval") == "admin"
+
+
+def test_classify_topic_research_genomics():
+    assert classify_topic_by_keywords("isoform sequencing results from scRNA-seq") == "research"
+
+
+def test_classify_topic_scheduling_seminar():
+    assert classify_topic_by_keywords("Lunch & Learn on April 9") == "scheduling"
+
+
+def test_classify_topic_grant_f31():
+    assert classify_topic_by_keywords("Letter of support for Kelly F31") == "grant"
+
+
 def test_classify_topic_unknown():
     assert classify_topic_by_keywords("Hello there") == "other"
 

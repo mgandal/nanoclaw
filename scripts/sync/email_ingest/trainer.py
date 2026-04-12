@@ -20,13 +20,61 @@ TRAINING_DATA_FILE = STATE_DIR / "training-data.json"
 EXCHANGE_SCRIPT = Path.home() / "claire-tools" / "exchange-mail.sh"
 
 TOPIC_KEYWORDS = {
-    "grant": ["grant", "r01", "r21", "k99", "nih", "nsf", "funding", "budget", "application", "award", "subaward"],
-    "hiring": ["hire", "candidate", "interview", "position", "postdoc", "salary", "offer", "recruitment"],
-    "research": ["manuscript", "paper", "data", "analysis", "figure", "results", "review", "revision", "preprint"],
-    "scheduling": ["meeting", "schedule", "calendar", "zoom", "appointment", "availability", "reschedule"],
-    "admin": ["it", "maintenance", "hr", "payroll", "compliance", "training", "policy", "parking", "badge"],
-    "collaboration": ["collaborate", "project", "proposal", "team", "lab", "join", "partnership"],
-    "notification": ["alert", "notification", "digest", "newsletter", "unsubscribe", "automated"],
+    "grant": [
+        "grant", "r01", "r21", "r03", "k99", "k08", "f31", "f32", "t32", "u01", "p50",
+        "nih", "nsf", "nimh", "ninds", "sfari", "simons",
+        "funding", "budget", "subaward", "subcontract", "award", "notice of award",
+        "application", "resubmission", "just-in-time", "progress report",
+        "dbgap", "irb", "dsmb",
+    ],
+    "hiring": [
+        "hire", "hiring", "candidate", "interview", "position", "postdoc", "postdoctoral",
+        "salary", "offer", "recruitment", "job", "cv ", "resume",
+        "staff scientist", "research assistant", "lab manager", "technician",
+    ],
+    "research": [
+        "manuscript", "paper", "preprint", "biorxiv", "medrxiv", "arxiv",
+        "data", "analysis", "figure", "results", "review", "revision", "resubmission",
+        "submission", "accepted", "rejected", "decision", "emid",
+        "isoform", "sequencing", "rna-seq", "scrna", "snrna", "atac",
+        "genomic", "genetic", "transcriptom", "gwas", "eqtl", "splicing",
+        "neuron", "cortex", "cortical", "brain", "psychiatric", "autism", "asd", "adhd",
+        "schizophren", "bipolar", "psychosis",
+        "bulk rna", "single cell", "single-cell", "spatial",
+        "perturb-seq", "crispr",
+        "biobank", "uk biobank", "topmed",
+    ],
+    "scheduling": [
+        "meeting", "schedule", "calendar", "zoom", "teams", "webex",
+        "appointment", "availability", "reschedule", "cancel",
+        "seminar", "symposium", "retreat", "conference", "workshop", "lecture",
+        "lunch & learn", "grand rounds", "journal club",
+        "rsvp", "register", "registration",
+    ],
+    "admin": [
+        "maintenance", "hr", "payroll", "compliance", "policy", "parking", "badge",
+        "expense", "reimbursement", "receipt", "approval", "approve",
+        "onboarding", "offboarding", "access request", "credentials",
+        "space", "renovation", "move", "relocation",
+        "faculty practice", "clinic",
+    ],
+    "collaboration": [
+        "collaborate", "collaboration", "proposal", "team", "partnership",
+        "consortium", "multi-site", "working group",
+        "connecting", "introduction", "intro ", "favour", "favor",
+        "letter of support", "reference letter",
+    ],
+    "mentoring": [
+        "mentor", "mentee", "mentoring", "mentorship",
+        "trainee", "student", "rotation", "thesis", "dissertation",
+        "residency", "fellowship", "md-phd", "phd student",
+        "recommendation", "career", "development plan",
+    ],
+    "notification": [
+        "alert", "notification", "digest", "newsletter", "unsubscribe", "automated",
+        "noreply", "no-reply", "do not reply", "auto-generated",
+        "cloud recording", "password expir", "security alert",
+    ],
 }
 
 SUBJECT_PREFIX_RE = re.compile(r"^(re|fwd|fw)\s*:\s*", re.IGNORECASE)
@@ -250,22 +298,28 @@ def collect_exchange_data(days: int = 180) -> list[TrainingExample]:
         return []
 
     def run_search(mailbox: str) -> list[dict]:
+        return run_search_with_days(mailbox, days)
+
+    def run_search_with_days(mailbox: str, search_days: int) -> list[dict]:
         try:
             result = subprocess.run(
                 ["bash", str(EXCHANGE_SCRIPT), "search",
-                 "--since", str(days), "--limit", "500", "--mailbox", mailbox],
-                capture_output=True, text=True, timeout=120,
+                 "--since", str(search_days), "--limit", "500", "--mailbox", mailbox],
+                capture_output=True, text=True, timeout=300,
             )
             if result.returncode != 0:
                 return []
             return json.loads(result.stdout) if result.stdout.strip() else []
         except Exception as e:
-            log.warning("Exchange search %s failed: %s", mailbox, e)
+            log.warning("Exchange search %s (since %dd) failed: %s", mailbox, search_days, e)
             return []
 
     inbox = run_search("Inbox")
-    sent = run_search("Sent Items")
-    log.info("Exchange training data: %d inbox, %d sent", len(inbox), len(sent))
+    # Sent Items search breaks for >30 days in Mac Mail AppleScript (date comparison bug).
+    # 30 days is sufficient — typically yields 200+ sent messages per month.
+    sent_days = min(days, 30)
+    sent = run_search_with_days("Sent Items", sent_days)
+    log.info("Exchange training data: %d inbox, %d sent (sent window: %dd)", len(inbox), len(sent), sent_days)
 
     labels = match_sent_to_inbox(inbox, sent)
 
