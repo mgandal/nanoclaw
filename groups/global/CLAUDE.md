@@ -238,15 +238,14 @@ Only ask Mike after documenting (internally) which sources you searched and what
 
 The vault has contact files for 370+ collaborators and 38 lab members. Actively maintain these as you work.
 
-**Locations:**
-- External contacts: `/workspace/extra/claire-vault/people/contacts/{firstname-lastname}.md`
-- Lab members: `/workspace/extra/claire-vault/people/lab/{firstname-lastname}.md`
+**Location:** `/workspace/extra/claire-vault/20-contacts/{firstname-lastname}.md`
+(Both external contacts and lab members live here; distinguished by `type:` frontmatter.)
 
 **When to update — do this as a side effect of normal work, not as a separate task:**
-- *Email triage*: When you read or draft an email involving someone, check if they have a contact file. Update `last_contact` and add to Interactions.
-- *Calendar events*: When you see a meeting with someone, add it to their Interactions section.
-- *Discussions*: When Mike mentions a person and shares context (new role, new project, collaboration update), update their file.
-- *New people*: If someone appears who doesn't have a file, create one from the template at `people/contacts/_template.md`.
+- *Email triage*: When you read or draft an email involving someone, check if they have a contact file. Update `last_contact` and add to Timeline.
+- *Calendar events*: When you see a meeting with someone, add it to their Timeline section.
+- *Discussions*: When Mike mentions a person and shares context (new role, new project, collaboration update), update their Compiled Truth section.
+- *New people*: If someone appears who doesn't have a file, create one from the template at `20-contacts/_template.md`.
 
 **Contact file format:**
 ```yaml
@@ -262,7 +261,12 @@ last_contact: "YYYY-MM-DD"
 projects: [list, of, projects]
 ---
 ```
-Sections: Context, Collaboration History, Interactions, Notes
+Body sections: **Compiled Truth** + **Timeline** (see template for details).
+
+- **Compiled Truth** = current best understanding of who this person is and your relationship. Rewrite when evidence changes — this is a living summary, not a log.
+- **Timeline** = append-only evidence trail. Dated entries, never edited, only added to. Format: `- YYYY-MM-DD | type | detail | source`
+
+**The read-write cycle:** After appending a new Timeline entry, always re-read Compiled Truth and update it if the new evidence changes the picture (new role, new project, relationship shift, stage change). This is what makes contact knowledge compound over time.
 
 **Rules:**
 - Always search QMD or grep before creating — avoid duplicates
@@ -271,6 +275,7 @@ Sections: Context, Collaboration History, Interactions, Notes
 - Set `next_action` when there's a pending follow-up
 - Set `stage` to `dormant` if no contact in 6+ months
 - Never delete contact files — mark dormant instead
+- When updating old contact files that use the previous format (Context/Collaboration History/Interactions/Notes), migrate them: move Context + Notes content into Compiled Truth, move Interactions + Collaboration History entries into Timeline
 
 ## Obsidian Vault (Shared Knowledge Base)
 

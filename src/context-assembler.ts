@@ -95,7 +95,13 @@ async function queryQmdForContext(query: string): Promise<string> {
       return '';
     }
 
-    // Step 2: Query with session ID
+    // Step 2: Query with session ID — hybrid lex+vec for best recall
+    // Extract keywords for BM25 leg (strip short/common words)
+    const keywords = query
+      .split(/\s+/)
+      .filter((w) => w.length > 3)
+      .slice(0, 8)
+      .join(' ');
     const queryBody = JSON.stringify({
       jsonrpc: '2.0',
       id: 2,
@@ -103,10 +109,13 @@ async function queryQmdForContext(query: string): Promise<string> {
       params: {
         name: 'query',
         arguments: {
-          searches: [{ type: 'vec', query }],
+          searches: [
+            { type: 'vec', query },
+            ...(keywords ? [{ type: 'lex', query: keywords }] : []),
+          ],
           intent: query,
-          minScore: 0.5,
-          limit: 3,
+          minScore: 0.4,
+          limit: 5,
         },
       },
     });
@@ -129,13 +138,9 @@ async function queryQmdForContext(query: string): Promise<string> {
 
     if (!resultText.trim()) return '';
 
-    const lines = resultText.split('\n').filter((l: string) => l.trim());
-    const snippets = lines
-      .slice(0, 6)
-      .map((l: string) => l.slice(0, 200))
-      .join('\n');
-
-    return snippets ? `\n--- Relevant knowledge ---\n${snippets}` : '';
+    // Trust QMD's reranker for quality — take top results at natural length
+    const trimmed = resultText.slice(0, 2000).trim();
+    return trimmed ? `\n--- Relevant knowledge ---\n${trimmed}` : '';
   } catch (err) {
     logger.debug(
       { err: err instanceof Error ? err.message : String(err) },
