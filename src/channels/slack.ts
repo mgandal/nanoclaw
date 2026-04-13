@@ -6,6 +6,7 @@ import { updateChatName } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
+import { withRetry } from './reconnect.js';
 import {
   Channel,
   OnInboundMessage,
@@ -17,6 +18,28 @@ import {
 // Messages exceeding this are split into sequential chunks.
 const MAX_MESSAGE_LENGTH = 4000;
 
+// Maximum number of messages to hold in the outgoing queue while disconnected.
+// When the queue is full, the oldest message is dropped to make room.
+const MAX_QUEUE_SIZE = 100;
+
+// How often (ms) to attempt a background reconnect after startup failure.
+const RECONNECT_INTERVAL_MS = 60_000;
+
+// Number of retry attempts for initial startup.
+const STARTUP_RETRY_ATTEMPTS = 3;
+
+// Base delay (ms) for exponential backoff on startup retries.
+const STARTUP_RETRY_BASE_MS = 2000;
+
+// Slack error codes that indicate the token is permanently invalid.
+// Retrying these is futile — stop and alert immediately.
+const AUTH_ERROR_CODES = new Set([
+  'invalid_auth',
+  'token_revoked',
+  'account_inactive',
+  'token_expired',
+]);
+
 // The message subtypes we process. Bolt delivers all subtypes via app.event('message');
 // we filter to regular messages (GenericMessageEvent, subtype undefined) and bot messages
 // (BotMessageEvent, subtype 'bot_message') so we can track our own output.
@@ -26,17 +49,23 @@ export interface SlackChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  onAlert?: (message: string) => void;
 }
 
 export class SlackChannel implements Channel {
   name = 'slack';
 
-  private app: App;
+  // app is assigned in createApp(), called from the constructor.
+  private app!: App;
+  private botToken: string;
+  private appToken: string;
   private botUserId: string | undefined;
   private connected = false;
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private userNameCache = new Map<string, string>();
+  private reconnectTimer: ReturnType<typeof setInterval> | null = null;
+  private reconnecting = false;
 
   private opts: SlackChannelOpts;
 
@@ -55,20 +84,31 @@ export class SlackChannel implements Channel {
       );
     }
 
+    this.botToken = botToken;
+    this.appToken = appToken;
+    this.createApp();
+  }
+
+  /**
+   * Create a fresh Bolt App instance with event handlers.
+   * Must be called for each retry/reconnect attempt because the Bolt SDK's
+   * Socket Mode creates internal WebSocket state that does not reset after failure.
+   */
+  private createApp(): void {
     this.app = new App({
-      token: botToken,
-      appToken,
+      token: this.botToken,
+      appToken: this.appToken,
       socketMode: true,
       logLevel: LogLevel.ERROR,
     });
 
-    this.setupEventHandlers();
+    this.setupEventHandlers(this.app);
   }
 
-  private setupEventHandlers(): void {
+  private setupEventHandlers(app: App): void {
     // Use app.event('message') instead of app.message() to capture all
     // message subtypes including bot_message (needed to track our own output)
-    this.app.event('message', async ({ event }) => {
+    app.event('message', async ({ event }) => {
       // Bolt's event type is the full MessageEvent union (17+ subtypes).
       // We filter on subtype first, then narrow to the two types we handle.
       const subtype = (event as { subtype?: string }).subtype;
@@ -133,9 +173,77 @@ export class SlackChannel implements Channel {
     });
   }
 
-  async connect(): Promise<void> {
-    await this.app.start();
+  /**
+   * Check whether an error represents a permanent auth failure.
+   * Auth errors are not retryable — stop immediately and alert.
+   */
+  private isAuthError(error: Error): boolean {
+    const msg = error.message.toLowerCase();
+    for (const code of AUTH_ERROR_CODES) {
+      if (msg.includes(code)) return true;
+    }
+    return false;
+  }
 
+  /**
+   * Start a background timer that periodically calls attemptReconnect().
+   * Does nothing if a timer is already running.
+   */
+  private startReconnectTimer(): void {
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = setInterval(() => {
+      void this.attemptReconnect();
+    }, RECONNECT_INTERVAL_MS);
+    logger.info('Slack reconnect timer started (60s interval)');
+  }
+
+  /** Stop the background reconnect timer. */
+  private stopReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = null;
+      logger.info('Slack reconnect timer stopped');
+    }
+  }
+
+  /**
+   * Attempt a single reconnect cycle, guarded by `this.reconnecting` so
+   * concurrent timer firings don't pile up.
+   */
+  private async attemptReconnect(): Promise<void> {
+    if (this.reconnecting || this.connected) return;
+    this.reconnecting = true;
+    try {
+      logger.info('Slack: attempting background reconnect');
+
+      // Stop any half-open sockets on the current App instance before
+      // creating a fresh one — Bolt's Socket Mode state is not reusable.
+      try {
+        await this.app.stop();
+      } catch {
+        // ignore errors on stop
+      }
+
+      this.createApp();
+      await this.app.start();
+      await this.finishConnect();
+
+      // Success — no more need for the reconnect timer
+      this.stopReconnectTimer();
+      logger.info('Slack: background reconnect succeeded');
+    } catch (err) {
+      logger.warn({ err }, 'Slack: background reconnect attempt failed');
+    } finally {
+      this.reconnecting = false;
+    }
+  }
+
+  /**
+   * Post-connect logic shared by `connect()` and `attemptReconnect()`.
+   * Resolves the bot user ID, marks the channel connected, flushes the
+   * outgoing queue, and syncs channel metadata.
+   */
+  private async finishConnect(): Promise<void> {
     // Get bot's own user ID for self-message detection.
     // Resolve this BEFORE setting connected=true so that messages arriving
     // during startup can correctly detect bot-sent messages.
@@ -156,10 +264,59 @@ export class SlackChannel implements Channel {
     await this.syncChannelMetadata();
   }
 
+  async connect(): Promise<void> {
+    try {
+      await withRetry(
+        () => this.app.start(),
+        STARTUP_RETRY_ATTEMPTS,
+        STARTUP_RETRY_BASE_MS,
+        (attempt, error) => {
+          if (this.isAuthError(error)) {
+            const msg = `Slack auth error (${error.message}) — stopping retries`;
+            logger.error({ error }, msg);
+            this.opts.onAlert?.(msg);
+            // Re-throw to break out of withRetry immediately
+            throw error;
+          }
+          logger.warn(
+            { attempt, error },
+            `Slack connect attempt ${attempt} failed, retrying...`,
+          );
+        },
+      );
+    } catch (err) {
+      // All retry attempts exhausted (or auth error short-circuited)
+      const error = err instanceof Error ? err : new Error(String(err));
+
+      if (this.isAuthError(error)) {
+        // Auth errors are permanent — don't schedule reconnects
+        logger.error({ error }, 'Slack: permanent auth error, not scheduling reconnect');
+        return;
+      }
+
+      logger.warn(
+        { error },
+        'Slack: all startup attempts failed, scheduling background reconnect',
+      );
+      this.startReconnectTimer();
+      return;
+    }
+
+    await this.finishConnect();
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     const channelId = jid.replace(/^slack:/, '');
 
     if (!this.connected) {
+      // Enforce queue size cap — drop oldest entry if at limit
+      if (this.outgoingQueue.length >= MAX_QUEUE_SIZE) {
+        const dropped = this.outgoingQueue.shift();
+        logger.warn(
+          { droppedJid: dropped?.jid },
+          'Slack queue full, dropping oldest message',
+        );
+      }
       this.outgoingQueue.push({ jid, text });
       logger.info(
         { jid, queueSize: this.outgoingQueue.length },
@@ -182,6 +339,14 @@ export class SlackChannel implements Channel {
       }
       logger.info({ jid, length: text.length }, 'Slack message sent');
     } catch (err) {
+      // Enforce queue size cap on error-path queuing too
+      if (this.outgoingQueue.length >= MAX_QUEUE_SIZE) {
+        const dropped = this.outgoingQueue.shift();
+        logger.warn(
+          { droppedJid: dropped?.jid },
+          'Slack queue full, dropping oldest message',
+        );
+      }
       this.outgoingQueue.push({ jid, text });
       logger.warn(
         { jid, err, queueSize: this.outgoingQueue.length },
@@ -200,6 +365,7 @@ export class SlackChannel implements Channel {
 
   async disconnect(): Promise<void> {
     this.connected = false;
+    this.stopReconnectTimer();
     await this.app.stop();
   }
 
