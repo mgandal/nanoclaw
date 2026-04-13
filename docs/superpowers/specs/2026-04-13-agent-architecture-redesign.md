@@ -1,7 +1,8 @@
 # Agent Architecture Redesign — "One Claire, Portable Specialists"
 
 **Date:** 2026-04-13
-**Status:** Draft — awaiting user review
+**Status:** Draft v2 — incorporates peer review, security review, and architecture review
+**Reviews:** Code reviewer, security reviewer, architecture reviewer (3 independent agents)
 **Scope:** Memory architecture, agent definitions, group CLAUDE.md structure, cross-group coordination
 
 ## Problem Statement
@@ -83,10 +84,11 @@ data/agents/{name}/
 ├── identity.md          # Persona, role, responsibilities, personality
 ├── memory.md            # Persistent working memory (cap: 200 lines)
 ├── trust.yaml           # Action permission levels
-├── skills/              # Agent-specific skills
-│   └── {skill}/SKILL.md
-└── state.md             # Ephemeral session state (current threads, etc.)
+└── skills/              # Agent-specific skills
+    └── {skill}/SKILL.md
 ```
+
+**Design decision (from architecture review):** `state.md` is merged into `memory.md` as a `## Current Session` section that agents overwrite each session. This eliminates the ambiguous state/memory boundary and reduces the write paths from two to one. The existing `write_agent_state` IPC handler is extended to write `memory.md` (see Section 4.4).
 
 ### 1.3 identity.md Format
 
@@ -94,6 +96,7 @@ data/agents/{name}/
 ---
 name: Einstein
 role: Research Scientist
+lead: false
 description: >
   Monitors the scientific landscape, synthesizes literature,
   tracks competing groups, writes grant sections, and maintains
@@ -107,7 +110,10 @@ sender: Einstein
  prompt that currently lives inline in group CLAUDE.md files.]
 ```
 
-The `groups` field is informational (the DB `agent_registry` table remains authoritative for runtime dispatch). The `sender` field is used for Telegram bot identity via `mcp__nanoclaw__send_message`.
+Fields:
+- `lead` — if `true`, this agent's memory.md is injected into every context packet (currently only Claire). This avoids hardcoding "claire" in the context assembler. The assembler reads all agent identities and injects memory for any agent with `lead: true`.
+- `groups` — informational (the DB `agent_registry` table remains authoritative for runtime dispatch).
+- `sender` — used for Telegram bot identity via `mcp__nanoclaw__send_message`.
 
 ### 1.4 memory.md Format
 
@@ -117,6 +123,11 @@ Each agent maintains their own persistent memory file:
 # Einstein — Memory
 
 Last updated: 2026-04-13
+
+## Current Session
+[Overwritten each session with ephemeral state: active threads, in-progress work.
+Agents clear and rewrite this section at session start.]
+- Answering Mike's question about ChromBERT applicability to SFARI snATAC-seq
 
 ## Standing Instructions
 - Track papers from Geschwind, Grove, Sestan, Talkowski groups
@@ -129,7 +140,6 @@ Last updated: 2026-04-13
 ## Key Findings (last 30 days)
 - 2026-04-12: markitdown installed for doc→md conversion
 - 2026-04-08: Liu/Jessa Nature paper — Human Dev Multiomic Atlas
-- ...
 
 ## Tools & Methods Tracked
 - ChromBERT (Tongji Zhang Lab) — TF network foundation model
@@ -137,9 +147,9 @@ Last updated: 2026-04-13
 - PantheonOS — evolvable multi-agent genomics framework
 ```
 
-**Cap: 200 lines.** Agents are instructed to prune old entries when approaching the limit. The host does not enforce this — it's agent-maintained.
+**Cap: 150 lines.** Agents are instructed to prune old entries when approaching the limit. The host enforces a soft warning: if `memory.md` exceeds 200 lines at container spawn time, the context assembler injects `--- ⚠️ Memory file overlarge ({N} lines) — prune now ---` into the context packet. This provides a backstop for LLM discipline failures.
 
-### 1.5 trust.yaml Format (unchanged)
+### 1.5 trust.yaml Format
 
 ```yaml
 actions:
@@ -147,9 +157,11 @@ actions:
   publish_to_bus: autonomous
   write_vault: notify
   search_literature: autonomous
-  write_agent_state: autonomous
+  write_agent_memory: autonomous
   schedule_task: notify
 ```
+
+**Runtime enforcement (from security review):** trust.yaml is currently advisory only — the LLM sees it but the host doesn't check it before processing IPC requests. Phase 2 adds host-side enforcement for high-privilege IPC operations: `schedule_task`, `register_group`, and `publish_to_bus`. The IPC handler loads the calling agent's trust.yaml and gates the operation. Lower-privilege actions (`send_message`, `write_agent_memory`) remain advisory.
 
 ## 2. Claire's Unified Memory
 
@@ -165,9 +177,11 @@ Lives at `data/agents/claire/memory.md`. Contains:
 - **Standing preferences** — communication style, scheduling rules learned from behavior
 
 This file is:
-- **Read** by the context assembler and injected into every context packet as `--- Claire Memory ---`
-- **Written** by Claire inside the container via `write_agent_state` IPC (already exists)
+- **Read** by the context assembler and injected into every context packet as `--- Lead Agent Memory ---` (for any agent with `lead: true` in identity.md frontmatter)
+- **Written** by Claire inside the container via the new `write_agent_memory` IPC action (see Section 4.4)
 - **Concurrency-safe** because containers write via IPC to the host, and the host processes IPC files sequentially in a single event loop
+
+**Critical implementation note (from code review):** The existing `write_agent_state` IPC handler at `ipc.ts:782` hardcodes writes to `state.md` only, and requires compound keys (which Claire doesn't use in plain groups). A new `write_agent_memory` IPC action is required — see Section 4.4.
 
 ### 2.2 How It Replaces Per-Group "Claire Memory"
 
@@ -199,19 +213,22 @@ Current sections (16KB max):
 New sections:
 ```
 1. Date/time/timezone
-2. Claire's memory.md (2000 chars)          ← NEW: unified Claire memory
-3. Group memory.md (2000 chars)             ← unchanged
+2. Lead agent memory.md (5000 chars)        ← NEW: unified lead agent memory
+3. Group memory.md (3000 chars)             ← increased from 2000
 4. current.md priorities (1500 chars)       ← unchanged
 5. Staleness warnings                       ← unchanged
-6. Recent messages (last 30)                ← unchanged
-7. QMD knowledge search (2000 chars)        ← unchanged
-8. Scheduled tasks                          ← unchanged
-9. Bus queue items                          ← unchanged
-10. Classified events                       ← unchanged
-11. Specialist agent identities summary     ← NEW: names + roles of available agents
+6. Memory overlength warnings               ← NEW: flags files >200 lines
+7. Recent messages (last 30)                ← unchanged
+8. QMD knowledge search (2000 chars)        ← unchanged
+9. Scheduled tasks                          ← unchanged
+10. Bus queue items                         ← unchanged
+11. Classified events                       ← unchanged
+12. Specialist agent identities summary     ← NEW: names + roles of available agents
 ```
 
-**Max size increase:** 16KB → 24KB (`CONTEXT_PACKET_MAX_SIZE`). This provides headroom for the additional Claire memory section and agent summary.
+**Max size increase:** 16KB → 24KB (`CONTEXT_PACKET_MAX_SIZE`). This provides headroom for the additional lead agent memory section and agent summary.
+
+**Priority on conflict (from code review):** Lead agent memory appears before group memory. If they contain conflicting information, the later-appearing group memory will have higher recency weight in the LLM's attention. This is intentional — group-specific context should override general agent memory when they conflict (e.g., group formatting rules override agent defaults).
 
 ## 3. Group CLAUDE.md Refactoring
 
@@ -316,6 +333,8 @@ The agent reads the identity.md file from the mounted agent directory and uses i
 - Agent updates propagate to all groups automatically
 - Agent memory and skills travel with the identity
 
+**Reliability enhancement (from code review):** Relying on the LLM to faithfully read a file and use its full content as a TeamCreate prompt is a prompt-engineering dependency. To make this more robust, the context assembler injects a summary of each registered specialist into the context packet (Section 2.3, item 12): `--- Available Specialists ---\nEinstein (Research Scientist): /workspace/agents/einstein/identity.md\nSimon (CTO): /workspace/agents/simon/identity.md`. This primes the agent with agent names and paths. The full identity.md content is still read from the file at TeamCreate time, but the context packet ensures the agent knows which files to read and what each specialist does.
+
 ## 4. Container Mount Changes
 
 ### 4.1 Current Mounts
@@ -329,17 +348,50 @@ The agent reads the identity.md file from the mounted agent directory and uses i
 
 ### 4.2 New Mount
 
-Add one new mount for all containers:
+**Replace** the existing `/workspace/agent` (singular) mount for compound groups with a new `/workspace/agents` (plural) mount for all containers:
 
 | Container Path | Host Path | Access |
 |---|---|---|
-| `/workspace/agents` | `data/agents/` | **read-write** |
+| `/workspace/agents` | `data/agents/` | **read-only** |
 
-All agent directories are mounted together. Any agent running in the container can:
-- Read all agent identities and memories (for coordination)
-- Write to their own `memory.md` and `state.md` (via the existing `write_agent_state` IPC mechanism)
+**Critical fix (from code review):** The existing code at `container-runner.ts:301` mounts a single agent directory at `/workspace/agent` (singular). The new `/workspace/agents` (plural) would create a virtiofs prefix collision — Apple Container rejects mounts where one path is a prefix of another. The fix is to **remove** the old singular mount and **replace** it with the new plural mount. All references to `/workspace/agent` in `ipc.ts` file-path resolution must be updated to `/workspace/agents/{agentName}`.
 
-**Why read-write for the whole directory?** The IPC `write_agent_state` handler already validates the agent name and writes atomically. Agents inside the container don't write directly to the filesystem — they go through IPC. The mount being rw allows the IPC handler on the host to write back. (If this is a concern, the mount can be ro and all writes go through IPC exclusively.)
+**Read-only mount (from security review):** The mount MUST be read-only. If rw, any container process could directly write to `claire/identity.md` or any agent's memory, bypassing IPC validation entirely. All agent memory writes go through the new `write_agent_memory` IPC action (Section 4.4), which the host processes on its side of the mount boundary.
+
+### 4.4 New IPC Action: `write_agent_memory`
+
+**Critical addition (from code/security review):** The existing `write_agent_state` IPC handler has two blockers:
+1. It hardcodes writes to `state.md` only — no path to write `memory.md`
+2. It requires compound keys (`telegram_lab-claw--einstein`) — Claire can't use it from plain groups
+
+New IPC action:
+
+```typescript
+case 'write_agent_memory': {
+  const agentName = d.agent_name;  // explicit, not derived from compound key
+  // Validate: agentName must exist in data/agents/ and be registered for this group
+  // Validate: agentName contains no path separators or '..'
+  const memoryPath = path.join(AGENTS_DIR, agentName, 'memory.md');
+  // Atomic write: temp file + rename
+  const content = typeof d.content === 'string' ? d.content : '';
+  if (d.append) {
+    // Append mode: add to end of file
+    fs.appendFileSync(memoryPath, '\n' + content);
+  } else {
+    // Overwrite mode: replace entire file
+    const tmp = `${memoryPath}.tmp`;
+    fs.writeFileSync(tmp, content);
+    fs.renameSync(tmp, memoryPath);
+  }
+}
+```
+
+Authorization rules:
+- The `agent_name` parameter must match an agent registered for the source group's folder (checked via `agent_registry` DB)
+- OR the source group must be the main group (which can write to any agent)
+- Path traversal is rejected (`..`, `/` in agent_name)
+
+**Trust enforcement (from security review):** Before processing, load the agent's `trust.yaml` and check that `write_agent_memory` is `autonomous` or `notify`. If the trust level is `ask` or `draft`, reject the write and log a warning.
 
 ### 4.3 Skill Sync Order
 
@@ -363,7 +415,9 @@ When Einstein is spawned in LAB-claw:
 
 Einstein's agent-level skills follow him everywhere. Group skills add domain context.
 
-**Implementation:** In `container-runner.ts`, after copying container skills and before copying group skills, iterate over the agents registered for this group and copy their skill directories.
+**Implementation:** In `container-runner.ts`, after copying container skills and before copying group skills, query the `agent_registry` DB for ALL agents with `enabled=1` for this group's folder (or wildcard `*`). Copy each agent's `skills/` directory into the session's `.claude/skills/`. This must copy ALL registered agents' skills, not just the directly-addressed agent, because specialist dispatch (which agents Claire will TeamCreate) happens inside the container at runtime — the host doesn't know which specialists will be spawned.
+
+**Explicit decision (from architecture review):** Einstein and Simon are spawned as sub-agents via TeamCreate inside Claire's container, not as separate containers. This is correct for the current scale (5 agents, 1 user). Separate containers per agent would add ~30s startup latency per specialist and double resource consumption. This decision should not be revisited unless the agent count exceeds ~10 or multi-user support is added.
 
 ## 5. Agent Registry Consolidation
 
@@ -467,9 +521,9 @@ Every session, the agent container starts with:
    - Global state files as needed
 
 3. **Agent writes** (at session end):
-   - Update own memory.md via `write_agent_state` IPC
-   - Update group memory.md (domain state) via direct file write
-   - Retain to Hindsight (if available — bonus)
+   - Update own memory.md via `write_agent_memory` IPC (Section 4.4)
+   - Update group memory.md (domain state) via direct file write to `/workspace/group/memory.md`
+   - Retain to Hindsight (if available — bonus, not required)
 
 ### 6.4 Hindsight/Honcho as Bonus Layers
 
@@ -504,6 +558,15 @@ Each group's CLAUDE.md includes a routing table:
 ### 7.2 Context Assembler Cross-Group Injection
 
 The context assembler already injects bus queue items into the context packet. No changes needed — this mechanism works.
+
+### 7.4 Bus Authorization (from security review)
+
+The current `publish_to_bus` IPC handler accepts messages to any target group without authorization checks. This is an escalation risk: a compromised agent in a low-privilege group could publish messages that trigger actions in the main group.
+
+**Fix:** Add authorization to `publish_to_bus`:
+- Non-main groups can only publish to groups listed in their cross-group routing table (defined in CLAUDE.md, enforced by checking an allowlist in the DB or a config file)
+- Main group can publish to any group
+- All bus messages are tagged with `<agent-bus-message source="{agent}">` fencing so the receiving agent knows the content is agent-produced, not user-authoritative
 
 ### 7.3 Shared Agent Memory as Coordination
 
@@ -555,7 +618,9 @@ This means Slack LAB and Telegram LAB-claw share:
 
 Slack-specific formatting is handled by the channel adapter (already implemented in `slack.ts`) — the agent checks the group folder prefix or channel type to determine formatting.
 
-The `slack_lab/` folder can be archived after migration.
+Before archiving `slack_lab/`, merge any content from `slack_lab/memory.md` (204 bytes) into `telegram_lab-claw/memory.md`. Then archive `slack_lab/` to `slack_lab.archived/`.
+
+**Context interleaving (from architecture review):** After this merge, the context assembler's last-30-messages section will interleave Slack and Telegram messages in the same context packet. This is acceptable — the messages are tagged with sender metadata that indicates channel origin. If this causes confusion in practice, the assembler can add a channel prefix (`[slack]` / `[telegram]`) to each message in the context packet.
 
 ## 10. Migration Plan (High-Level)
 
@@ -567,34 +632,44 @@ The `slack_lab/` folder can be archived after migration.
 5. Update `agent_registry` DB table with new rows
 6. Move group-level skills to appropriate agent skill directories
 
-### Phase 2: Container Mounts (Medium Risk)
-7. Add `/workspace/agents` mount in `container-runner.ts`
-8. Add agent skill sync step in container-runner.ts
-9. Update context-assembler.ts: inject Claire's memory.md, bump max size to 24KB
-10. Test with one group (e.g., SCIENCE-claw) before rolling out
+### Phase 2: Container & IPC Changes (Medium Risk)
+7. Remove existing `/workspace/agent` (singular) mount; add `/workspace/agents` (plural, read-only) in `container-runner.ts`
+8. Update ipc.ts path resolution: `/workspace/agent/` → `/workspace/agents/{agentName}/`
+9. Implement `write_agent_memory` IPC action in ipc.ts (Section 4.4)
+10. Add trust.yaml enforcement for `schedule_task`, `register_group`, `publish_to_bus` in IPC handler
+11. Add `publish_to_bus` authorization checks (Section 7.4)
+12. Add agent skill sync step in container-runner.ts (copy ALL registered agents' skills)
+13. Update context-assembler.ts: inject lead agent memory.md (by `lead: true` frontmatter), add memory overlength warnings, add specialist summary, bump max size to 24KB
+14. Test with one group (e.g., SCIENCE-claw) before rolling out
 
 ### Phase 3: CLAUDE.md Refactoring (High Risk — Most Impactful)
-11. Split existing group memory.md files: extract Claire's personal memory (decisions, preferences, instructions) into `data/agents/claire/memory.md`; leave domain state (pending tasks, active analyses) in group memory.md
-12. Seed specialist agent memory.md files from relevant sections of group memory.md (e.g., Einstein gets paper findings from SCIENCE-claw's memory, Marvin gets email thread status from LAB-claw's memory)
-13. Refactor `groups/global/CLAUDE.md`: extract agent-specific instructions
-14. Refactor each group CLAUDE.md: replace inline TeamCreate prompts with identity.md references
-15. Update session start protocol: MD-first, Hindsight as bonus
-16. Add cross-group routing tables to remaining groups
+15. Split existing group memory.md files: extract Claire's personal memory (decisions, preferences, instructions) into `data/agents/claire/memory.md`; leave domain state (pending tasks, active analyses) in group memory.md
+16. Seed specialist agent memory.md files from relevant sections of group memory.md (e.g., Einstein gets paper findings from SCIENCE-claw's memory, Marvin gets email thread status from LAB-claw's memory)
+17. Refactor `groups/global/CLAUDE.md`: extract agent-specific instructions
+18. Refactor each group CLAUDE.md: replace inline TeamCreate prompts with identity.md references
+19. Update session start protocol: MD-first, Hindsight as bonus
+20. Add cross-group routing tables to remaining groups
+21. **Behavioral smoke tests**: for each refactored group, send 3-5 test messages covering key behaviors and verify expected response types before proceeding to the next group
 
 ### Phase 4: Cleanup
-17. Delete `groups/global/state/knowledge-graph.md`
-18. Merge `slack_lab` into `telegram_lab-claw` (DB update + archive folder)
-19. Update this project's MEMORY.md with new architecture notes
+22. Delete `groups/global/state/knowledge-graph.md`
+23. Merge `slack_lab/memory.md` content into `telegram_lab-claw/memory.md`, then archive `slack_lab/` folder
+24. Update registered_groups DB: point `slack:C0ABVNZLA0L` to folder `telegram_lab-claw`
+25. Update this project's MEMORY.md with new architecture notes
 
 ## 11. Risks and Mitigations
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| CLAUDE.md refactoring drops critical instructions | High | Diff every change against original. Test each group independently. Keep originals as `.bak` until verified. |
-| Agent memory.md grows unbounded | Medium | 200-line cap in instructions. Host-side warning if file exceeds 300 lines. |
+| CLAUDE.md refactoring drops critical instructions | High | Diff every change against original. Keep originals as `.bak`. **Behavioral smoke tests**: after refactoring each group, send 3-5 test messages covering key behaviors (email triage, paper search, scheduling) and verify expected response type before proceeding to the next group. |
+| Agent memory.md grows unbounded | Medium | 150-line cap in instructions. Host injects warning into context packet if file exceeds 200 lines. |
+| Mount path collision (`/workspace/agent` vs `/workspace/agents`) | High | Remove the existing singular mount entirely. Replace with plural. Update all ipc.ts path references. Test compound-group containers specifically. |
+| `write_agent_memory` IPC doesn't exist yet | High | Must be implemented in Phase 2 before any CLAUDE.md changes in Phase 3. Without it, agents cannot persist memory. |
+| Cross-agent memory read exposes sensitive data | Medium | Mount is read-only (agents can't modify each other). Agent memory should not contain PHI or credentials. CLINIC-claw agents should not write patient-adjacent info to agent memory — only to group memory (which is group-isolated). |
+| Bus message injection from low-privilege groups | Medium | Add `publish_to_bus` authorization (Section 7.4). Fence bus content with `<agent-bus-message>` tags. |
+| Jennifer references in codebase | Low | Update these files during Phase 1: `message-bus.test.ts`, `ipc.test.ts`, `agent-registry.test.ts`, `compound-key.test.ts`, `data/agents/claire/identity.md` (references "Your team: Einstein, Jennifer"). |
 | Concurrent writes to agent memory via IPC | Low | IPC is processed sequentially by the host event loop. Atomic temp+rename prevents corruption. |
 | Identity.md not found at spawn time | Low | Graceful fallback: if `/workspace/agents/{name}/identity.md` doesn't exist, agent logs warning and operates with group CLAUDE.md only. |
-| Increased container mount count | Low | Apple Container handles directory mounts well. One new mount (`/workspace/agents/`) adds minimal overhead. |
 | Skill sync order conflicts | Low | Document priority clearly: container < agent < group. Last writer wins within `.claude/skills/`. |
 
 ## 12. Success Criteria
