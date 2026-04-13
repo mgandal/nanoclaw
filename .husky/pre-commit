@@ -3,7 +3,7 @@ $HOME/.bun/bin/bun run format:fix
 # Guardrail: prevent hardcoded group folder names in sendMessage calls.
 # All system alerts must go through sendSystemAlert() which routes to OPS_ALERT_FOLDER.
 # Allowed exceptions: test files, config.ts, container-runner.ts (vault special handling).
-STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.ts' | grep -v '\.test\.ts$' | grep -v 'config\.ts$' | grep -v 'container-runner\.ts$')
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.ts' | grep -v '\.test\.ts$' | grep -v 'config\.ts$' | grep -v 'container-runner\.ts$' || true)
 if [ -n "$STAGED_TS" ]; then
   if echo "$STAGED_TS" | xargs grep -n "sendMessage.*['\"]telegram_" 2>/dev/null; then
     echo ""
