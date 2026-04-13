@@ -168,6 +168,19 @@ Use `mcp__hindsight__*` as your primary memory for anything learned in conversat
 - `mcp__hindsight__create_mental_model` — build persistent models of recurring topics
 - `mcp__hindsight__create_directive` — set standing instructions that persist across sessions
 
+### Message Bus (Cross-Group Coordination)
+
+Other groups may have published findings relevant to your current session. At session start, check for pending messages:
+
+- `bus_read` — read all pending messages from other groups
+- `bus_read(topic: "papers")` — filter by topic
+
+If you discover something relevant to another group during your session, use `bus_publish`:
+
+```
+bus_publish(topic: "research", finding: "...", action_needed: "telegram_science-claw", priority: "medium")
+```
+
 ### QMD (document search — vault, notes, sessions)
 
 Use `mcp__qmd__*` for finding specific documents and text. QMD indexes 2,500+ markdown files across the Obsidian vault, Apple Notes, group memory, and session archives.
