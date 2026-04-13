@@ -468,7 +468,8 @@ function buildContainerArgs(
 
   // Pass Exchange Mail Bridge HTTP API URL (macOS host bridge for AppleScript mail access)
   const mailBridgeEnv = readEnvFile(['MAIL_BRIDGE_URL']);
-  const mailBridgeUrl = process.env.MAIL_BRIDGE_URL || mailBridgeEnv.MAIL_BRIDGE_URL;
+  const mailBridgeUrl =
+    process.env.MAIL_BRIDGE_URL || mailBridgeEnv.MAIL_BRIDGE_URL;
   if (mailBridgeUrl) {
     try {
       const parsed = new URL(mailBridgeUrl);
@@ -481,7 +482,10 @@ function buildContainerArgs(
         `MAIL_BRIDGE_URL=${parsed.protocol}//${hostname}:${parsed.port}${parsed.pathname}`,
       );
     } catch {
-      logger.warn({ mailBridgeUrl }, 'Invalid MAIL_BRIDGE_URL, skipping Mail Bridge');
+      logger.warn(
+        { mailBridgeUrl },
+        'Invalid MAIL_BRIDGE_URL, skipping Mail Bridge',
+      );
     }
   }
 

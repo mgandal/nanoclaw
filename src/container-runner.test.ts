@@ -1032,8 +1032,7 @@ describe('container-runner volume mount construction', () => {
       const s = String(p);
       if (s.includes('groups/') && s.endsWith('/skills'))
         return ['autoresearch'] as any;
-      if (s.includes('container/skills'))
-        return ['status'] as any;
+      if (s.includes('container/skills')) return ['status'] as any;
       return [] as any;
     });
 

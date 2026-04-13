@@ -141,7 +141,10 @@ export const CONTEXT_PACKET_MAX_SIZE = parseInt(
   process.env.CONTEXT_PACKET_MAX_SIZE || '16000',
   10,
 );
-export const BUS_POLL_INTERVAL = parseInt(process.env.BUS_POLL_INTERVAL || '30000', 10);
+export const BUS_POLL_INTERVAL = parseInt(
+  process.env.BUS_POLL_INTERVAL || '30000',
+  10,
+);
 export const BUS_HIGH_PRIORITY_INTERVAL = 5000;
 
 // Health monitor thresholds

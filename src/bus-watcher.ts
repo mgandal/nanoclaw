@@ -5,7 +5,10 @@ import { fsPathToCompoundKey } from './compound-key.js';
 import { BUS_POLL_INTERVAL, BUS_HIGH_PRIORITY_INTERVAL } from './config.js';
 import type { BusMessage } from './message-bus.js';
 
-type DispatchFn = (compoundKey: string, messages: BusMessage[]) => Promise<void>;
+type DispatchFn = (
+  compoundKey: string,
+  messages: BusMessage[],
+) => Promise<void>;
 
 export class BusWatcher {
   private busDir: string;
@@ -24,11 +27,15 @@ export class BusWatcher {
 
     let hasHighPriority = false;
 
-    for (const entry of fs.readdirSync(this.agentsDir, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(this.agentsDir, {
+      withFileTypes: true,
+    })) {
       if (!entry.isDirectory()) continue;
 
       const dirPath = path.join(this.agentsDir, entry.name);
-      const pendingFiles = fs.readdirSync(dirPath).filter((f) => f.endsWith('.json'));
+      const pendingFiles = fs
+        .readdirSync(dirPath)
+        .filter((f) => f.endsWith('.json'));
       if (pendingFiles.length === 0) continue;
 
       // Claim all pending messages
@@ -62,10 +69,15 @@ export class BusWatcher {
               path.join(dirPath, file.replace('.json', '.processing')),
               path.join(doneDir, `${entry.name}-${file}`),
             );
-          } catch { /* already moved */ }
+          } catch {
+            /* already moved */
+          }
         }
       } catch (err) {
-        logger.error({ compoundKey, err }, 'Bus dispatch failed, restoring messages');
+        logger.error(
+          { compoundKey, err },
+          'Bus dispatch failed, restoring messages',
+        );
         // Restore on failure
         for (const file of claimedFiles) {
           try {
@@ -73,7 +85,9 @@ export class BusWatcher {
               path.join(dirPath, file.replace('.json', '.processing')),
               path.join(dirPath, file),
             );
-          } catch { /* already restored */ }
+          } catch {
+            /* already restored */
+          }
         }
       }
     }

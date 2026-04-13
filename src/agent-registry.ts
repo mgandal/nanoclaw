@@ -52,7 +52,10 @@ export function loadAgentIdentity(dirPath: string): AgentIdentity | null {
 
   const match = content.match(FRONTMATTER_RE);
   if (!match) {
-    logger.warn({ dirPath }, 'agent-registry: no YAML frontmatter found in identity.md');
+    logger.warn(
+      { dirPath },
+      'agent-registry: no YAML frontmatter found in identity.md',
+    );
     return null;
   }
 
@@ -62,12 +65,18 @@ export function loadAgentIdentity(dirPath: string): AgentIdentity | null {
   try {
     fm = YAML.parse(yamlBlock) as Record<string, unknown>;
   } catch (err) {
-    logger.warn({ err, dirPath }, 'agent-registry: invalid YAML frontmatter in identity.md');
+    logger.warn(
+      { err, dirPath },
+      'agent-registry: invalid YAML frontmatter in identity.md',
+    );
     return null;
   }
 
   if (!fm || typeof fm !== 'object') {
-    logger.warn({ dirPath }, 'agent-registry: YAML frontmatter did not parse to an object');
+    logger.warn(
+      { dirPath },
+      'agent-registry: YAML frontmatter did not parse to an object',
+    );
     return null;
   }
 
@@ -84,7 +93,10 @@ export function loadAgentIdentity(dirPath: string): AgentIdentity | null {
     return null;
   }
   if (typeof description !== 'string' || !description.trim()) {
-    logger.warn({ dirPath }, 'agent-registry: missing required field "description"');
+    logger.warn(
+      { dirPath },
+      'agent-registry: missing required field "description"',
+    );
     return null;
   }
 
@@ -146,7 +158,9 @@ export function loadAgentTrust(dirPath: string): AgentTrust {
 
   // Coerce all values to strings
   const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(actions as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(
+    actions as Record<string, unknown>,
+  )) {
     result[key] = String(value);
   }
 
@@ -159,7 +173,10 @@ export function loadAgentTrust(dirPath: string): AgentTrust {
  */
 export function scanAgents(agentsDir: string): AgentIdentity[] {
   if (!fs.existsSync(agentsDir)) {
-    logger.warn({ agentsDir }, 'agent-registry: agents directory does not exist');
+    logger.warn(
+      { agentsDir },
+      'agent-registry: agents directory does not exist',
+    );
     return [];
   }
 
@@ -173,7 +190,10 @@ export function scanAgents(agentsDir: string): AgentIdentity[] {
     if (identity) {
       agents.push(identity);
     } else {
-      logger.warn({ dirPath }, 'agent-registry: skipping invalid agent directory');
+      logger.warn(
+        { dirPath },
+        'agent-registry: skipping invalid agent directory',
+      );
     }
   }
 

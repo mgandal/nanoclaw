@@ -15,10 +15,8 @@ describe('alert routing contract', () => {
 describe('task scheduler alert routing', () => {
   it('flushAlerts resolves OPS group by folder, not isMain', async () => {
     const { _initTestDatabase } = await import('./db.js');
-    const {
-      checkAlerts,
-      _resetAlertsForTests,
-    } = await import('./task-scheduler.js');
+    const { checkAlerts, _resetAlertsForTests } =
+      await import('./task-scheduler.js');
     const { logTaskRun, createTask } = await import('./db.js');
 
     _initTestDatabase();

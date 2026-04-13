@@ -151,13 +151,19 @@ export class MessageBus {
   }
 
   writeAgentMessage(agentFsKey: string, message: Partial<BusMessage>): void {
-    if (agentFsKey.includes('..') || agentFsKey.includes('/') || agentFsKey.includes('\0')) {
+    if (
+      agentFsKey.includes('..') ||
+      agentFsKey.includes('/') ||
+      agentFsKey.includes('\0')
+    ) {
       throw new Error(`Invalid agentFsKey: ${agentFsKey}`);
     }
     const agentDir = path.join(this.agentsDir, agentFsKey);
     fs.mkdirSync(agentDir, { recursive: true });
     const ts = Date.now();
-    const idPrefix = (message.id ?? Math.random().toString(36).slice(2, 8)).slice(0, 8);
+    const idPrefix = (
+      message.id ?? Math.random().toString(36).slice(2, 8)
+    ).slice(0, 8);
     const filename = `${ts}-${idPrefix}.json`;
     const tmpPath = path.join(agentDir, `.${filename}.tmp`);
     const finalPath = path.join(agentDir, filename);
@@ -172,7 +178,9 @@ export class MessageBus {
     for (const file of fs.readdirSync(agentDir).sort()) {
       if (!file.endsWith('.json') || file.startsWith('.')) continue;
       try {
-        messages.push(JSON.parse(fs.readFileSync(path.join(agentDir, file), 'utf-8')));
+        messages.push(
+          JSON.parse(fs.readFileSync(path.join(agentDir, file), 'utf-8')),
+        );
       } catch {
         /* skip corrupt files */
       }
@@ -183,7 +191,10 @@ export class MessageBus {
   claimAgentMessage(agentFsKey: string, filename: string): boolean {
     const agentDir = path.join(this.agentsDir, agentFsKey);
     const jsonPath = path.join(agentDir, filename);
-    const processingPath = path.join(agentDir, filename.replace(/\.json$/, '.processing'));
+    const processingPath = path.join(
+      agentDir,
+      filename.replace(/\.json$/, '.processing'),
+    );
     if (!fs.existsSync(jsonPath)) return false;
     try {
       fs.renameSync(jsonPath, processingPath);

@@ -784,18 +784,23 @@ export async function processTaskIpc(
       const content = d.content as string;
       if (!content) break;
 
-      const { agent } = parseCompoundKey(
-        fsPathToCompoundKey(sourceGroup),
-      );
+      const { agent } = parseCompoundKey(fsPathToCompoundKey(sourceGroup));
       if (!agent) {
-        logger.warn({ sourceGroup }, 'write_agent_state from non-compound group');
+        logger.warn(
+          { sourceGroup },
+          'write_agent_state from non-compound group',
+        );
         break;
       }
 
       const statePath = path.join(AGENTS_DIR, agent, 'state.md');
       const tmpPath = `${statePath}.tmp`;
       const finalContent = d.append
-        ? (fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf-8') : '') + '\n' + content
+        ? (fs.existsSync(statePath)
+            ? fs.readFileSync(statePath, 'utf-8')
+            : '') +
+          '\n' +
+          content
         : content;
       fs.writeFileSync(tmpPath, finalContent);
       fs.renameSync(tmpPath, statePath);

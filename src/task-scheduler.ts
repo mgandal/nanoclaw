@@ -133,17 +133,26 @@ export function runGuardScript(
       (error, stdout, stderr) => {
         if (error) {
           if (error.killed) {
-            resolve({ shouldRun: true, reason: `Guard timed out after ${timeoutMs}ms` });
+            resolve({
+              shouldRun: true,
+              reason: `Guard timed out after ${timeoutMs}ms`,
+            });
           } else if (
             (error as NodeJS.ErrnoException).code === 'ENOENT' ||
             (error as NodeJS.ErrnoException).code === 'EACCES' ||
             (error as any).code === 127
           ) {
-            resolve({ shouldRun: true, reason: `Guard script error: ${error.message}` });
+            resolve({
+              shouldRun: true,
+              reason: `Guard script error: ${error.message}`,
+            });
           } else {
             const code = (error as any).code ?? 'unknown';
             const output = (stdout || stderr || '').trim();
-            resolve({ shouldRun: false, reason: `Guard exit code ${code}: ${output}` });
+            resolve({
+              shouldRun: false,
+              reason: `Guard exit code ${code}: ${output}`,
+            });
           }
         } else {
           resolve({ shouldRun: true });
