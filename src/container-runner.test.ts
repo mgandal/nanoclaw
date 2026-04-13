@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
+import os from 'os';
+import path from 'path';
 
 // Sentinel markers must match container-runner.ts
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -47,6 +49,7 @@ vi.mock('fs', async () => {
       copyFileSync: vi.fn(),
       cpSync: vi.fn(),
       renameSync: vi.fn(),
+      unlinkSync: vi.fn(),
     },
   };
 });
@@ -122,6 +125,7 @@ import {
   setQmdReachable,
   writeTasksSnapshot,
   writeGroupsSnapshot,
+  collectToolCalls,
   ContainerOutput,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
@@ -1562,6 +1566,66 @@ describe('container-runner process.env takes precedence over readEnvFile', () =>
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
+  });
+});
+
+describe('collectToolCalls', () => {
+  // Use real fs operations directly since fs is mocked globally.
+  // We access the real module via createRequire to avoid Vitest's CJS interop quirks.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const realFs = require('fs') as typeof import('fs');
+
+  beforeEach(() => {
+    // Restore real implementations so collectToolCalls can do real filesystem I/O
+    vi.mocked(fs.existsSync).mockImplementation(realFs.existsSync);
+    vi.mocked(fs.readFileSync).mockImplementation(realFs.readFileSync as any);
+    vi.mocked(fs.unlinkSync).mockImplementation(realFs.unlinkSync as any);
+  });
+
+  afterEach(() => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    vi.mocked(fs.unlinkSync).mockReset();
+  });
+
+  it('reads tool-calls.json and returns parsed records', () => {
+    const tmpDir = realFs.mkdtempSync(
+      path.join(os.tmpdir(), 'toolcall-test-'),
+    );
+    const outputDir = path.join(tmpDir, 'output');
+    realFs.mkdirSync(outputDir, { recursive: true });
+
+    realFs.writeFileSync(
+      path.join(outputDir, 'tool-calls.json'),
+      JSON.stringify([
+        {
+          tool: 'qmd_query',
+          paramsHash: 'abc123',
+          timestamp: '2026-04-13T10:00:00Z',
+        },
+        {
+          tool: 'send_message',
+          paramsHash: 'def456',
+          timestamp: '2026-04-13T10:01:00Z',
+        },
+      ]),
+    );
+
+    const records = collectToolCalls(outputDir);
+    expect(records).toHaveLength(2);
+    expect(records[0].tool).toBe('qmd_query');
+    expect(records[1].paramsHash).toBe('def456');
+
+    realFs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns empty array when no tool-calls.json exists', () => {
+    const tmpDir = realFs.mkdtempSync(
+      path.join(os.tmpdir(), 'toolcall-test-'),
+    );
+    const records = collectToolCalls(path.join(tmpDir, 'nonexistent'));
+    expect(records).toHaveLength(0);
+    realFs.rmSync(tmpDir, { recursive: true, force: true });
   });
 });
 

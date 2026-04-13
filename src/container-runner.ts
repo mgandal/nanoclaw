@@ -910,7 +910,36 @@ export async function runContainerAgent(
       // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
         outputChain
-          .then(() => {
+          .then(async () => {
+            // Collect tool calls and insert into action_log
+            const toolCalls = collectToolCalls(
+              path.join(groupIpcDir, 'output'),
+            );
+            if (toolCalls.length > 0) {
+              try {
+                const { getDb } = await import('./db.js');
+                const db = getDb();
+                const insert = db.prepare(
+                  'INSERT OR IGNORE INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                );
+                for (const tc of toolCalls) {
+                  insert.run(
+                    `${group.folder}-${tc.timestamp}-${tc.paramsHash.slice(0, 8)}`,
+                    group.folder,
+                    group.folder,
+                    tc.tool,
+                    tc.paramsHash,
+                    '',
+                    tc.timestamp,
+                  );
+                }
+              } catch (err) {
+                logger.warn(
+                  { err, groupFolder: group.folder },
+                  'Failed to collect tool calls into action_log',
+                );
+              }
+            }
             logger.info(
               { group: group.name, duration, newSessionId },
               'Container completed (streaming mode)',
@@ -953,6 +982,36 @@ export async function runContainerAgent(
         }
 
         const output: ContainerOutput = JSON.parse(jsonLine);
+
+        // Collect tool calls and insert into action_log
+        const toolCalls = collectToolCalls(path.join(groupIpcDir, 'output'));
+        if (toolCalls.length > 0) {
+          void (async () => {
+            try {
+              const { getDb } = await import('./db.js');
+              const db = getDb();
+              const insert = db.prepare(
+                'INSERT OR IGNORE INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              );
+              for (const tc of toolCalls) {
+                insert.run(
+                  `${group.folder}-${tc.timestamp}-${tc.paramsHash.slice(0, 8)}`,
+                  group.folder,
+                  group.folder,
+                  tc.tool,
+                  tc.paramsHash,
+                  '',
+                  tc.timestamp,
+                );
+              }
+            } catch (err) {
+              logger.warn(
+                { err, groupFolder: group.folder },
+                'Failed to collect tool calls into action_log',
+              );
+            }
+          })();
+        }
 
         logger.info(
           {
@@ -997,6 +1056,29 @@ export async function runContainerAgent(
       });
     });
   });
+}
+
+export interface ToolCallRecord {
+  tool: string;
+  paramsHash: string;
+  timestamp: string;
+}
+
+/**
+ * Read tool-call summary from container IPC output.
+ * Cleans up the file after reading.
+ */
+export function collectToolCalls(ipcOutputDir: string): ToolCallRecord[] {
+  const filePath = path.join(ipcOutputDir, 'tool-calls.json');
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const records = JSON.parse(raw) as ToolCallRecord[];
+    fs.unlinkSync(filePath);
+    return records;
+  } catch {
+    return [];
+  }
 }
 
 export function writeTasksSnapshot(
