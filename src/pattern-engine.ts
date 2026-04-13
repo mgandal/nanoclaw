@@ -155,9 +155,7 @@ export async function runPatternDetection(): Promise<string | null> {
   if (repeated.length === 0 && timeBased.length === 0) return null;
 
   const rejected = new Set(
-    proposals
-      .filter((p) => p.status === 'rejected')
-      .map((p) => p.description),
+    proposals.filter((p) => p.status === 'rejected').map((p) => p.description),
   );
 
   const proposalTexts: string[] = [];

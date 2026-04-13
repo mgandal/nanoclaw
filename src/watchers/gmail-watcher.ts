@@ -324,7 +324,8 @@ export class GmailWatcher {
   // ─── Private methods ───────────────────────────────────────────────────────
 
   private async startPushMode(): Promise<boolean> {
-    const { pubsubTopic, pubsubSubscription, pubsubServiceAccountPath } = this.config;
+    const { pubsubTopic, pubsubSubscription, pubsubServiceAccountPath } =
+      this.config;
     if (!pubsubTopic || !pubsubSubscription) return false;
 
     try {
@@ -338,33 +339,51 @@ export class GmailWatcher {
       const subscription = pubsub.subscription(pubsubSubscription);
       this.pubsubSubscriptionHandle = subscription;
 
-      subscription.on('message', (message: { data: Buffer; ack: () => void }) => {
-        try {
-          const data = JSON.parse(message.data.toString());
-          const historyId = data.historyId as string | undefined;
-          message.ack();
-          if (historyId) {
-            void this.fetchNewMessagesByHistory(historyId).catch((err) => {
-              logger.warn({ err, account: this.config.account }, 'GmailWatcher push handler failed');
-            });
+      subscription.on(
+        'message',
+        (message: { data: Buffer; ack: () => void }) => {
+          try {
+            const data = JSON.parse(message.data.toString());
+            const historyId = data.historyId as string | undefined;
+            message.ack();
+            if (historyId) {
+              void this.fetchNewMessagesByHistory(historyId).catch((err) => {
+                logger.warn(
+                  { err, account: this.config.account },
+                  'GmailWatcher push handler failed',
+                );
+              });
+            }
+          } catch (err) {
+            message.ack();
+            logger.warn(
+              { err },
+              'GmailWatcher failed to parse Pub/Sub message',
+            );
           }
-        } catch (err) {
-          message.ack();
-          logger.warn({ err }, 'GmailWatcher failed to parse Pub/Sub message');
-        }
-      });
+        },
+      );
 
       subscription.on('error', (err: Error) => {
-        logger.error({ err, account: this.config.account }, 'GmailWatcher Pub/Sub error — falling back to polling');
+        logger.error(
+          { err, account: this.config.account },
+          'GmailWatcher Pub/Sub error — falling back to polling',
+        );
         this.stopPushMode();
         this.scheduleNext();
       });
 
       this.setPushModeActive(true);
-      logger.info({ account: this.config.account, topic: pubsubTopic }, 'GmailWatcher started in push mode');
+      logger.info(
+        { account: this.config.account, topic: pubsubTopic },
+        'GmailWatcher started in push mode',
+      );
       return true;
     } catch (err) {
-      logger.warn({ err, account: this.config.account }, 'GmailWatcher failed to start push mode — falling back to polling');
+      logger.warn(
+        { err, account: this.config.account },
+        'GmailWatcher failed to start push mode — falling back to polling',
+      );
       return false;
     }
   }
@@ -392,7 +411,10 @@ export class GmailWatcher {
       this.state.lastHistoryId = res.data.historyId;
       this.saveState();
     }
-    logger.info({ account: this.config.account, expiration: res.data.expiration }, 'Gmail watch registered');
+    logger.info(
+      { account: this.config.account, expiration: res.data.expiration },
+      'Gmail watch registered',
+    );
 
     // Re-register every 6 days (watches expire after 7)
     setTimeout(() => void this.registerGmailWatch(), 6 * 24 * 60 * 60 * 1000);

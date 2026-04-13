@@ -2297,7 +2297,15 @@ describe('action_log table', () => {
     db.prepare(
       `INSERT INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run('test-1', 'einstein', 'telegram_science-claw', 'qmd_query', 'abc123', 'research', '2026-04-13T10:00:00Z');
+    ).run(
+      'test-1',
+      'einstein',
+      'telegram_science-claw',
+      'qmd_query',
+      'abc123',
+      'research',
+      '2026-04-13T10:00:00Z',
+    );
 
     const rows = db
       .prepare('SELECT * FROM action_log WHERE agent = ?')
@@ -2314,12 +2322,96 @@ describe('pattern_proposals table', () => {
     db.prepare(
       `INSERT INTO pattern_proposals (id, description, proposed_at, status, proposal_count_date, proposal_count)
        VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run('prop-1', 'Weekly lab summary', '2026-04-13', 'pending', '2026-04-13', 1);
+    ).run(
+      'prop-1',
+      'Weekly lab summary',
+      '2026-04-13',
+      'pending',
+      '2026-04-13',
+      1,
+    );
 
     const rows = db
       .prepare('SELECT * FROM pattern_proposals WHERE status = ?')
       .all('pending');
     expect(rows).toHaveLength(1);
     expect((rows[0] as any).description).toBe('Weekly lab summary');
+  });
+});
+
+describe('insertActionLogEntries', () => {
+  it('inserts multiple entries in one call', () => {
+    const { insertActionLogEntries } = require('./db.js');
+    insertActionLogEntries('telegram_science-claw', [
+      {
+        tool: 'qmd_query',
+        paramsHash: 'aaa111',
+        timestamp: '2026-04-13T10:00:00Z',
+      },
+      {
+        tool: 'bus_publish',
+        paramsHash: 'bbb222',
+        timestamp: '2026-04-13T10:01:00Z',
+      },
+    ]);
+
+    const db = _getTestDb();
+    const rows = db
+      .prepare('SELECT * FROM action_log WHERE group_folder = ?')
+      .all('telegram_science-claw');
+    expect(rows).toHaveLength(2);
+    expect((rows[0] as any).tool_name).toBe('qmd_query');
+    expect((rows[1] as any).tool_name).toBe('bus_publish');
+  });
+
+  it('uses OR IGNORE to skip duplicates', () => {
+    const { insertActionLogEntries } = require('./db.js');
+    const entries = [
+      {
+        tool: 'qmd_query',
+        paramsHash: 'same123',
+        timestamp: '2026-04-13T10:00:00Z',
+      },
+    ];
+    insertActionLogEntries('group-a', entries);
+    insertActionLogEntries('group-a', entries); // duplicate — same id
+
+    const db = _getTestDb();
+    const rows = db
+      .prepare("SELECT * FROM action_log WHERE params_hash = 'same123'")
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+});
+
+describe('getActionLogRows', () => {
+  it('returns rows since a given timestamp', () => {
+    const { insertActionLogEntries, getActionLogRows } = require('./db.js');
+    insertActionLogEntries('group-a', [
+      { tool: 'tool_a', paramsHash: 'h1', timestamp: '2026-04-10T10:00:00Z' },
+      { tool: 'tool_b', paramsHash: 'h2', timestamp: '2026-04-12T10:00:00Z' },
+      { tool: 'tool_c', paramsHash: 'h3', timestamp: '2026-04-14T10:00:00Z' },
+    ]);
+
+    const rows = getActionLogRows('2026-04-11T00:00:00Z');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].tool_name).toBe('tool_b');
+    expect(rows[1].tool_name).toBe('tool_c');
+  });
+});
+
+describe('getPatternProposals', () => {
+  it('returns recent proposals', () => {
+    const { insertPatternProposal, getPatternProposals } = require('./db.js');
+    insertPatternProposal({
+      id: 'prop-test-1',
+      description: 'Test proposal',
+      proposed_at: '2026-04-13',
+    });
+
+    const proposals = getPatternProposals();
+    expect(proposals).toHaveLength(1);
+    expect(proposals[0].description).toBe('Test proposal');
+    expect(proposals[0].status).toBe('pending');
   });
 });

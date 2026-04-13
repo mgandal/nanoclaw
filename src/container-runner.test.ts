@@ -1589,9 +1589,7 @@ describe('collectToolCalls', () => {
   });
 
   it('reads tool-calls.json and returns parsed records', () => {
-    const tmpDir = realFs.mkdtempSync(
-      path.join(os.tmpdir(), 'toolcall-test-'),
-    );
+    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'toolcall-test-'));
     const outputDir = path.join(tmpDir, 'output');
     realFs.mkdirSync(outputDir, { recursive: true });
 
@@ -1620,9 +1618,7 @@ describe('collectToolCalls', () => {
   });
 
   it('returns empty array when no tool-calls.json exists', () => {
-    const tmpDir = realFs.mkdtempSync(
-      path.join(os.tmpdir(), 'toolcall-test-'),
-    );
+    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'toolcall-test-'));
     const records = collectToolCalls(path.join(tmpDir, 'nonexistent'));
     expect(records).toHaveLength(0);
     realFs.rmSync(tmpDir, { recursive: true, force: true });

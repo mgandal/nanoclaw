@@ -266,7 +266,8 @@ async function runTask(
       // Dynamic import — pattern-engine.ts exports runPatternDetection
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const patternEngine: any = await import('./pattern-engine.js');
-      const runPatternDetection = patternEngine.runPatternDetection as () => Promise<string | null>;
+      const runPatternDetection =
+        patternEngine.runPatternDetection as () => Promise<string | null>;
       const proposal = await runPatternDetection();
       if (proposal) {
         result = proposal;

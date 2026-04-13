@@ -917,22 +917,8 @@ export async function runContainerAgent(
             );
             if (toolCalls.length > 0) {
               try {
-                const { getDb } = await import('./db.js');
-                const db = getDb();
-                const insert = db.prepare(
-                  'INSERT OR IGNORE INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                );
-                for (const tc of toolCalls) {
-                  insert.run(
-                    `${group.folder}-${tc.timestamp}-${tc.paramsHash.slice(0, 8)}`,
-                    group.folder,
-                    group.folder,
-                    tc.tool,
-                    tc.paramsHash,
-                    '',
-                    tc.timestamp,
-                  );
-                }
+                const { insertActionLogEntries } = await import('./db.js');
+                insertActionLogEntries(group.folder, toolCalls);
               } catch (err) {
                 logger.warn(
                   { err, groupFolder: group.folder },
@@ -988,22 +974,8 @@ export async function runContainerAgent(
         if (toolCalls.length > 0) {
           void (async () => {
             try {
-              const { getDb } = await import('./db.js');
-              const db = getDb();
-              const insert = db.prepare(
-                'INSERT OR IGNORE INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              );
-              for (const tc of toolCalls) {
-                insert.run(
-                  `${group.folder}-${tc.timestamp}-${tc.paramsHash.slice(0, 8)}`,
-                  group.folder,
-                  group.folder,
-                  tc.tool,
-                  tc.paramsHash,
-                  '',
-                  tc.timestamp,
-                );
-              }
+              const { insertActionLogEntries } = await import('./db.js');
+              insertActionLogEntries(group.folder, toolCalls);
             } catch (err) {
               logger.warn(
                 { err, groupFolder: group.folder },

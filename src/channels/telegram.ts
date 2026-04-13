@@ -704,7 +704,7 @@ export class TelegramChannel implements Channel {
       { command: 'status', description: 'Show system status' },
       { command: 'compact', description: 'Compress conversation context' },
       { command: 'tasks', description: 'Show scheduled tasks' },
-      { command: 'chatid', description: 'Show this chat\'s registration ID' },
+      { command: 'chatid', description: "Show this chat's registration ID" },
     ]);
 
     // Start polling — returns a Promise that resolves when started
