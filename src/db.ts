@@ -106,6 +106,27 @@ function createSchema(database: Database): void {
       outcome TEXT DEFAULT 'completed',
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS action_log (
+      id TEXT PRIMARY KEY,
+      agent TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      params_hash TEXT NOT NULL,
+      context_category TEXT DEFAULT '',
+      timestamp TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_action_log_agent ON action_log(agent, tool_name);
+    CREATE INDEX IF NOT EXISTS idx_action_log_time ON action_log(timestamp);
+
+    CREATE TABLE IF NOT EXISTS pattern_proposals (
+      id TEXT PRIMARY KEY,
+      description TEXT NOT NULL,
+      proposed_at TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      rejection_reason TEXT,
+      proposal_count_date TEXT,
+      proposal_count INTEGER DEFAULT 0
+    );
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)

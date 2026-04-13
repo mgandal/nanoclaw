@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   _initTestDatabase,
   _closeDatabase,
+  _getTestDb,
   createTask,
   deleteSession,
   deleteTask,
@@ -2287,5 +2288,38 @@ describe('getTasksForGroup ordering and filtering', () => {
     // DESC ordering: newer first
     expect(all[0].id).toBe('newer-task');
     expect(all[1].id).toBe('older-task');
+  });
+});
+
+describe('action_log table', () => {
+  it('inserts and queries action log entries', () => {
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('test-1', 'einstein', 'telegram_science-claw', 'qmd_query', 'abc123', 'research', '2026-04-13T10:00:00Z');
+
+    const rows = db
+      .prepare('SELECT * FROM action_log WHERE agent = ?')
+      .all('einstein');
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as any).tool_name).toBe('qmd_query');
+    expect((rows[0] as any).params_hash).toBe('abc123');
+  });
+});
+
+describe('pattern_proposals table', () => {
+  it('inserts and queries proposals', () => {
+    const db = _getTestDb();
+    db.prepare(
+      `INSERT INTO pattern_proposals (id, description, proposed_at, status, proposal_count_date, proposal_count)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run('prop-1', 'Weekly lab summary', '2026-04-13', 'pending', '2026-04-13', 1);
+
+    const rows = db
+      .prepare('SELECT * FROM pattern_proposals WHERE status = ?')
+      .all('pending');
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as any).description).toBe('Weekly lab summary');
   });
 });
