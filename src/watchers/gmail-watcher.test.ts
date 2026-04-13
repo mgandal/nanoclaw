@@ -500,3 +500,46 @@ describe('GmailWatcher.fetchNewMessagesByHistory', () => {
     expect(mockMessagesList).toHaveBeenCalledTimes(2);
   });
 });
+
+// ─── push mode status ─────────────────────────────────────────────────────────
+
+describe('push mode status', () => {
+  it('reports polling mode by default', () => {
+    const tmpDir = makeTempDir();
+    const credsPath = makeCredentials(tmpDir);
+    const router = makeEventRouter();
+
+    const watcher = new GmailWatcher({
+      credentialsPath: credsPath,
+      account: 'test@gmail.com',
+      eventRouter: router,
+      pollIntervalMs: 60000,
+      stateDir: tmpDir,
+    });
+
+    expect(watcher.getStatus().mode).toBe('polling');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reports push mode when active', () => {
+    const tmpDir = makeTempDir();
+    const credsPath = makeCredentials(tmpDir);
+    const router = makeEventRouter();
+
+    const watcher = new GmailWatcher({
+      credentialsPath: credsPath,
+      account: 'test@gmail.com',
+      eventRouter: router,
+      pollIntervalMs: 60000,
+      stateDir: tmpDir,
+    });
+
+    watcher.setPushModeActive(true);
+    expect(watcher.getStatus().mode).toBe('push');
+
+    watcher.setPushModeActive(false);
+    expect(watcher.getStatus().mode).toBe('polling');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+});

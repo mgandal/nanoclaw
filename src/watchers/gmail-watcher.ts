@@ -101,6 +101,7 @@ export class GmailWatcher {
   private state: GmailState = { processedIds: [] };
   private authFailureCount = 0;
   private historyWatermark: string | null = null;
+  private pushModeActive = false;
 
   constructor(config: GmailWatcherConfig) {
     this.config = config;
@@ -130,11 +131,15 @@ export class GmailWatcher {
 
   getStatus(): GmailWatcherStatus {
     return {
-      mode: 'polling',
+      mode: this.pushModeActive ? 'push' : 'polling',
       account: this.config.account,
       lastCheck: this.lastCheck,
       messagesProcessed: this.messagesProcessed,
     };
+  }
+
+  setPushModeActive(active: boolean): void {
+    this.pushModeActive = active;
   }
 
   /** Sets the history watermark used for replay protection. */

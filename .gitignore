@@ -10,6 +10,7 @@ logs/
 # data/ — ignore runtime contents but track agent config
 data/*
 !data/agents/
+!data/agent-knowledge/
 
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
