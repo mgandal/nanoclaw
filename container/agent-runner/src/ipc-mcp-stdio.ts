@@ -1262,6 +1262,54 @@ server.tool(
   },
 );
 
+// knowledge_publish — publish a structured finding to the shared knowledge base
+server.tool(
+  'knowledge_publish',
+  'Publish a structured finding to the shared knowledge base. ' +
+    'Use when you discover something other agents should know about. ' +
+    'Findings are searchable by all agents across all groups.',
+  {
+    topic: z.string().describe('Topic category (e.g., "APA regulation", "lab scheduling")'),
+    finding: z.string().describe('The finding — clear, specific, actionable'),
+    evidence: z.string().describe('Source (DOI, URL, conversation reference)'),
+    tags: z.array(z.string()).describe('Tags for discoverability'),
+  },
+  async (args) => {
+    writeIpcFile(TASKS_DIR, {
+      type: 'knowledge_publish',
+      topic: args.topic,
+      finding: args.finding,
+      evidence: args.evidence,
+      tags: args.tags,
+      from: groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    return { content: [{ type: 'text' as const, text: `Published knowledge: "${args.topic}"` }] };
+  },
+);
+
+// knowledge_search — search the shared knowledge base
+server.tool(
+  'knowledge_search',
+  'Search the shared knowledge base for findings published by any agent.',
+  {
+    query: z.string().describe('Search query (semantic)'),
+    from_agent: z.string().optional().describe('Filter by publishing agent (optional)'),
+    topic: z.string().optional().describe('Filter by topic (optional)'),
+  },
+  async (args) => {
+    return {
+      content: [{
+        type: 'text' as const,
+        text:
+          `To search shared knowledge, use the qmd tool with collection "agent-knowledge" and query: "${args.query}". ` +
+          (args.from_agent ? `Filter by agent: ${args.from_agent}. ` : '') +
+          (args.topic ? `Filter by topic: ${args.topic}.` : ''),
+      }],
+    };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);
