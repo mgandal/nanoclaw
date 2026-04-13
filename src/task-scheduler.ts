@@ -260,6 +260,40 @@ async function runTask(
   let result: string | null = null;
   let error: string | null = null;
 
+  // --- System tasks: run host-side code instead of spawning a container ---
+  if (task.prompt === '__pattern_detection__') {
+    try {
+      // Dynamic import — pattern-engine.ts exports runPatternDetection
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const patternEngine: any = await import('./pattern-engine.js');
+      const runPatternDetection = patternEngine.runPatternDetection as () => Promise<string | null>;
+      const proposal = await runPatternDetection();
+      if (proposal) {
+        result = proposal;
+        await deps.sendMessage(task.chat_jid, proposal);
+      } else {
+        result = 'No patterns detected';
+      }
+      logger.info({ taskId: task.id }, 'Pattern detection completed');
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+      logger.error({ taskId: task.id, error }, 'Pattern detection failed');
+    }
+
+    const durationMs = Date.now() - startTime;
+    logTaskRun({
+      task_id: task.id,
+      run_at: new Date().toISOString(),
+      duration_ms: durationMs,
+      status: error ? 'error' : 'success',
+      result,
+      error,
+    });
+    const nextRun = computeNextRun(task);
+    updateTaskAfterRun(task.id, nextRun, result || 'No patterns detected');
+    return;
+  }
+
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
   const sessionId =

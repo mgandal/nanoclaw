@@ -244,6 +244,11 @@ export function _initTestDatabase(): void {
   createSchema(db);
 }
 
+/** Returns the current database instance for raw queries. */
+export function getDb(): Database {
+  return db;
+}
+
 /** @internal - for tests only. Returns the current database instance for raw queries. */
 export function _getTestDb(): Database {
   return db;
@@ -929,6 +934,91 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- Action log & pattern proposal accessors ---
+
+export interface ToolCallEntry {
+  tool: string;
+  paramsHash: string;
+  timestamp: string;
+}
+
+/**
+ * Insert tool-call records into the action_log table.
+ * Uses OR IGNORE so duplicate IDs are silently skipped.
+ */
+export function insertActionLogEntries(
+  groupFolder: string,
+  entries: ToolCallEntry[],
+): void {
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO action_log (id, agent, group_folder, tool_name, params_hash, context_category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  );
+  for (const tc of entries) {
+    insert.run(
+      `${groupFolder}-${tc.timestamp}-${tc.paramsHash.slice(0, 8)}`,
+      groupFolder,
+      groupFolder,
+      tc.tool,
+      tc.paramsHash,
+      '',
+      tc.timestamp,
+    );
+  }
+}
+
+/**
+ * Get action log rows since a given ISO timestamp, ordered by timestamp.
+ */
+export function getActionLogRows(
+  since: string,
+): Array<{ tool_name: string; params_hash: string; timestamp: string }> {
+  return db
+    .prepare(
+      'SELECT tool_name, params_hash, timestamp FROM action_log WHERE timestamp >= ? ORDER BY timestamp',
+    )
+    .all(since) as Array<{
+    tool_name: string;
+    params_hash: string;
+    timestamp: string;
+  }>;
+}
+
+/**
+ * Get all pattern proposals (recent first).
+ */
+export function getPatternProposals(): Array<{
+  id: string;
+  description: string;
+  proposed_at: string;
+  status: string;
+  rejection_reason: string | null;
+}> {
+  return db
+    .prepare(
+      'SELECT id, description, proposed_at, status, rejection_reason FROM pattern_proposals ORDER BY proposed_at DESC LIMIT 100',
+    )
+    .all() as Array<{
+    id: string;
+    description: string;
+    proposed_at: string;
+    status: string;
+    rejection_reason: string | null;
+  }>;
+}
+
+/**
+ * Insert a new pattern proposal.
+ */
+export function insertPatternProposal(proposal: {
+  id: string;
+  description: string;
+  proposed_at: string;
+}): void {
+  db.prepare(
+    'INSERT INTO pattern_proposals (id, description, proposed_at, status) VALUES (?, ?, ?, ?)',
+  ).run(proposal.id, proposal.description, proposal.proposed_at, 'pending');
 }
 
 // --- Agent registry accessors ---

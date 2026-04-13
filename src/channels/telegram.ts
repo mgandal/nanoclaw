@@ -698,6 +698,15 @@ export class TelegramChannel implements Channel {
       logger.error({ err: err.message }, 'Telegram bot error');
     });
 
+    // Register slash commands for Telegram autocomplete
+    await this.bot.api.setMyCommands([
+      { command: 'new', description: 'Start a fresh session' },
+      { command: 'status', description: 'Show system status' },
+      { command: 'compact', description: 'Compress conversation context' },
+      { command: 'tasks', description: 'Show scheduled tasks' },
+      { command: 'chatid', description: 'Show this chat\'s registration ID' },
+    ]);
+
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
       this.bot!.start({
