@@ -147,6 +147,10 @@ export const BUS_POLL_INTERVAL = parseInt(
 );
 export const BUS_HIGH_PRIORITY_INTERVAL = 5000;
 
+// Operational alerts: group folder that receives all system alerts
+export const OPS_ALERT_FOLDER =
+  process.env.OPS_ALERT_FOLDER || 'telegram_ops-claw';
+
 // Health monitor thresholds
 export const HEALTH_MONITOR_INTERVAL = 60_000;
 export const MAX_CONTAINER_SPAWNS_PER_HOUR = 30;
