@@ -779,6 +779,34 @@ export async function processTaskIpc(
       break;
     }
 
+    case 'knowledge_publish': {
+      const { publishKnowledge } = await import('./knowledge.js');
+      const knowledgeDir = path.join(DATA_DIR, 'agent-knowledge');
+      const entry = {
+        topic: (data as any).topic || 'unknown',
+        finding: (data as any).finding || '',
+        evidence: (data as any).evidence || '',
+        tags: (data as any).tags || [],
+      };
+      const filePath = publishKnowledge(entry, sourceGroup, knowledgeDir);
+      logger.info(
+        { sourceGroup, topic: entry.topic, filePath },
+        'Knowledge entry published',
+      );
+
+      // Publish notification to message bus if available
+      if (deps.messageBus) {
+        deps.messageBus.publish({
+          from: sourceGroup,
+          topic: `knowledge:${entry.topic}`,
+          summary: entry.finding.slice(0, 200),
+          action_needed: '',
+          priority: 'low',
+        });
+      }
+      break;
+    }
+
     case 'write_agent_state': {
       const d = data as Record<string, unknown>;
       const content = d.content as string;

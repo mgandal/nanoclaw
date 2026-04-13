@@ -12,7 +12,12 @@ import {
   updateTask,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
+import { publishKnowledge } from './knowledge.js';
 import { RegisteredGroup } from './types.js';
+
+vi.mock('./knowledge.js', () => ({
+  publishKnowledge: vi.fn().mockReturnValue('/tmp/fake-knowledge-file.md'),
+}));
 
 // --- Shared setup ---
 
@@ -862,6 +867,35 @@ describe('schedule_task with invalid cron', () => {
 
     expect(getAllTasks()).toHaveLength(0);
     expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- 14. knowledge_publish ---
+
+describe('processTaskIpc', () => {
+  it('knowledge_publish writes file and stamps sourceGroup', async () => {
+    await processTaskIpc(
+      {
+        type: 'knowledge_publish',
+        topic: 'test topic',
+        finding: 'test finding',
+        evidence: 'test evidence',
+        tags: ['tag1', 'tag2'],
+        agent: 'forged-identity',
+      } as any,
+      'telegram_science-claw',
+      false,
+      deps,
+    );
+
+    expect(publishKnowledge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        topic: 'test topic',
+        finding: 'test finding',
+      }),
+      'telegram_science-claw',
+      expect.stringContaining('agent-knowledge'),
+    );
   });
 });
 
