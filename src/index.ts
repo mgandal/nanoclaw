@@ -981,7 +981,11 @@ async function main(): Promise<void> {
     { name: 'Honcho', url: undefined as string | undefined },
     { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
     { name: 'Todoist', url: process.env.TODOIST_URL },
-    { name: 'Hindsight', url: process.env.HINDSIGHT_URL, healthUrl: 'http://127.0.0.1:8888/health' },
+    {
+      name: 'Hindsight',
+      url: process.env.HINDSIGHT_URL,
+      healthUrl: 'http://127.0.0.1:8888/health',
+    },
   ];
 
   // Read URLs from .env if not in process.env
@@ -1096,10 +1100,7 @@ async function main(): Promise<void> {
       messageBus,
       healthMonitor,
       onEscalate: async (event) => {
-        void sendSystemAlert(
-          'Event Escalation',
-          event.classification.summary,
-        );
+        void sendSystemAlert('Event Escalation', event.classification.summary);
       },
     });
 
@@ -1326,7 +1327,10 @@ async function main(): Promise<void> {
   // Factories return null when credentials are missing, so unconfigured channels are skipped.
   for (const channelName of getRegisteredChannelNames()) {
     const factory = getChannelFactory(channelName)!;
-    const channel = factory(channelOpts);
+    const channel = factory({
+      ...channelOpts,
+      onAlert: (msg) => void sendSystemAlert(channelName, msg),
+    });
     if (!channel) {
       logger.warn(
         { channel: channelName },
@@ -1335,7 +1339,18 @@ async function main(): Promise<void> {
       continue;
     }
     channels.push(channel);
-    await channel.connect();
+    try {
+      await channel.connect();
+    } catch (err) {
+      logger.error(
+        { channel: channelName, err },
+        'Channel failed to connect — continuing with remaining channels',
+      );
+      void sendSystemAlert(
+        channelName,
+        `Channel failed to connect: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
