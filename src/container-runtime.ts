@@ -71,7 +71,10 @@ export function stopContainer(name: string): void {
   if (!name || !VALID_CONTAINER_NAME.test(name)) {
     throw new Error(`Invalid container name: ${name}`);
   }
-  execSync(`${CONTAINER_RUNTIME_BIN} stop ${name}`, { stdio: 'pipe', timeout: 15000 });
+  execSync(`${CONTAINER_RUNTIME_BIN} stop ${name}`, {
+    stdio: 'pipe',
+    timeout: 15000,
+  });
 }
 
 /** Ensure the container runtime is running, starting it if needed. */

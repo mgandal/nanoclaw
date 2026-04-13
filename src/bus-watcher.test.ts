@@ -25,7 +25,13 @@ describe('BusWatcher', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, '123-abc.json'),
-      JSON.stringify({ id: '1', topic: 'test', priority: 'medium', from: 'x', timestamp: 't' }),
+      JSON.stringify({
+        id: '1',
+        topic: 'test',
+        priority: 'medium',
+        from: 'x',
+        timestamp: 't',
+      }),
     );
 
     const watcher = new BusWatcher(tmpDir, mockDispatch);
@@ -53,7 +59,13 @@ describe('BusWatcher', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, '123-abc.json'),
-      JSON.stringify({ id: '1', topic: 'urgent', priority: 'high', from: 'x', timestamp: 't' }),
+      JSON.stringify({
+        id: '1',
+        topic: 'urgent',
+        priority: 'high',
+        from: 'x',
+        timestamp: 't',
+      }),
     );
 
     const watcher = new BusWatcher(tmpDir, mockDispatch);
@@ -64,9 +76,14 @@ describe('BusWatcher', () => {
   it('restores messages on dispatch failure', async () => {
     const dir = path.join(agentsDir, 'telegram_lab-claw--einstein');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, '123-abc.json'), '{"id":"1","from":"x","topic":"t","timestamp":"t"}');
+    fs.writeFileSync(
+      path.join(dir, '123-abc.json'),
+      '{"id":"1","from":"x","topic":"t","timestamp":"t"}',
+    );
 
-    const failDispatch = vi.fn().mockRejectedValue(new Error('dispatch failed'));
+    const failDispatch = vi
+      .fn()
+      .mockRejectedValue(new Error('dispatch failed'));
     const watcher = new BusWatcher(tmpDir, failDispatch);
     await watcher.poll();
 
@@ -79,7 +96,10 @@ describe('BusWatcher', () => {
   it('moves messages to done/ on success', async () => {
     const dir = path.join(agentsDir, 'telegram_lab-claw--einstein');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, '123-abc.json'), '{"id":"1","from":"x","topic":"t","timestamp":"t"}');
+    fs.writeFileSync(
+      path.join(dir, '123-abc.json'),
+      '{"id":"1","from":"x","topic":"t","timestamp":"t"}',
+    );
 
     const watcher = new BusWatcher(tmpDir, mockDispatch);
     await watcher.poll();

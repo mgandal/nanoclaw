@@ -977,7 +977,11 @@ describe('credential-proxy', () => {
       // Alternate 401 and 403
       const status = requestCount % 2 === 1 ? 401 : 403;
       res.writeHead(status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: status === 401 ? 'unauthorized' : 'forbidden' }));
+      res.end(
+        JSON.stringify({
+          error: status === 401 ? 'unauthorized' : 'forbidden',
+        }),
+      );
     });
     await new Promise<void>((resolve) =>
       upstreamServer.listen(0, '127.0.0.1', resolve),

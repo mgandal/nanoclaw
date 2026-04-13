@@ -2,5 +2,6 @@ actions:
   send_message: notify
   publish_to_bus: autonomous
   write_vault: notify
-  search_literature: autonomous
   write_agent_memory: autonomous
+  schedule_task: notify
+  search_literature: autonomous

@@ -929,7 +929,9 @@ describe('validateMount — null byte injection', () => {
     // resolve safely under the allowed root. Must NOT allow access outside root.
     if (result.allowed) {
       // If allowed, the realHostPath must still be under the allowed root
-      expect(result.realHostPath!.startsWith(fs.realpathSync(allowedRoot))).toBe(true);
+      expect(
+        result.realHostPath!.startsWith(fs.realpathSync(allowedRoot)),
+      ).toBe(true);
     } else {
       // Rejected is the safe outcome — path with null byte doesn't resolve
       expect(result.allowed).toBe(false);

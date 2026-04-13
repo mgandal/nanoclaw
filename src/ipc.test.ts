@@ -1164,12 +1164,7 @@ describe('save_skill missing skillContent', () => {
     );
 
     // Empty string is falsy, should be rejected by the !skillContent check
-    const skillDir = path.join(
-      tmpDir,
-      'container',
-      'skills',
-      'empty-content',
-    );
+    const skillDir = path.join(tmpDir, 'container', 'skills', 'empty-content');
     expect(fs.existsSync(skillDir)).toBe(false);
   });
 });

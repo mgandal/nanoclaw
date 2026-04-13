@@ -290,7 +290,10 @@ export class SlackChannel implements Channel {
 
       if (this.isAuthError(error)) {
         // Auth errors are permanent — don't schedule reconnects
-        logger.error({ error }, 'Slack: permanent auth error, not scheduling reconnect');
+        logger.error(
+          { error },
+          'Slack: permanent auth error, not scheduling reconnect',
+        );
         return;
       }
 
