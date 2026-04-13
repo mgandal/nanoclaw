@@ -24,6 +24,7 @@ import {
   MAX_ERRORS_PER_HOUR,
   MAX_MESSAGES_PER_PROMPT,
   OLLAMA_HOST,
+  OPS_ALERT_FOLDER,
   OLLAMA_MODEL,
   POLL_INTERVAL,
   SESSION_IDLE_MS,
@@ -818,11 +819,10 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
-/** Send an alert to specified groups + persist for digests. */
+/** Send an alert to OPS-claw + persist for digests. Always routes to OPS_ALERT_FOLDER. */
 async function sendSystemAlert(
   service: string,
   message: string,
-  targetFolders: string[],
   fixInstructions?: string,
 ): Promise<void> {
   appendAlert({
@@ -832,18 +832,16 @@ async function sendSystemAlert(
     fixInstructions,
   });
 
-  for (const folder of targetFolders) {
-    const jid = Object.keys(registeredGroups).find(
-      (j) => registeredGroups[j]?.folder === folder,
-    );
-    if (!jid) continue;
-    const channel = findChannel(channels, jid);
-    if (!channel) continue;
-    const text = fixInstructions
-      ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
-      : `⚠️ *${service}*: ${message}`;
-    await channel.sendMessage(jid, text).catch(() => {});
-  }
+  const jid = Object.keys(registeredGroups).find(
+    (j) => registeredGroups[j]?.folder === OPS_ALERT_FOLDER,
+  );
+  if (!jid) return;
+  const channel = findChannel(channels, jid);
+  if (!channel) return;
+  const text = fixInstructions
+    ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
+    : `⚠️ *${service}*: ${message}`;
+  await channel.sendMessage(jid, text).catch(() => {});
 }
 
 async function main(): Promise<void> {
@@ -870,20 +868,8 @@ async function main(): Promise<void> {
     maxErrorsPerHour: MAX_ERRORS_PER_HOUR,
     onAlert: (alert) => {
       logger.error({ tag: 'SYSTEM_ALERT', alert }, 'Health monitor alert');
-      // Send to main group (existing behavior)
-      const mainJid = Object.keys(registeredGroups).find(
-        (jid) => registeredGroups[jid]?.isMain,
-      );
-      if (mainJid) {
-        const channel = findChannel(channels, mainJid);
-        channel
-          ?.sendMessage(mainJid, `System alert: ${alert.detail}`)
-          .catch(() => {});
-      }
-      // Also send infra alerts to CODE-claw
-      if (alert.type === 'infra_error') {
-        void sendSystemAlert(alert.group, alert.detail, ['telegram_code-claw']);
-      }
+      // Route all operational alerts to OPS-claw
+      void sendSystemAlert(alert.group, alert.detail);
     },
   });
 
@@ -1110,16 +1096,10 @@ async function main(): Promise<void> {
       messageBus,
       healthMonitor,
       onEscalate: async (event) => {
-        const mainJid = Object.keys(registeredGroups).find(
-          (jid) => registeredGroups[jid]?.isMain,
+        void sendSystemAlert(
+          'Event Escalation',
+          event.classification.summary,
         );
-        if (mainJid) {
-          const channel = findChannel(channels, mainJid);
-          await channel?.sendMessage(
-            mainJid,
-            `Escalated event: ${event.classification.summary}`,
-          );
-        }
       },
     });
 
@@ -1137,7 +1117,6 @@ async function main(): Promise<void> {
           void sendSystemAlert(
             'Gmail',
             error,
-            ['telegram_code-claw'],
             'Re-authorize Gmail OAuth: run the OAuth refresh flow in ~/.gmail-mcp/',
           );
         },
@@ -1180,7 +1159,6 @@ async function main(): Promise<void> {
       void sendSystemAlert(
         'Credential Proxy',
         `${statusCode} auth failures from Anthropic API — token may be expired or invalid`,
-        ['telegram_code-claw'],
         'Check CLAUDE_CODE_OAUTH_TOKEN in .env or run scripts/refresh-api-key.sh',
       );
     },
