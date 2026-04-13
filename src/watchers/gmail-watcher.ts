@@ -36,6 +36,12 @@ export interface GmailWatcherConfig {
   eventRouter: EventRouter;
   /** How often to poll, in milliseconds */
   pollIntervalMs: number;
+  /** Google Cloud Pub/Sub topic for push notifications (optional — falls back to polling) */
+  pubsubTopic?: string;
+  /** Google Cloud Pub/Sub subscription name */
+  pubsubSubscription?: string;
+  /** Path to GCP service account JSON for Pub/Sub (separate from Gmail OAuth) */
+  pubsubServiceAccountPath?: string;
   /** Directory where gmail-state.json is persisted */
   stateDir: string;
   /** Called on first auth failure (e.g. expired token). Fire-and-forget. */
@@ -43,7 +49,7 @@ export interface GmailWatcherConfig {
 }
 
 export interface GmailWatcherStatus {
-  mode: 'polling';
+  mode: 'polling' | 'push';
   account: string;
   lastCheck: string | null;
   messagesProcessed: number;
