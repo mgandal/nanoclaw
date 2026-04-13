@@ -18,6 +18,7 @@ vi.mock('../logger.js', () => ({
 
 const mockMessagesList = vi.fn();
 const mockMessagesGet = vi.fn();
+const mockHistoryList = vi.fn();
 
 vi.mock('googleapis', () => ({
   google: {
@@ -26,6 +27,9 @@ vi.mock('googleapis', () => ({
         messages: {
           list: mockMessagesList,
           get: mockMessagesGet,
+        },
+        history: {
+          list: mockHistoryList,
         },
       },
     })),
@@ -90,6 +94,9 @@ describe('GmailWatcher', () => {
     // Default: no messages
     mockMessagesList.mockResolvedValue({ data: { messages: [] } });
     mockMessagesGet.mockResolvedValue({ data: {} });
+    mockHistoryList.mockResolvedValue({
+      data: { history: [], historyId: '999' },
+    });
   });
 
   afterEach(() => {
@@ -317,5 +324,179 @@ describe('Gmail auth failure backoff', () => {
   it('returns -1 (stop) when failures exceed schedule length', () => {
     expect(computeBackoffMs(3)).toBe(-1);
     expect(computeBackoffMs(10)).toBe(-1);
+  });
+});
+
+// ─── fetchNewMessagesByHistory ────────────────────────────────────────────────
+
+describe('GmailWatcher.fetchNewMessagesByHistory', () => {
+  let stateDir: string;
+  let credDir: string;
+  let credentialsPath: string;
+  let eventRouter: EventRouter;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stateDir = makeTempDir();
+    credDir = makeTempDir();
+    credentialsPath = makeCredentials(credDir);
+    eventRouter = makeEventRouter();
+    mockMessagesList.mockResolvedValue({ data: { messages: [] } });
+    mockMessagesGet.mockResolvedValue({ data: {} });
+    mockHistoryList.mockResolvedValue({
+      data: { history: [], historyId: '999' },
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.rmSync(credDir, { recursive: true, force: true });
+  });
+
+  it('fetches messages from history, routes them, and returns count', async () => {
+    // Simulate a history response with two added messages
+    mockHistoryList.mockResolvedValue({
+      data: {
+        history: [
+          {
+            messagesAdded: [
+              { message: { id: 'msg-h1' } },
+              { message: { id: 'msg-h2' } },
+            ],
+          },
+        ],
+        historyId: '5000',
+      },
+    });
+
+    mockMessagesGet
+      .mockResolvedValueOnce({
+        data: {
+          id: 'msg-h1',
+          threadId: 'thread-h1',
+          snippet: 'History message 1',
+          labelIds: ['INBOX'],
+          payload: {
+            headers: [
+              { name: 'From', value: 'alice@example.com' },
+              { name: 'To', value: 'bob@example.com' },
+              { name: 'Subject', value: 'History Test 1' },
+              { name: 'Date', value: 'Mon, 21 Mar 2026 09:00:00 +0000' },
+            ],
+            parts: [],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          id: 'msg-h2',
+          threadId: 'thread-h2',
+          snippet: 'History message 2',
+          labelIds: ['INBOX'],
+          payload: {
+            headers: [
+              { name: 'From', value: 'carol@example.com' },
+              { name: 'To', value: 'bob@example.com' },
+              { name: 'Subject', value: 'History Test 2' },
+              { name: 'Date', value: 'Mon, 21 Mar 2026 10:00:00 +0000' },
+            ],
+            parts: [],
+          },
+        },
+      });
+
+    const watcher = new GmailWatcher({
+      credentialsPath,
+      account: 'test@example.com',
+      eventRouter,
+      pollIntervalMs: 60_000,
+      stateDir,
+    });
+
+    // Manually set auth so we don't need to start()
+    await (
+      watcher as unknown as { authenticate: () => Promise<unknown> }
+    ).authenticate?.();
+    // Use start() to set up auth, then call fetchNewMessagesByHistory
+    // Actually we need auth set — call start() with a no-op poll first
+    mockMessagesList.mockResolvedValue({ data: { messages: [] } });
+    await watcher.start();
+    watcher.stop();
+
+    const count = await watcher.fetchNewMessagesByHistory('4000');
+
+    expect(count).toBe(2);
+    expect(mockHistoryList).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'me',
+        startHistoryId: '4000',
+        historyTypes: ['messageAdded'],
+        labelId: 'INBOX',
+      }),
+    );
+    expect(mockMessagesGet).toHaveBeenCalledTimes(2);
+    expect(eventRouter.route).toHaveBeenCalledTimes(2);
+    expect(eventRouter.route).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'email', id: 'msg-h1' }),
+    );
+    expect(eventRouter.route).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'email', id: 'msg-h2' }),
+    );
+  });
+
+  it('rejects stale historyId when watermark is ahead', async () => {
+    const watcher = new GmailWatcher({
+      credentialsPath,
+      account: 'test@example.com',
+      eventRouter,
+      pollIntervalMs: 60_000,
+      stateDir,
+    });
+
+    mockMessagesList.mockResolvedValue({ data: { messages: [] } });
+    await watcher.start();
+    watcher.stop();
+
+    // Set watermark to a high value
+    watcher.setHistoryWatermark('9000');
+
+    // Attempt to fetch with a historyId behind the watermark
+    const count = await watcher.fetchNewMessagesByHistory('5000');
+
+    expect(count).toBe(0);
+    // history.list should NOT have been called due to replay protection
+    expect(mockHistoryList).not.toHaveBeenCalled();
+  });
+
+  it('falls back to poll() on notFound history error', async () => {
+    mockHistoryList.mockRejectedValue(
+      Object.assign(new Error('Requested entity was not found.'), {
+        code: 404,
+        errors: [{ reason: 'notFound' }],
+      }),
+    );
+
+    const watcher = new GmailWatcher({
+      credentialsPath,
+      account: 'test@example.com',
+      eventRouter,
+      pollIntervalMs: 60_000,
+      stateDir,
+    });
+
+    // First call to messagesList is for start()/poll(), second for the fallback poll
+    mockMessagesList
+      .mockResolvedValueOnce({ data: { messages: [] } }) // start poll
+      .mockResolvedValueOnce({ data: { messages: [] } }); // fallback poll
+
+    await watcher.start();
+    watcher.stop();
+
+    const count = await watcher.fetchNewMessagesByHistory('1000');
+
+    // Fallback returns 0 new messages (empty inbox), but should not throw
+    expect(count).toBe(0);
+    // messages.list called twice: once in start(), once in fallback poll
+    expect(mockMessagesList).toHaveBeenCalledTimes(2);
   });
 });

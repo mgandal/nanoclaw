@@ -100,6 +100,7 @@ export class GmailWatcher {
   private stateFilePath: string;
   private state: GmailState = { processedIds: [] };
   private authFailureCount = 0;
+  private historyWatermark: string | null = null;
 
   constructor(config: GmailWatcherConfig) {
     this.config = config;
@@ -134,6 +135,132 @@ export class GmailWatcher {
       lastCheck: this.lastCheck,
       messagesProcessed: this.messagesProcessed,
     };
+  }
+
+  /** Sets the history watermark used for replay protection. */
+  setHistoryWatermark(historyId: string): void {
+    this.historyWatermark = historyId;
+  }
+
+  /**
+   * Fetches messages added since `startHistoryId` using the Gmail history API.
+   * More efficient than poll() — only retrieves messages newer than the given
+   * historyId rather than listing all INBOX messages.
+   *
+   * Returns the count of new messages processed.
+   * Returns 0 if `startHistoryId` is behind the current watermark (replay protection).
+   * Falls back to poll() if Gmail reports the historyId is expired/invalid.
+   */
+  async fetchNewMessagesByHistory(startHistoryId: string): Promise<number> {
+    if (!this.auth) return 0;
+
+    // Replay protection: reject stale historyIds
+    if (
+      this.historyWatermark !== null &&
+      BigInt(startHistoryId) <= BigInt(this.historyWatermark)
+    ) {
+      logger.warn(
+        {
+          account: this.config.account,
+          startHistoryId,
+          watermark: this.historyWatermark,
+        },
+        'GmailWatcher.fetchNewMessagesByHistory: stale historyId — rejecting (replay protection)',
+      );
+      return 0;
+    }
+
+    const gmail = google.gmail({ version: 'v1', auth: this.auth });
+
+    try {
+      const historyRes = await gmail.users.history.list({
+        userId: 'me',
+        startHistoryId,
+        historyTypes: ['messageAdded'],
+        labelId: 'INBOX',
+      });
+
+      const historyItems = historyRes.data.history ?? [];
+      const processedSet = new Set(this.state.processedIds);
+      let newCount = 0;
+
+      for (const record of historyItems) {
+        const added = record.messagesAdded ?? [];
+        for (const entry of added) {
+          const msgId = entry.message?.id;
+          if (!msgId || processedSet.has(msgId)) continue;
+
+          try {
+            const msgRes = await gmail.users.messages.get({
+              userId: 'me',
+              id: msgId,
+              format: 'metadata',
+              metadataHeaders: ['From', 'To', 'Cc', 'Subject', 'Date'],
+            });
+
+            const raw = msgRes.data as GmailRawMessage;
+            const payload = GmailWatcher.parseMessage(raw);
+
+            await this.config.eventRouter.route({
+              type: 'email',
+              id: msgId,
+              timestamp: new Date().toISOString(),
+              payload: payload as unknown as Record<string, unknown>,
+            });
+
+            processedSet.add(msgId);
+            this.messagesProcessed++;
+            newCount++;
+          } catch (err) {
+            logger.warn(
+              { err, messageId: msgId, account: this.config.account },
+              'GmailWatcher.fetchNewMessagesByHistory failed to fetch/route message — skipping',
+            );
+          }
+        }
+      }
+
+      // Update watermark from the response's historyId
+      if (historyRes.data.historyId) {
+        this.historyWatermark = historyRes.data.historyId;
+        this.state.lastHistoryId = historyRes.data.historyId;
+      }
+
+      // Persist processed IDs (bounded to last 2000)
+      const MAX_PROCESSED = 2000;
+      const allIds = Array.from(processedSet);
+      this.state.processedIds = allIds.slice(
+        Math.max(0, allIds.length - MAX_PROCESSED),
+      );
+      this.saveState();
+
+      return newCount;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isExpired =
+        message.includes('notFound') ||
+        message.includes('invalid') ||
+        message.includes('not found') ||
+        (err as { code?: number }).code === 404 ||
+        (err as { errors?: Array<{ reason?: string }> }).errors?.some(
+          (e) => e.reason === 'notFound' || e.reason === 'invalid',
+        );
+
+      if (isExpired) {
+        logger.warn(
+          { account: this.config.account, startHistoryId },
+          'GmailWatcher.fetchNewMessagesByHistory: historyId expired — falling back to poll()',
+        );
+        await this.poll();
+        return 0;
+      }
+
+      logger.warn(
+        { err, account: this.config.account },
+        'GmailWatcher.fetchNewMessagesByHistory failed',
+      );
+      return 0;
+    }
   }
 
   // ─── Static helpers ────────────────────────────────────────────────────────
