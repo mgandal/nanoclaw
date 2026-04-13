@@ -102,6 +102,7 @@ export class GmailWatcher {
   private authFailureCount = 0;
   private historyWatermark: string | null = null;
   private pushModeActive = false;
+  private pubsubSubscriptionHandle: { close: () => void } | null = null;
 
   constructor(config: GmailWatcherConfig) {
     this.config = config;
@@ -114,8 +115,19 @@ export class GmailWatcher {
     logger.info({ account: this.config.account }, 'GmailWatcher starting');
     this.auth = await this.authenticate();
     this.loadState();
+
+    // Restore watermark from persisted state
+    if (this.state.lastHistoryId) {
+      this.historyWatermark = this.state.lastHistoryId;
+    }
+
+    // Try push mode first if configured
+    if (this.config.pubsubTopic && this.config.pubsubSubscription) {
+      const pushStarted = await this.startPushMode();
+      if (pushStarted) return;
+    }
+
     const selfScheduled = await this.poll();
-    // Only schedule if poll didn't already set up its own backoff timer
     if (!selfScheduled) {
       this.scheduleNext();
     }
@@ -126,6 +138,7 @@ export class GmailWatcher {
       clearTimeout(this.timer);
       this.timer = null;
     }
+    this.stopPushMode();
     logger.info({ account: this.config.account }, 'GmailWatcher stopped');
   }
 
@@ -309,6 +322,81 @@ export class GmailWatcher {
   }
 
   // ─── Private methods ───────────────────────────────────────────────────────
+
+  private async startPushMode(): Promise<boolean> {
+    const { pubsubTopic, pubsubSubscription, pubsubServiceAccountPath } = this.config;
+    if (!pubsubTopic || !pubsubSubscription) return false;
+
+    try {
+      const { PubSub } = await import('@google-cloud/pubsub');
+      const pubsub = pubsubServiceAccountPath
+        ? new PubSub({ keyFilename: pubsubServiceAccountPath })
+        : new PubSub();
+
+      await this.registerGmailWatch();
+
+      const subscription = pubsub.subscription(pubsubSubscription);
+      this.pubsubSubscriptionHandle = subscription;
+
+      subscription.on('message', (message: { data: Buffer; ack: () => void }) => {
+        try {
+          const data = JSON.parse(message.data.toString());
+          const historyId = data.historyId as string | undefined;
+          message.ack();
+          if (historyId) {
+            void this.fetchNewMessagesByHistory(historyId).catch((err) => {
+              logger.warn({ err, account: this.config.account }, 'GmailWatcher push handler failed');
+            });
+          }
+        } catch (err) {
+          message.ack();
+          logger.warn({ err }, 'GmailWatcher failed to parse Pub/Sub message');
+        }
+      });
+
+      subscription.on('error', (err: Error) => {
+        logger.error({ err, account: this.config.account }, 'GmailWatcher Pub/Sub error — falling back to polling');
+        this.stopPushMode();
+        this.scheduleNext();
+      });
+
+      this.setPushModeActive(true);
+      logger.info({ account: this.config.account, topic: pubsubTopic }, 'GmailWatcher started in push mode');
+      return true;
+    } catch (err) {
+      logger.warn({ err, account: this.config.account }, 'GmailWatcher failed to start push mode — falling back to polling');
+      return false;
+    }
+  }
+
+  private stopPushMode(): void {
+    if (this.pubsubSubscriptionHandle) {
+      this.pubsubSubscriptionHandle.close();
+      this.pubsubSubscriptionHandle = null;
+    }
+    this.setPushModeActive(false);
+  }
+
+  private async registerGmailWatch(): Promise<void> {
+    if (!this.auth || !this.config.pubsubTopic) return;
+    const gmail = google.gmail({ version: 'v1', auth: this.auth });
+    const res = await gmail.users.watch({
+      userId: 'me',
+      requestBody: {
+        topicName: this.config.pubsubTopic,
+        labelIds: ['INBOX'],
+      },
+    });
+    if (res.data.historyId) {
+      this.historyWatermark = res.data.historyId;
+      this.state.lastHistoryId = res.data.historyId;
+      this.saveState();
+    }
+    logger.info({ account: this.config.account, expiration: res.data.expiration }, 'Gmail watch registered');
+
+    // Re-register every 6 days (watches expire after 7)
+    setTimeout(() => void this.registerGmailWatch(), 6 * 24 * 60 * 60 * 1000);
+  }
 
   private async authenticate(): Promise<OAuth2Client> {
     const raw = fs.readFileSync(this.config.credentialsPath, 'utf-8');

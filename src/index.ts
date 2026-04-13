@@ -1114,6 +1114,9 @@ async function main(): Promise<void> {
         eventRouter,
         pollIntervalMs: GMAIL_POLL_INTERVAL,
         stateDir: watcherStateDir,
+        pubsubTopic: process.env.GMAIL_PUBSUB_TOPIC,
+        pubsubSubscription: process.env.GMAIL_PUBSUB_SUBSCRIPTION,
+        pubsubServiceAccountPath: process.env.GMAIL_PUBSUB_SERVICE_ACCOUNT_PATH,
         onAuthFailure: (error) => {
           void sendSystemAlert(
             'Gmail',
