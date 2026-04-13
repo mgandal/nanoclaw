@@ -16,6 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { execFile } from 'child_process';
 import {
   query,
@@ -25,6 +26,19 @@ import {
 import { fileURLToPath } from 'url';
 import { createHonchoClient } from './honcho-client.js';
 import { HonchoSession } from './honcho-session.js';
+
+interface ToolCallRecord {
+  tool: string;
+  paramsHash: string;
+  timestamp: string;
+}
+
+const sessionToolCalls: ToolCallRecord[] = [];
+
+function hashToolParams(params: unknown): string {
+  const sorted = JSON.stringify(params, Object.keys((params ?? {}) as Record<string, unknown>).sort());
+  return crypto.createHash('sha256').update(sorted).digest('hex').slice(0, 16);
+}
 
 interface ImageAttachment {
   base64: string;
@@ -650,6 +664,23 @@ async function runQuery(
       lastAssistantUuid = (message as { uuid: string }).uuid;
     }
 
+    // Capture tool_use content blocks for pattern engine (structural data only — no content)
+    if (message.type === 'assistant') {
+      const assistantMsg = message as { message?: { content?: Array<{ type: string; name?: string; input?: unknown }> } };
+      const contentBlocks = assistantMsg.message?.content;
+      if (Array.isArray(contentBlocks)) {
+        for (const content of contentBlocks) {
+          if (content.type === 'tool_use' && typeof content.name === 'string') {
+            sessionToolCalls.push({
+              tool: content.name,
+              paramsHash: hashToolParams(content.input),
+              timestamp: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+
     if (message.type === 'system' && message.subtype === 'init') {
       newSessionId = message.session_id;
       log(`Session initialized: ${newSessionId}`);
@@ -1024,6 +1055,18 @@ async function main(): Promise<void> {
       error: errorMessage,
     });
     process.exit(1);
+  }
+
+  // Emit tool-call summary for pattern engine (host reads after container exits)
+  if (sessionToolCalls.length > 0) {
+    const outputDir = '/workspace/ipc/output';
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outputDir, 'tool-calls.json'),
+      JSON.stringify(sessionToolCalls),
+      'utf-8',
+    );
+    log(`Wrote ${sessionToolCalls.length} tool-call records to ${outputDir}/tool-calls.json`);
   }
 }
 
