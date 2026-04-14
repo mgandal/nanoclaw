@@ -528,20 +528,16 @@ describe('writeContextPacket', () => {
     );
   });
 
-  it('copies and clears bus queue when it exists', async () => {
-    vi.mocked(fs.existsSync).mockImplementation(
-      (p) => typeof p === 'string' && p.includes('queue.json'),
-    );
+  it('does not copy or clear bus queue.json (per-message files used instead)', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.readFileSync).mockReturnValue('[]');
     await writeContextPacket('telegram_test', false, '/tmp/test-ipc');
-    expect(fs.copyFileSync).toHaveBeenCalled();
-    // Bus queue should be cleared after copy (atomic write of '[]')
-    const writeCall = vi
-      .mocked(fs.writeFileSync)
+    // queue.json copy+clear was removed — copyFileSync must not be called for queue.json
+    const queueCopy = vi
+      .mocked(fs.copyFileSync)
       .mock.calls.find(
-        (c) => typeof c[0] === 'string' && c[0].includes('queue.json.tmp'),
+        (c) => typeof c[0] === 'string' && (c[0] as string).includes('queue.json'),
       );
-    expect(writeCall).toBeDefined();
-    expect(writeCall![1]).toBe('[]');
+    expect(queueCopy).toBeUndefined();
   });
 });

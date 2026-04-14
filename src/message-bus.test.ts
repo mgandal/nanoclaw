@@ -54,15 +54,17 @@ describe('MessageBus', () => {
     expect(bus.readByTopic('research')).toHaveLength(1);
   });
 
-  it('routes to agent queue when action_needed is set', () => {
+  it('routes to agent per-message files when action_needed is set', () => {
     bus.publish({
       from: 'einstein',
       topic: 'research',
       action_needed: 'sep',
       finding: 'test',
     });
-    const queue = bus.readAgentQueue('sep');
-    expect(queue).toHaveLength(1);
+    // publish() now routes through writeAgentMessage — use listAgentMessages to verify
+    const messages = bus.listAgentMessages('sep');
+    expect(messages).toHaveLength(1);
+    expect(messages[0].finding).toBe('test');
   });
 
   it('prunes old done messages', () => {

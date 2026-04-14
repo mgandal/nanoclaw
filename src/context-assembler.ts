@@ -433,19 +433,6 @@ export async function writeContextPacket(
   fs.writeFileSync(tmpPacketPath, packet);
   fs.renameSync(tmpPacketPath, packetPath);
 
-  // Also copy bus queue if it exists, then clear it (agent will process)
-  const busQueueSrc = path.join(
-    DATA_DIR,
-    'bus',
-    'agents',
-    groupFolder,
-    'queue.json',
-  );
-  const busQueueDst = path.join(ipcDir, 'bus-queue.json');
-  if (fs.existsSync(busQueueSrc)) {
-    fs.copyFileSync(busQueueSrc, busQueueDst);
-    const tmpClear = `${busQueueSrc}.tmp`;
-    fs.writeFileSync(tmpClear, '[]');
-    fs.renameSync(tmpClear, busQueueSrc);
-  }
+  // Bus messages are now delivered via per-message files (writeAgentMessage/listAgentMessages).
+  // queue.json copy+clear removed — no longer used.
 }

@@ -393,17 +393,17 @@ describe('Calendar watcher icalbuddy path', () => {
 });
 
 // ─────────────────────────────────────────────────
-// 17. Context assembler atomic queue clear
+// 17. Context assembler does NOT copy/clear queue.json
 // ─────────────────────────────────────────────────
 describe('Context assembler atomic queue clear', () => {
-  it('FIX: bus queue clear must use tmp+rename for crash safety', () => {
+  it('FIX: bus queue.json copy+clear removed — per-message files used instead', () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), 'src/context-assembler.ts'),
       'utf-8',
     );
-    // Must use tmp+rename pattern for the queue clear
-    expect(source).toContain('busQueueSrc}.tmp');
-    expect(source).toContain('renameSync');
+    // queue.json copy+clear block was removed; busQueueSrc tmp pattern must not exist
+    expect(source).not.toContain('busQueueSrc}.tmp');
+    expect(source).not.toContain('copyFileSync(busQueueSrc');
   });
 });
 

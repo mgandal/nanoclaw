@@ -69,7 +69,7 @@ export class MessageBus {
     fs.renameSync(tmpPath, finalPath);
 
     if (message.action_needed) {
-      this.appendToAgentQueue(message.action_needed, message);
+      this.writeAgentMessage(message.action_needed, message);
     }
 
     logger.debug(
