@@ -1021,6 +1021,54 @@ export function insertPatternProposal(proposal: {
   ).run(proposal.id, proposal.description, proposal.proposed_at, 'pending');
 }
 
+/**
+ * Migrate a group from an old JID to a new JID (e.g., supergroup upgrade).
+ * Updates registered_groups, chats, scheduled_tasks, and router_state.
+ * Does NOT update the messages table (historical messages stay with old JID).
+ */
+export function migrateGroupJid(oldJid: string, newJid: string): void {
+  db.exec('BEGIN');
+  try {
+    db.prepare('UPDATE registered_groups SET jid = ? WHERE jid = ?').run(
+      newJid,
+      oldJid,
+    );
+
+    const newChatExists = db
+      .prepare('SELECT 1 FROM chats WHERE jid = ?')
+      .get(newJid);
+    if (newChatExists) {
+      db.prepare('DELETE FROM chats WHERE jid = ?').run(oldJid);
+    } else {
+      db.prepare('UPDATE chats SET jid = ? WHERE jid = ?').run(newJid, oldJid);
+    }
+
+    db.prepare('UPDATE scheduled_tasks SET chat_jid = ? WHERE chat_jid = ?').run(
+      newJid,
+      oldJid,
+    );
+
+    const seqRow = db
+      .prepare("SELECT value FROM router_state WHERE key = 'last_agent_seq'")
+      .get() as { value: string } | undefined;
+    if (seqRow) {
+      const data = JSON.parse(seqRow.value) as Record<string, number>;
+      if (oldJid in data) {
+        data[newJid] = data[oldJid];
+        delete data[oldJid];
+        db.prepare("UPDATE router_state SET value = ? WHERE key = 'last_agent_seq'").run(
+          JSON.stringify(data),
+        );
+      }
+    }
+
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 // --- Agent registry accessors ---
 
 export function getAgentRegistry(): Array<{

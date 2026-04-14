@@ -29,6 +29,7 @@ import {
   getTasksForGroup,
   getTaskSuccessRate,
   logTaskRun,
+  migrateGroupJid,
   setLastGroupSync,
   setRegisteredGroup,
   setRouterState,
@@ -2413,5 +2414,57 @@ describe('getPatternProposals', () => {
     expect(proposals).toHaveLength(1);
     expect(proposals[0].description).toBe('Test proposal');
     expect(proposals[0].status).toBe('pending');
+  });
+});
+
+describe('migrateGroupJid', () => {
+  it('updates registered_groups, chats, scheduled_tasks, and router_state', () => {
+    const db = _getTestDb();
+
+    // Set up test data
+    db.prepare('INSERT INTO chats (jid, name) VALUES (?, ?)').run(
+      'tg:-100',
+      'Test Group',
+    );
+    db.prepare(
+      'INSERT INTO registered_groups (jid, name, folder, trigger_pattern, added_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(
+      'tg:-100',
+      'TEST',
+      'telegram_test',
+      '@Claire',
+      new Date().toISOString(),
+    );
+    db.prepare(
+      'INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, schedule_type, schedule_value, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      'task-1',
+      'telegram_test',
+      'tg:-100',
+      'test',
+      'once',
+      '',
+      'active',
+      new Date().toISOString(),
+    );
+
+    migrateGroupJid('tg:-100', 'tg:-200');
+
+    // Verify registered_groups updated
+    const group = db
+      .prepare('SELECT * FROM registered_groups WHERE jid = ?')
+      .get('tg:-200');
+    expect(group).toBeTruthy();
+    expect(
+      db
+        .prepare('SELECT * FROM registered_groups WHERE jid = ?')
+        .get('tg:-100'),
+    ).toBeNull();
+
+    // Verify scheduled_tasks updated
+    const task = db
+      .prepare('SELECT chat_jid FROM scheduled_tasks WHERE id = ?')
+      .get('task-1') as any;
+    expect(task.chat_jid).toBe('tg:-200');
   });
 });
