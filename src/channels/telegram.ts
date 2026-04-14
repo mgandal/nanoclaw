@@ -5,13 +5,17 @@ import os from 'os';
 import path from 'path';
 import { promisify } from 'util';
 
-import { Api, Bot, InlineKeyboard, InputFile } from 'grammy';
+import { Api, Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { downloadFile, processImage } from '../image.js';
 import { logger } from '../logger.js';
 import { countPdfPages, indexPdf, computeFileHash } from '../pageindex.js';
+import {
+  classifySendError,
+  trackTransientFailure,
+} from '../send-failure-tracker.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -84,6 +88,42 @@ const poolApis: Api[] = [];
 // Maps "{groupFolder}:{senderName}" → pool Api index for stable assignment
 const senderBotMap = new Map<string, number>();
 let nextPoolIndex = 0;
+
+const migratingJids = new Set<string>();
+let poolOpts: TelegramChannelOpts | null = null;
+
+async function handleMigration(
+  err: unknown,
+  chatId: string,
+  text: string,
+  api: { sendMessage: Api['sendMessage'] },
+  opts: TelegramChannelOpts,
+): Promise<boolean> {
+  if (!(err instanceof GrammyError)) return false;
+  const params = (err as any).parameters as
+    | { migrate_to_chat_id?: number }
+    | undefined;
+  if (err.error_code !== 400 || !params?.migrate_to_chat_id) return false;
+
+  const oldJid = `tg:${chatId}`;
+  const newChatId = params.migrate_to_chat_id;
+  const newJid = `tg:${newChatId}`;
+
+  // Concurrency guard: another send is already migrating this JID
+  if (migratingJids.has(oldJid)) {
+    await sendTelegramMessage(api, String(newChatId), text);
+    return true;
+  }
+
+  migratingJids.add(oldJid);
+  try {
+    await opts.onMigrate?.(oldJid, newJid);
+    await sendTelegramMessage(api, String(newChatId), text);
+  } finally {
+    migratingJids.delete(oldJid);
+  }
+  return true;
+}
 
 /**
  * Initialize send-only Api instances for the bot pool.
@@ -172,6 +212,22 @@ export async function sendPoolMessage(
     );
     return true;
   } catch (err: unknown) {
+    // Handle supergroup migration
+    if (poolOpts) {
+      try {
+        const migrated = await handleMigration(
+          err,
+          chatId.replace(/^tg:/, ''),
+          text,
+          api,
+          poolOpts,
+        );
+        if (migrated) return true;
+      } catch {
+        // migration retry failed — fall through
+      }
+    }
+
     const errorCode =
       err && typeof err === 'object' && 'error_code' in err
         ? (err as { error_code: number }).error_code
@@ -230,6 +286,7 @@ export class TelegramChannel implements Channel {
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+    poolOpts = opts;
   }
 
   async connect(): Promise<void> {
@@ -752,6 +809,48 @@ export class TelegramChannel implements Channel {
       }
       logger.info({ jid, length: text.length }, 'Telegram message sent');
     } catch (err) {
+      const numericId = jid.replace(/^tg:/, '');
+
+      // Handle supergroup migration
+      try {
+        const migrated = await handleMigration(
+          err,
+          numericId,
+          text,
+          this.bot!.api,
+          this.opts,
+        );
+        if (migrated) return;
+      } catch {
+        // migration retry failed — fall through
+      }
+
+      // Classify and escalate
+      const errorCode =
+        err && typeof err === 'object' && 'error_code' in err
+          ? (err as { error_code: number }).error_code
+          : 0;
+      const description =
+        err instanceof Error ? err.message : String(err);
+
+      const category = classifySendError(errorCode, description);
+
+      if (category === 'structural') {
+        this.opts.onSendFailure?.(
+          'Telegram',
+          `Structural error sending to ${jid}: ${description}. Messages will continue failing until fixed.`,
+        );
+      } else {
+        const alert = trackTransientFailure(jid);
+        if (alert) {
+          const msg =
+            alert.type === 'global-outage'
+              ? `Telegram API outage: ${alert.count} groups affected in ${alert.windowMinutes}m`
+              : `${alert.count} failures to ${jid} in ${alert.windowMinutes}m — possible Telegram API issue`;
+          this.opts.onSendFailure?.('Telegram', msg);
+        }
+      }
+
       logger.error({ jid, err }, 'Failed to send Telegram message');
     }
   }
