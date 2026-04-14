@@ -185,6 +185,23 @@ export async function assembleContextPacket(
     }
   }
 
+  // Session Continuity from agent memory (injected early so it survives truncation)
+  if (agentName) {
+    const agentMemoryPath = path.join(AGENTS_DIR, agentName, 'memory.md');
+    if (fs.existsSync(agentMemoryPath)) {
+      const agentMemory = fs.readFileSync(agentMemoryPath, 'utf-8');
+      const continuityMatch = agentMemory.match(
+        /## Session Continuity\n([\s\S]*?)(?=\n## |$)/,
+      );
+      if (continuityMatch?.[1]?.trim()) {
+        const continuity = continuityMatch[1].trim().slice(0, 1500);
+        sections.push(
+          `\n--- Session Continuity (from prior compaction) ---\n${continuity}`,
+        );
+      }
+    }
+  }
+
   // 4. Staleness warnings for key state files and group memory
   const stalenessWarnings = checkStaleness(groupFolder, now);
   if (stalenessWarnings.length > 0) {

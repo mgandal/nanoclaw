@@ -468,6 +468,44 @@ describe('assembleContextPacket', () => {
   });
 });
 
+describe('Session Continuity injection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('injects Session Continuity from agent memory.md when agentName provided', async () => {
+    const mockExistsSync = vi.mocked(fs.existsSync);
+    const mockReadFileSync = vi.mocked(fs.readFileSync);
+
+    mockExistsSync.mockImplementation((p: any) => {
+      const s = String(p);
+      if (s.includes('agents/claire/memory.md')) return true;
+      if (s.includes('agents/claire/identity.md')) return false;
+      if (s.includes('memory.md')) return false;
+      return false;
+    });
+
+    mockReadFileSync.mockImplementation((p: any) => {
+      const s = String(p);
+      if (s.includes('agents/claire/memory.md')) {
+        return '# Claire — Memory\n\n## Session Continuity\n- Decided to use PostCompact\n- TODO: review PR\n\n## Standing Instructions\n- Be concise\n';
+      }
+      return '';
+    });
+
+    const packet = await assembleContextPacket(
+      'telegram_claire',
+      true,
+      'claire',
+    );
+    expect(packet).toContain('Session Continuity (from prior compaction)');
+    expect(packet).toContain('Decided to use PostCompact');
+  });
+
+  it('does not inject Session Continuity without agentName', async () => {
+    const packet = await assembleContextPacket('telegram_claire', true);
+    expect(packet).not.toContain('Session Continuity');
+  });
+});
+
 describe('writeContextPacket', () => {
   beforeEach(() => vi.clearAllMocks());
 

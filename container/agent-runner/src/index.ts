@@ -93,6 +93,8 @@ const IPC_INPUT_DIR = '/workspace/ipc/input';
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
+let compactionJustHappened = false;
+
 /**
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
@@ -349,6 +351,9 @@ function createPreCompactHook(assistantName?: string): HookCallback {
         `Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+
+    // Signal the main loop to inject a memory extraction prompt
+    compactionJustHappened = true;
 
     return {};
   };
@@ -1028,6 +1033,31 @@ async function main(): Promise<void> {
         : Promise.resolve();
 
       log('Query ended, waiting for next IPC message...');
+
+      // After compaction, inject a memory extraction prompt
+      if (compactionJustHappened) {
+        compactionJustHappened = false;
+        const extractFile = path.join(
+          IPC_INPUT_DIR,
+          `extract-${Date.now()}.json`,
+        );
+        fs.writeFileSync(
+          extractFile,
+          JSON.stringify({
+            type: 'message',
+            text:
+              '[SYSTEM] Your conversation context was just compacted. ' +
+              'Important context may have been lost. Please call write_agent_memory ' +
+              'with a concise summary of:\n' +
+              '- Decisions made in this session\n' +
+              '- Tasks you committed to\n' +
+              '- Open questions or unresolved items\n' +
+              '- Key facts the user shared that you\'ll need later\n' +
+              'Write to section "Session Continuity". Use bullet points. Be concise (under 1500 chars).',
+          }),
+        );
+        log('Injected memory extraction prompt after compaction');
+      }
 
       // Wait for prefetch to complete (with 3s timeout) before next turn
       await Promise.race([
