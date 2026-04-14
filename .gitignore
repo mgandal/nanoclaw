@@ -11,6 +11,7 @@ logs/
 data/*
 !data/agents/
 !data/agent-knowledge/
+!data/skill-catalog/
 
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*
