@@ -29,35 +29,35 @@ echo ""
 
 # --- Step 1: Exchange email sync (DISABLED — migration complete) ---
 echo ""
-echo "[1/7] Exchange email sync... SKIPPED (migration complete, requires Full Disk Access)"
+echo "[1/8] Exchange email sync... SKIPPED (migration complete, requires Full Disk Access)"
 
 # --- Step 2: Gmail sync (mgandal → mikejg1838) ---
 echo ""
-echo "[2/7] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
+echo "[2/8] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
 $PYTHON3 "$SCRIPT_DIR/gmail-sync.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[2/7] WARNING: Gmail sync had errors (exit $EC)"
+    echo "[2/8] WARNING: Gmail sync had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- Step 3: Email knowledge ingestion ---
 echo ""
-echo "[3/7] Email knowledge ingestion..."
+echo "[3/8] Email knowledge ingestion..."
 $PYTHON3 "$SCRIPT_DIR/email-ingest.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[3/7] WARNING: Email ingest had errors (exit $EC)"
+    echo "[3/8] WARNING: Email ingest had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- Step 4: Calendar sync (DISABLED — causes repeated email notifications) ---
 echo ""
-echo "[4/7] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
+echo "[4/8] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
 
 # --- Step 5: Apple Notes re-export to markdown ---
 echo ""
-echo "[5/7] Apple Notes re-export..."
+echo "[5/8] Apple Notes re-export..."
 EXPORT_SCRIPT="$HOME/.cache/apple-notes-mcp/export-notes.js"
 if [ -f "$EXPORT_SCRIPT" ]; then
     osascript -e 'tell application "Notes" to activate' 2>/dev/null
@@ -66,41 +66,51 @@ if [ -f "$EXPORT_SCRIPT" ]; then
     EC=$?
     osascript -e 'tell application "Notes" to quit' 2>/dev/null
     if [ $EC -ne 0 ]; then
-        echo "[5/7] WARNING: Apple Notes export had errors (exit $EC)"
+        echo "[5/8] WARNING: Apple Notes export had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[5/7] SKIP: export-notes.js not found"
+    echo "[5/8] SKIP: export-notes.js not found"
 fi
 
-# --- Step 6: QMD update (re-scan collections for new/changed files) ---
+# ─── Step 6: Skill catalog refresh ───
+echo ""
+echo "=== [6/8] Skill catalog refresh ==="
+bash "$SCRIPT_DIR/skill-catalog-sync.sh"
+EC=$?
+if [ $EC -ne 0 ]; then
+    echo "[6/8] WARNING: Skill catalog sync had errors (exit $EC)"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# --- Step 7: QMD update (re-scan collections for new/changed files) ---
 echo ""
 # BUN_INSTALL in ~/.bash_profile causes qmd's shim to use bun instead of node,
 # which crashes on sqlite-vec extension loading. Force node runtime.
-echo "[6/7] QMD update..."
+echo "[7/8] QMD update..."
 if command -v qmd &>/dev/null; then
     BUN_INSTALL= qmd update 2>&1
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[6/7] WARNING: QMD update had errors (exit $EC)"
+        echo "[7/8] WARNING: QMD update had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[6/7] SKIP: qmd not found in PATH"
+    echo "[7/8] SKIP: qmd not found in PATH"
 fi
 
-# --- Step 7: QMD embed (vectorize pending docs) ---
+# --- Step 8: QMD embed (vectorize pending docs) ---
 echo ""
-echo "[7/7] QMD embed..."
+echo "[8/8] QMD embed..."
 if command -v qmd &>/dev/null; then
     BUN_INSTALL= qmd embed 2>&1
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[7/7] WARNING: QMD embed had errors (exit $EC)"
+        echo "[8/8] WARNING: QMD embed had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[7/7] SKIP: qmd not found in PATH"
+    echo "[8/8] SKIP: qmd not found in PATH"
 fi
 
 echo ""
