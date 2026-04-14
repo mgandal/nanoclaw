@@ -1104,6 +1104,33 @@ export function upsertAgentRegistry(rows: AgentRegistryInput[]): void {
   }
 }
 
+export interface AgentActionInput {
+  agent_name: string;
+  group_folder: string;
+  action_type: string;
+  trust_level: string;
+  summary: string;
+  target?: string;
+  outcome?: string;
+}
+
+export function insertAgentAction(action: AgentActionInput): void {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(
+    'INSERT INTO agent_actions (id, agent_name, group_folder, action_type, trust_level, summary, target, outcome, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    id,
+    action.agent_name,
+    action.group_folder,
+    action.action_type,
+    action.trust_level,
+    action.summary,
+    action.target || null,
+    action.outcome || 'completed',
+    new Date().toISOString(),
+  );
+}
+
 // --- JSON migration ---
 
 function migrateJsonState(): void {

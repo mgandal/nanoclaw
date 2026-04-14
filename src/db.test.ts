@@ -47,6 +47,7 @@ import {
   insertPatternProposal,
   getPatternProposals,
   upsertAgentRegistry,
+  insertAgentAction,
 } from './db.js';
 import { formatMessages } from './router.js';
 
@@ -2528,5 +2529,24 @@ describe('upsertAgentRegistry', () => {
     const db = _getTestDb();
     const rows = db.prepare('SELECT * FROM agent_registry').all();
     expect(rows).toHaveLength(2);
+  });
+});
+
+describe('insertAgentAction', () => {
+  it('inserts an action record', () => {
+    insertAgentAction({
+      agent_name: 'einstein',
+      group_folder: 'telegram_science-claw',
+      action_type: 'send_message',
+      trust_level: 'notify',
+      summary: 'Sent research update to group',
+      target: 'tg:-1003835885233',
+    });
+
+    const db = _getTestDb();
+    const rows = db.prepare('SELECT * FROM agent_actions').all();
+    expect(rows).toHaveLength(1);
+    expect((rows[0] as any).agent_name).toBe('einstein');
+    expect((rows[0] as any).trust_level).toBe('notify');
   });
 });
