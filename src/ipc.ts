@@ -18,9 +18,12 @@ import {
   createTask,
   deleteTask,
   getTaskById,
+  insertAgentAction,
   updateTask,
   validateTaskSchedule,
 } from './db.js';
+import { loadAgentTrust } from './agent-registry.js';
+import { checkTrust } from './trust-enforcement.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -144,6 +147,180 @@ function resolveContainerFilePathToHost(
   return null;
 }
 
+/**
+ * Process a single IPC message (send_message or send_file).
+ * Extracted from the inline watcher loop for testability.
+ */
+export async function processIpcMessage(
+  data: {
+    type: string;
+    chatJid?: string;
+    text?: string;
+    sender?: string;
+    webAppUrl?: string;
+    filePath?: string;
+    caption?: string;
+  },
+  sourceGroup: string,
+  isMain: boolean,
+  deps: IpcDeps,
+): Promise<void> {
+  const registeredGroups = deps.registeredGroups();
+
+  if (data.type === 'message' && data.chatJid && data.text) {
+    // Authorization: verify this group can send to this chatJid
+    const targetGroup = registeredGroups[data.chatJid];
+    // For compound groups, extract base group for authorization
+    const baseKey = fsPathToCompoundKey(sourceGroup);
+    const { group: baseGroupFolder, agent: agentName } =
+      parseCompoundKey(baseKey);
+    if (
+      isMain ||
+      (targetGroup && targetGroup.folder === baseGroupFolder)
+    ) {
+      // Trust enforcement for compound groups (agents)
+      if (agentName) {
+        const trust = loadAgentTrust(
+          path.join(AGENTS_DIR, agentName),
+        );
+        const decision = checkTrust(
+          agentName,
+          baseGroupFolder,
+          'send_message',
+          trust,
+        );
+        insertAgentAction({
+          agent_name: agentName,
+          group_folder: baseGroupFolder,
+          action_type: 'send_message',
+          trust_level: decision.level,
+          summary: data.text.slice(0, 200),
+          target: data.chatJid,
+          outcome: decision.allowed ? 'allowed' : 'blocked',
+        });
+        if (!decision.allowed) {
+          logger.info(
+            {
+              agentName,
+              chatJid: data.chatJid,
+              sourceGroup,
+              level: decision.level,
+            },
+            'Trust: send_message blocked for agent',
+          );
+          return;
+        }
+      }
+
+      if (
+        data.webAppUrl &&
+        typeof data.webAppUrl === 'string' &&
+        deps.sendWebAppButton
+      ) {
+        // Telegram Mini App button — delegate to channel
+        await deps.sendWebAppButton(
+          data.chatJid,
+          data.text,
+          data.webAppUrl,
+        );
+        logger.info(
+          { chatJid: data.chatJid, sourceGroup },
+          'IPC WebApp button sent',
+        );
+      } else if (
+        data.sender &&
+        data.chatJid.startsWith('tg:') &&
+        TELEGRAM_BOT_POOL.length > 0
+      ) {
+        const sent = await sendPoolMessage(
+          data.chatJid,
+          data.text,
+          data.sender,
+          sourceGroup,
+        );
+        if (!sent) {
+          // Pool bot can't reach this chat (e.g. DM) — fall back
+          // to main bot with sender name prefixed
+          const prefixed = `*${data.sender}:*\n${data.text}`;
+          await deps.sendMessage(data.chatJid, prefixed);
+        }
+      } else {
+        await deps.sendMessage(data.chatJid, data.text);
+      }
+      logger.info(
+        { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+        'IPC message sent',
+      );
+    } else {
+      logger.warn(
+        { chatJid: data.chatJid, sourceGroup },
+        'Unauthorized IPC message attempt blocked',
+      );
+    }
+  } else if (
+    data.type === 'send_file' &&
+    data.chatJid &&
+    data.filePath &&
+    deps.sendFile
+  ) {
+    const targetGroup = registeredGroups[data.chatJid];
+    // For compound groups, extract base group for authorization
+    const sfBaseKey = fsPathToCompoundKey(sourceGroup);
+    const { group: sfBaseGroup } = parseCompoundKey(sfBaseKey);
+    if (
+      isMain ||
+      (targetGroup && targetGroup.folder === sfBaseGroup)
+    ) {
+      // Resolve container path to host path (or pass through absolute host paths)
+      let hostFilePath: string | null;
+      if (
+        data.filePath.startsWith('/') &&
+        !data.filePath.startsWith('/workspace/') &&
+        fs.existsSync(data.filePath)
+      ) {
+        // Absolute host path (e.g. from Hermes MCP) — pass through
+        hostFilePath = data.filePath;
+      } else {
+        hostFilePath = resolveContainerFilePathToHost(
+          data.filePath,
+          sourceGroup,
+          registeredGroups,
+        );
+      }
+      if (!hostFilePath || !fs.existsSync(hostFilePath)) {
+        logger.warn(
+          {
+            chatJid: data.chatJid,
+            sourceGroup,
+            containerPath: data.filePath,
+            hostFilePath,
+          },
+          'IPC send_file: file not found or path not resolvable',
+        );
+      } else {
+        await deps.sendFile(
+          data.chatJid,
+          hostFilePath,
+          data.caption,
+        );
+        logger.info(
+          {
+            chatJid: data.chatJid,
+            sourceGroup,
+            hostFilePath,
+          },
+          'IPC file sent',
+        );
+      }
+    } else {
+      logger.warn(
+        { chatJid: data.chatJid, sourceGroup },
+        'Unauthorized IPC send_file attempt blocked',
+      );
+    }
+  }
+}
+
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
     logger.debug('IPC watcher already running, skipping duplicate start');
@@ -205,120 +382,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
             }
             try {
               const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
-                // Authorization: verify this group can send to this chatJid
-                const targetGroup = registeredGroups[data.chatJid];
-                // For compound groups, extract base group for authorization
-                const baseKey = fsPathToCompoundKey(sourceGroup);
-                const { group: baseGroupFolder } = parseCompoundKey(baseKey);
-                if (
-                  isMain ||
-                  (targetGroup && targetGroup.folder === baseGroupFolder)
-                ) {
-                  if (
-                    data.webAppUrl &&
-                    typeof data.webAppUrl === 'string' &&
-                    deps.sendWebAppButton
-                  ) {
-                    // Telegram Mini App button — delegate to channel
-                    await deps.sendWebAppButton(
-                      data.chatJid,
-                      data.text,
-                      data.webAppUrl,
-                    );
-                    logger.info(
-                      { chatJid: data.chatJid, sourceGroup },
-                      'IPC WebApp button sent',
-                    );
-                  } else if (
-                    data.sender &&
-                    data.chatJid.startsWith('tg:') &&
-                    TELEGRAM_BOT_POOL.length > 0
-                  ) {
-                    const sent = await sendPoolMessage(
-                      data.chatJid,
-                      data.text,
-                      data.sender,
-                      sourceGroup,
-                    );
-                    if (!sent) {
-                      // Pool bot can't reach this chat (e.g. DM) — fall back
-                      // to main bot with sender name prefixed
-                      const prefixed = `*${data.sender}:*\n${data.text}`;
-                      await deps.sendMessage(data.chatJid, prefixed);
-                    }
-                  } else {
-                    await deps.sendMessage(data.chatJid, data.text);
-                  }
-                  logger.info(
-                    { chatJid: data.chatJid, sourceGroup, sender: data.sender },
-                    'IPC message sent',
-                  );
-                } else {
-                  logger.warn(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'Unauthorized IPC message attempt blocked',
-                  );
-                }
-              } else if (
-                data.type === 'send_file' &&
-                data.chatJid &&
-                data.filePath &&
-                deps.sendFile
-              ) {
-                const targetGroup = registeredGroups[data.chatJid];
-                if (
-                  isMain ||
-                  (targetGroup && targetGroup.folder === sourceGroup)
-                ) {
-                  // Resolve container path to host path (or pass through absolute host paths)
-                  let hostFilePath: string | null;
-                  if (
-                    data.filePath.startsWith('/') &&
-                    !data.filePath.startsWith('/workspace/') &&
-                    fs.existsSync(data.filePath)
-                  ) {
-                    // Absolute host path (e.g. from Hermes MCP) — pass through
-                    hostFilePath = data.filePath;
-                  } else {
-                    hostFilePath = resolveContainerFilePathToHost(
-                      data.filePath,
-                      sourceGroup,
-                      registeredGroups,
-                    );
-                  }
-                  if (!hostFilePath || !fs.existsSync(hostFilePath)) {
-                    logger.warn(
-                      {
-                        chatJid: data.chatJid,
-                        sourceGroup,
-                        containerPath: data.filePath,
-                        hostFilePath,
-                      },
-                      'IPC send_file: file not found or path not resolvable',
-                    );
-                  } else {
-                    await deps.sendFile(
-                      data.chatJid,
-                      hostFilePath,
-                      data.caption,
-                    );
-                    logger.info(
-                      {
-                        chatJid: data.chatJid,
-                        sourceGroup,
-                        hostFilePath,
-                      },
-                      'IPC file sent',
-                    );
-                  }
-                } else {
-                  logger.warn(
-                    { chatJid: data.chatJid, sourceGroup },
-                    'Unauthorized IPC send_file attempt blocked',
-                  );
-                }
-              }
+              await processIpcMessage(data, sourceGroup, isMain, deps);
               fs.unlinkSync(processingPath);
             } catch (err) {
               logger.error(
