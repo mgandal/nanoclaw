@@ -631,6 +631,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
 const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
 const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
+const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
 
 async function waitForIpcResult(
   resultsDir: string,
@@ -1307,6 +1308,50 @@ server.tool(
           (args.topic ? `Filter by topic: ${args.topic}.` : ''),
       }],
     };
+  },
+);
+
+// skill_search — discover available NanoClaw capabilities
+server.tool(
+  'skill_search',
+  'Search for NanoClaw capabilities and skills. Use when you need to do something ' +
+    "but don't have the right tool. Returns matching skills with install instructions.",
+  {
+    need: z.string().describe('What you need to do (natural language)'),
+  },
+  async (args) => {
+    const requestId = `skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'skill_search',
+      query: args.need,
+      requestId,
+      groupFolder,
+    });
+    const result = await waitForIpcResult(SKILL_RESULTS_DIR, requestId, 10000);
+    if (!result || !(result as any).success) {
+      const msg = (result as any)?.message || 'No matching skills found (or QMD unavailable).';
+      return { content: [{ type: 'text' as const, text: msg }] };
+    }
+    return { content: [{ type: 'text' as const, text: (result as any).message }] };
+  },
+);
+
+// write_agent_memory — persist structured memory across sessions
+server.tool(
+  'write_agent_memory',
+  'Write or update a section of your persistent memory file. ' +
+    'Content persists across sessions. Use for decisions, key facts, and session continuity.',
+  {
+    section: z.string().describe('Section header (e.g., "Session Continuity", "Standing Instructions")'),
+    content: z.string().describe('Content for this section (bullet points recommended)'),
+  },
+  async (args) => {
+    writeIpcFile(TASKS_DIR, {
+      type: 'write_agent_memory',
+      section: args.section,
+      content: args.content,
+    });
+    return { content: [{ type: 'text' as const, text: `Memory section "${args.section}" updated.` }] };
   },
 );
 
