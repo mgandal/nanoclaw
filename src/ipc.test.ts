@@ -1747,7 +1747,10 @@ describe('trust enforcement on send_message', () => {
       false,
       deps,
     );
-    expect(sendMessageSpy).toHaveBeenCalledWith('tg:other456', 'hello from other');
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      'tg:other456',
+      'hello from other',
+    );
   });
 });
 
@@ -1762,7 +1765,11 @@ describe('send_file compound key auth', () => {
     // targetGroup folder is telegram_main — should match base group
     // File won't exist on disk, so we expect a "file not found" log (not an auth error)
     await processIpcMessage(
-      { type: 'send_file', chatJid: 'tg:main123', filePath: '/workspace/group/test.txt' },
+      {
+        type: 'send_file',
+        chatJid: 'tg:main123',
+        filePath: '/workspace/group/test.txt',
+      },
       'telegram_main--claire',
       false,
       testDeps,
@@ -1783,7 +1790,11 @@ describe('send_file compound key auth', () => {
     // sourceGroup base is telegram_other, target group is tg:main123 (folder telegram_main)
     // Auth should fail — different base groups
     await processIpcMessage(
-      { type: 'send_file', chatJid: 'tg:main123', filePath: '/workspace/group/test.txt' },
+      {
+        type: 'send_file',
+        chatJid: 'tg:main123',
+        filePath: '/workspace/group/test.txt',
+      },
       'telegram_other--einstein',
       false,
       testDeps,

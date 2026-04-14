@@ -830,8 +830,7 @@ export class TelegramChannel implements Channel {
         err && typeof err === 'object' && 'error_code' in err
           ? (err as { error_code: number }).error_code
           : 0;
-      const description =
-        err instanceof Error ? err.message : String(err);
+      const description = err instanceof Error ? err.message : String(err);
 
       const category = classifySendError(errorCode, description);
 

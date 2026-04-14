@@ -536,7 +536,8 @@ describe('writeContextPacket', () => {
     const queueCopy = vi
       .mocked(fs.copyFileSync)
       .mock.calls.find(
-        (c) => typeof c[0] === 'string' && (c[0] as string).includes('queue.json'),
+        (c) =>
+          typeof c[0] === 'string' && (c[0] as string).includes('queue.json'),
       );
     expect(queueCopy).toBeUndefined();
   });
