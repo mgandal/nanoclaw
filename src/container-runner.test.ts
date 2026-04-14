@@ -1726,7 +1726,9 @@ describe('clearStaleSessionContinuity', () => {
   });
 
   it('removes Session Continuity section from memory.md on fresh session', () => {
-    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'continuity-test-'));
+    const tmpDir = realFs.mkdtempSync(
+      path.join(os.tmpdir(), 'continuity-test-'),
+    );
     const memoryPath = path.join(tmpDir, 'memory.md');
     realFs.writeFileSync(
       memoryPath,
@@ -1745,9 +1747,12 @@ describe('clearStaleSessionContinuity', () => {
   });
 
   it('does nothing when no Session Continuity section exists', () => {
-    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'continuity-test-'));
+    const tmpDir = realFs.mkdtempSync(
+      path.join(os.tmpdir(), 'continuity-test-'),
+    );
     const memoryPath = path.join(tmpDir, 'memory.md');
-    const original = '# Claire — Memory\n\n## Standing Instructions\n- Be concise\n';
+    const original =
+      '# Claire — Memory\n\n## Standing Instructions\n- Be concise\n';
     realFs.writeFileSync(memoryPath, original);
 
     clearStaleSessionContinuity(memoryPath);
@@ -1759,6 +1764,8 @@ describe('clearStaleSessionContinuity', () => {
   });
 
   it('does nothing when memory.md does not exist', () => {
-    expect(() => clearStaleSessionContinuity('/nonexistent/path/memory.md')).not.toThrow();
+    expect(() =>
+      clearStaleSessionContinuity('/nonexistent/path/memory.md'),
+    ).not.toThrow();
   });
 });

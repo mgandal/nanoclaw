@@ -849,7 +849,10 @@ export async function processTaskIpc(
           ? fs.readFileSync(memoryPath, 'utf-8')
           : `# ${agentName} — Memory\n`;
         const sectionHeader = `## ${section}`;
-        const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escapedHeader = sectionHeader.replace(
+          /[.*+?^${}()|[\]\\]/g,
+          '\\$&',
+        );
         const sectionRegex = new RegExp(
           `${escapedHeader}\\n[\\s\\S]*?(?=\\n## |$)`,
         );
@@ -863,7 +866,10 @@ export async function processTaskIpc(
         fs.writeFileSync(tmpPath, content);
       }
       fs.renameSync(tmpPath, memoryPath);
-      logger.info({ agent: agentName, section: section || '(full)' }, 'Agent memory updated via IPC');
+      logger.info(
+        { agent: agentName, section: section || '(full)' },
+        'Agent memory updated via IPC',
+      );
       break;
     }
 
