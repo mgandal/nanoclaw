@@ -1476,7 +1476,12 @@ describe('update_task rejects schedule_value change to invalid value for existin
 
 describe('skill_search', () => {
   let origFetch: typeof globalThis.fetch;
-  const skillResultsDir = path.join(DATA_DIR, 'ipc', 'telegram_main', 'skill_results');
+  const skillResultsDir = path.join(
+    DATA_DIR,
+    'ipc',
+    'telegram_main',
+    'skill_results',
+  );
 
   beforeEach(() => {
     origFetch = globalThis.fetch;
@@ -1485,9 +1490,18 @@ describe('skill_search', () => {
   afterEach(() => {
     globalThis.fetch = origFetch;
     // Clean up result files written during tests
-    for (const reqId of ['req-test-123', 'req-fail-456', 'req-timeout-789', 'req-empty-000']) {
+    for (const reqId of [
+      'req-test-123',
+      'req-fail-456',
+      'req-timeout-789',
+      'req-empty-000',
+    ]) {
       const f = path.join(skillResultsDir, `${reqId}.json`);
-      try { fs.unlinkSync(f); } catch { /* ignore */ }
+      try {
+        fs.unlinkSync(f);
+      } catch {
+        /* ignore */
+      }
     }
   });
 
@@ -1545,7 +1559,9 @@ describe('skill_search', () => {
   });
 
   it('handles QMD unavailable gracefully', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new Error('connect ECONNREFUSED'));
 
     await processTaskIpc(
       {
@@ -1566,7 +1582,10 @@ describe('skill_search', () => {
   });
 
   it('handles timeout gracefully', async () => {
-    const abortError = new DOMException('The operation was aborted', 'AbortError');
+    const abortError = new DOMException(
+      'The operation was aborted',
+      'AbortError',
+    );
     globalThis.fetch = vi.fn().mockRejectedValue(abortError);
 
     await processTaskIpc(
@@ -1622,5 +1641,87 @@ describe('skill_search', () => {
     const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
     expect(result.success).toBe(true);
     expect(result.message).toContain('No matching skills');
+  });
+});
+
+// --- 20. write_agent_memory section upsert ---
+
+describe('write_agent_memory section upsert', () => {
+  const TEST_AGENT = 'test-memory-upsert';
+  const agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+  const sourceGroup = `telegram_main--${TEST_AGENT}`;
+
+  beforeEach(() => {
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it('upserts a new section without clobbering existing content', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'memory.md'),
+      '# Claire — Memory\n\n## Standing Instructions\n- Be concise\n- Use bullet points\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'write_agent_memory',
+        section: 'Session Continuity',
+        content: '- Decided to use PostCompact approach\n- TODO: review PR\n',
+      } as any,
+      sourceGroup,
+      true,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toContain('## Standing Instructions');
+    expect(content).toContain('Be concise');
+    expect(content).toContain('## Session Continuity');
+    expect(content).toContain('PostCompact approach');
+  });
+
+  it('replaces an existing section on re-upsert', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'memory.md'),
+      '# Claire — Memory\n\n## Session Continuity\n- Old data\n\n## Standing Instructions\n- Be concise\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'write_agent_memory',
+        section: 'Session Continuity',
+        content: '- New data replaces old\n',
+      } as any,
+      sourceGroup,
+      true,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toContain('New data replaces old');
+    expect(content).not.toContain('Old data');
+    expect(content).toContain('## Standing Instructions');
+    expect(content).toContain('Be concise');
+  });
+
+  it('preserves full-file replacement when no section field', async () => {
+    fs.writeFileSync(path.join(agentDir, 'memory.md'), '# Old content\n');
+
+    await processTaskIpc(
+      {
+        type: 'write_agent_memory',
+        content: '# Completely new file\n',
+      } as any,
+      sourceGroup,
+      true,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toBe('# Completely new file\n');
+    expect(content).not.toContain('Old content');
   });
 });

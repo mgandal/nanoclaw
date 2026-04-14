@@ -841,9 +841,29 @@ export async function processTaskIpc(
 
       const memoryPath = path.join(agentDir, 'memory.md');
       const tmpPath = `${memoryPath}.tmp`;
-      fs.writeFileSync(tmpPath, content);
+      const section = d.section as string | undefined;
+
+      if (section) {
+        // Section upsert: read existing, replace/append section
+        const existing = fs.existsSync(memoryPath)
+          ? fs.readFileSync(memoryPath, 'utf-8')
+          : `# ${agentName} — Memory\n`;
+        const sectionHeader = `## ${section}`;
+        const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const sectionRegex = new RegExp(
+          `${escapedHeader}\\n[\\s\\S]*?(?=\\n## |$)`,
+        );
+        const newSection = `${sectionHeader}\n${content}`;
+        const updated = sectionRegex.test(existing)
+          ? existing.replace(sectionRegex, newSection)
+          : `${existing.trimEnd()}\n\n${newSection}\n`;
+        fs.writeFileSync(tmpPath, updated);
+      } else {
+        // Full-file replacement (backwards compat)
+        fs.writeFileSync(tmpPath, content);
+      }
       fs.renameSync(tmpPath, memoryPath);
-      logger.info({ agent: agentName }, 'Agent memory updated via IPC');
+      logger.info({ agent: agentName, section: section || '(full)' }, 'Agent memory updated via IPC');
       break;
     }
 
@@ -1476,10 +1496,7 @@ async function handleSkillSearchIpc(
     }
 
     const formatted = parsed.results
-      .map(
-        (r) =>
-          `\u2022 *${r.title}* (score: ${r.score})\n  ${r.snippet}`,
-      )
+      .map((r) => `\u2022 *${r.title}* (score: ${r.score})\n  ${r.snippet}`)
       .join('\n');
 
     writeSkillResult(sourceGroup, requestId, {
@@ -1487,8 +1504,7 @@ async function handleSkillSearchIpc(
       message: formatted,
     });
   } catch (err) {
-    const isTimeout =
-      err instanceof DOMException && err.name === 'AbortError';
+    const isTimeout = err instanceof DOMException && err.name === 'AbortError';
     writeSkillResult(sourceGroup, requestId, {
       success: false,
       message: isTimeout
