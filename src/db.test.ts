@@ -46,6 +46,7 @@ import {
   getActionLogRows,
   insertPatternProposal,
   getPatternProposals,
+  upsertAgentRegistry,
 } from './db.js';
 import { formatMessages } from './router.js';
 
@@ -2466,5 +2467,66 @@ describe('migrateGroupJid', () => {
       .prepare('SELECT chat_jid FROM scheduled_tasks WHERE id = ?')
       .get('task-1') as any;
     expect(task.chat_jid).toBe('tg:-200');
+  });
+});
+
+describe('upsertAgentRegistry', () => {
+  it('inserts new agent-group rows', () => {
+    upsertAgentRegistry([
+      {
+        agent_name: 'einstein',
+        group_folder: 'telegram_science-claw',
+        enabled: 1,
+      },
+      { agent_name: 'claire', group_folder: '*', enabled: 1 },
+    ]);
+
+    const db = _getTestDb();
+    const rows = db
+      .prepare('SELECT * FROM agent_registry ORDER BY agent_name')
+      .all();
+    expect(rows).toHaveLength(2);
+    expect((rows[0] as any).agent_name).toBe('claire');
+    expect((rows[1] as any).group_folder).toBe('telegram_science-claw');
+  });
+
+  it('updates enabled status on re-upsert', () => {
+    upsertAgentRegistry([
+      {
+        agent_name: 'einstein',
+        group_folder: 'telegram_science-claw',
+        enabled: 1,
+      },
+    ]);
+    upsertAgentRegistry([
+      {
+        agent_name: 'einstein',
+        group_folder: 'telegram_science-claw',
+        enabled: 0,
+      },
+    ]);
+
+    const db = _getTestDb();
+    const row = db
+      .prepare('SELECT * FROM agent_registry WHERE agent_name = ?')
+      .get('einstein') as any;
+    expect(row.enabled).toBe(0);
+  });
+
+  it('preserves existing rows not in the new list', () => {
+    upsertAgentRegistry([
+      { agent_name: 'claire', group_folder: '*', enabled: 1 },
+    ]);
+    upsertAgentRegistry([
+      {
+        agent_name: 'einstein',
+        group_folder: 'telegram_science-claw',
+        enabled: 1,
+      },
+    ]);
+
+    const db = _getTestDb();
+    const rows = db.prepare('SELECT * FROM agent_registry').all();
+    expect(rows).toHaveLength(2);
   });
 });

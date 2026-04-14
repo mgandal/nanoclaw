@@ -1043,10 +1043,9 @@ export function migrateGroupJid(oldJid: string, newJid: string): void {
       db.prepare('UPDATE chats SET jid = ? WHERE jid = ?').run(newJid, oldJid);
     }
 
-    db.prepare('UPDATE scheduled_tasks SET chat_jid = ? WHERE chat_jid = ?').run(
-      newJid,
-      oldJid,
-    );
+    db.prepare(
+      'UPDATE scheduled_tasks SET chat_jid = ? WHERE chat_jid = ?',
+    ).run(newJid, oldJid);
 
     const seqRow = db
       .prepare("SELECT value FROM router_state WHERE key = 'last_agent_seq'")
@@ -1056,9 +1055,9 @@ export function migrateGroupJid(oldJid: string, newJid: string): void {
       if (oldJid in data) {
         data[newJid] = data[oldJid];
         delete data[oldJid];
-        db.prepare("UPDATE router_state SET value = ? WHERE key = 'last_agent_seq'").run(
-          JSON.stringify(data),
-        );
+        db.prepare(
+          "UPDATE router_state SET value = ? WHERE key = 'last_agent_seq'",
+        ).run(JSON.stringify(data));
       }
     }
 
@@ -1086,6 +1085,22 @@ export function getAgentRegistry(): Array<{
     }>;
   } catch {
     return [];
+  }
+}
+
+export interface AgentRegistryInput {
+  agent_name: string;
+  group_folder: string;
+  enabled: number;
+}
+
+export function upsertAgentRegistry(rows: AgentRegistryInput[]): void {
+  const stmt = db.prepare(
+    'INSERT OR REPLACE INTO agent_registry (agent_name, group_folder, enabled, added_at) VALUES (?, ?, ?, ?)',
+  );
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    stmt.run(row.agent_name, row.group_folder, row.enabled, now);
   }
 }
 

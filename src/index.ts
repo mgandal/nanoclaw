@@ -55,6 +55,7 @@ import {
 import { startCredentialProxy } from './credential-proxy.js';
 import {
   getAgentRegistry,
+  upsertAgentRegistry,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -930,6 +931,34 @@ async function main(): Promise<void> {
       { agents: loadedAgents.map((a) => a.name) },
       'Loaded agent identities',
     );
+  }
+
+  // Seed agent registry from identity.md group lists
+  if (loadedAgents.length > 0) {
+    const registryRows: Array<{
+      agent_name: string;
+      group_folder: string;
+      enabled: number;
+    }> = [];
+    for (const agent of loadedAgents) {
+      if (agent.lead) {
+        registryRows.push({
+          agent_name: agent.dirName,
+          group_folder: '*',
+          enabled: 1,
+        });
+      }
+      for (const g of agent.groups || []) {
+        registryRows.push({
+          agent_name: agent.dirName,
+          group_folder: g,
+          enabled: 1,
+        });
+      }
+    }
+    if (registryRows.length > 0) {
+      upsertAgentRegistry(registryRows);
+    }
   }
 
   // Load agent registry from DB
