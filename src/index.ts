@@ -72,6 +72,7 @@ import {
   touchSession,
   storeChatMetadata,
   storeMessage,
+  migrateGroupJid,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
@@ -910,7 +911,10 @@ async function sendSystemAlert(
 function appendAlertToFile(text: string): void {
   const logPath = path.join(STORE_DIR, 'critical-alerts.log');
   fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${text}\n`);
-  logger.warn({ logPath }, 'Alert written to file fallback (all channels failed)');
+  logger.warn(
+    { logPath },
+    'Alert written to file fallback (all channels failed)',
+  );
 }
 
 async function main(): Promise<void> {
@@ -1402,6 +1406,26 @@ async function main(): Promise<void> {
     const channel = factory({
       ...channelOpts,
       onAlert: (msg) => void sendSystemAlert(channelName, msg),
+      onMigrate: async (oldJid, newJid) => {
+        const group = registeredGroups[oldJid];
+        const groupName = group?.name || oldJid;
+        migrateGroupJid(oldJid, newJid);
+        // Update in-memory state
+        if (group) {
+          registeredGroups[newJid] = group;
+          delete registeredGroups[oldJid];
+          if (lastAgentSeq[oldJid] !== undefined) {
+            lastAgentSeq[newJid] = lastAgentSeq[oldJid];
+            delete lastAgentSeq[oldJid];
+          }
+        }
+        void sendSystemAlert(
+          'Telegram Migration',
+          `Auto-migrated ${groupName} from ${oldJid} to ${newJid} (supergroup upgrade)`,
+        );
+        logger.info({ oldJid, newJid, groupName }, 'Group auto-migrated');
+      },
+      onSendFailure: (service, msg) => void sendSystemAlert(service, msg),
     });
     if (!channel) {
       logger.warn(
