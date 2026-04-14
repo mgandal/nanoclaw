@@ -126,6 +126,7 @@ import {
   writeTasksSnapshot,
   writeGroupsSnapshot,
   collectToolCalls,
+  clearStaleSessionContinuity,
   ContainerOutput,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
@@ -1702,5 +1703,62 @@ describe('container-runner buildVolumeMounts global dir permissions', () => {
     );
     expect(globalMount).toBeDefined();
     expect(globalMount!.readonly).toBe(false);
+  });
+});
+
+describe('clearStaleSessionContinuity', () => {
+  // Use real fs operations since fs is mocked globally
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const realFs = require('fs') as typeof import('fs');
+
+  beforeEach(() => {
+    vi.mocked(fs.existsSync).mockImplementation(realFs.existsSync);
+    vi.mocked(fs.readFileSync).mockImplementation(realFs.readFileSync as any);
+    vi.mocked(fs.writeFileSync).mockImplementation(realFs.writeFileSync as any);
+    vi.mocked(fs.renameSync).mockImplementation(realFs.renameSync as any);
+  });
+
+  afterEach(() => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    vi.mocked(fs.writeFileSync).mockReset();
+    vi.mocked(fs.renameSync).mockReset();
+  });
+
+  it('removes Session Continuity section from memory.md on fresh session', () => {
+    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'continuity-test-'));
+    const memoryPath = path.join(tmpDir, 'memory.md');
+    realFs.writeFileSync(
+      memoryPath,
+      '# Claire — Memory\n\n## Standing Instructions\n- Be concise\n\n## Session Continuity\n- Old data\n',
+    );
+
+    clearStaleSessionContinuity(memoryPath);
+
+    const content = realFs.readFileSync(memoryPath, 'utf-8');
+    expect(content).toContain('## Standing Instructions');
+    expect(content).toContain('Be concise');
+    expect(content).not.toContain('Session Continuity');
+    expect(content).not.toContain('Old data');
+
+    realFs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does nothing when no Session Continuity section exists', () => {
+    const tmpDir = realFs.mkdtempSync(path.join(os.tmpdir(), 'continuity-test-'));
+    const memoryPath = path.join(tmpDir, 'memory.md');
+    const original = '# Claire — Memory\n\n## Standing Instructions\n- Be concise\n';
+    realFs.writeFileSync(memoryPath, original);
+
+    clearStaleSessionContinuity(memoryPath);
+
+    const content = realFs.readFileSync(memoryPath, 'utf-8');
+    expect(content).toBe(original);
+
+    realFs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('does nothing when memory.md does not exist', () => {
+    expect(() => clearStaleSessionContinuity('/nonexistent/path/memory.md')).not.toThrow();
   });
 });

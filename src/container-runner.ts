@@ -622,6 +622,12 @@ export async function runContainerAgent(
     input.agentName,
   );
 
+  // Clear stale Session Continuity on fresh session (no existing sessionId)
+  if (!input.sessionId && input.agentName) {
+    const agentMemoryPath = path.join(AGENTS_DIR, input.agentName, 'memory.md');
+    clearStaleSessionContinuity(agentMemoryPath);
+  }
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -1028,6 +1034,23 @@ export async function runContainerAgent(
       });
     });
   });
+}
+
+/**
+ * Remove the ## Session Continuity section from an agent's memory.md.
+ * Called on fresh session start to prevent stale continuity from prior sessions.
+ */
+export function clearStaleSessionContinuity(memoryPath: string): void {
+  if (!fs.existsSync(memoryPath)) return;
+  const content = fs.readFileSync(memoryPath, 'utf-8');
+  if (!content.includes('## Session Continuity')) return;
+  const cleaned = content.replace(
+    /\n*## Session Continuity\n[\s\S]*?(?=\n## |$)/,
+    '',
+  );
+  const tmpPath = `${memoryPath}.tmp`;
+  fs.writeFileSync(tmpPath, cleaned);
+  fs.renameSync(tmpPath, memoryPath);
 }
 
 export interface ToolCallRecord {
