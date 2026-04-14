@@ -621,6 +621,14 @@ async function runAgent(
       return 'error';
     }
 
+    // Immediate alert on OOM (exit 137 not from timeout)
+    if (output.exitCode === 137 && !output.timedOut) {
+      void sendSystemAlert(
+        'Container OOM',
+        `${group.name} killed (exit 137). Task too large for container memory.`,
+      );
+    }
+
     return 'success';
   } catch (err) {
     logger.error({ group: group.name, err }, 'Agent error');
