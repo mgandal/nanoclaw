@@ -10,6 +10,8 @@ export interface ChannelOpts {
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
   onAlert?: (message: string) => void;
+  onMigrate?: (oldJid: string, newJid: string) => Promise<void>;
+  onSendFailure?: (service: string, message: string) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

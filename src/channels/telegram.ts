@@ -192,6 +192,9 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  onAlert?: (message: string) => void;
+  onMigrate?: (oldJid: string, newJid: string) => Promise<void>;
+  onSendFailure?: (service: string, message: string) => void;
 }
 
 /**
