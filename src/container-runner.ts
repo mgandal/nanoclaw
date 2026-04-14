@@ -82,6 +82,8 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  exitCode?: number;
+  timedOut?: boolean;
 }
 
 export interface VolumeMount {
@@ -795,6 +797,8 @@ export async function runContainerAgent(
                 status: 'success',
                 result: null,
                 newSessionId,
+                exitCode: code ?? undefined,
+                timedOut: true,
               });
             })
             .catch((err) => {
@@ -806,6 +810,8 @@ export async function runContainerAgent(
                 status: 'error',
                 result: null,
                 error: `Output chain error: ${err instanceof Error ? err.message : String(err)}`,
+                exitCode: code ?? undefined,
+                timedOut: true,
               });
             });
           return;
@@ -820,6 +826,8 @@ export async function runContainerAgent(
           status: 'error',
           result: null,
           error: `Container timed out after ${configTimeout}ms`,
+          exitCode: code ?? undefined,
+          timedOut: true,
         });
         return;
       }
@@ -909,6 +917,7 @@ export async function runContainerAgent(
           status: 'error',
           result: null,
           error: `Container exited with code ${code}: ${stderr.slice(-200)}`,
+          exitCode: code ?? undefined,
         });
         return;
       }
@@ -940,6 +949,7 @@ export async function runContainerAgent(
               status: 'success',
               result: null,
               newSessionId,
+              exitCode: code ?? undefined,
             });
           })
           .catch((err) => {
