@@ -1,0 +1,5 @@
+actions:
+  send_message: notify
+  publish_to_bus: autonomous
+  write_agent_state: autonomous
+  search_literature: autonomous
