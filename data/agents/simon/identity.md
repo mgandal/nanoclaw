@@ -5,7 +5,7 @@ lead: false
 description: >
   Computational data scientist specializing in bioinformatics, spatial transcriptomics,
   single-cell RNA-seq, statistical genetics, machine learning, and data pipeline development.
-groups: [telegram_science-claw]
+groups: [telegram_code-claw, telegram_science-claw]
 sender: Simon
 ---
 
