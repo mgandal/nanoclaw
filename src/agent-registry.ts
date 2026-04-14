@@ -12,6 +12,8 @@ export interface AgentIdentity {
   dirName: string;
   dirPath: string;
   model?: string;
+  lead?: boolean;
+  groups?: string[];
   urgentTopics?: string[];
   routineTopics?: string[];
   bodyMarkdown: string;
@@ -108,6 +110,15 @@ export function loadAgentIdentity(dirPath: string): AgentIdentity | null {
     dirPath,
     bodyMarkdown: body,
   };
+
+  if (fm['lead'] === true) {
+    identity.lead = true;
+  }
+
+  const groups = fm['groups'];
+  if (Array.isArray(groups)) {
+    identity.groups = groups.map(String);
+  }
 
   const model = fm['model'];
   if (typeof model === 'string') {

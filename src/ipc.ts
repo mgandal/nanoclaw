@@ -174,15 +174,10 @@ export async function processIpcMessage(
     const baseKey = fsPathToCompoundKey(sourceGroup);
     const { group: baseGroupFolder, agent: agentName } =
       parseCompoundKey(baseKey);
-    if (
-      isMain ||
-      (targetGroup && targetGroup.folder === baseGroupFolder)
-    ) {
+    if (isMain || (targetGroup && targetGroup.folder === baseGroupFolder)) {
       // Trust enforcement for compound groups (agents)
       if (agentName) {
-        const trust = loadAgentTrust(
-          path.join(AGENTS_DIR, agentName),
-        );
+        const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
         const decision = checkTrust(
           agentName,
           baseGroupFolder,
@@ -218,11 +213,7 @@ export async function processIpcMessage(
         deps.sendWebAppButton
       ) {
         // Telegram Mini App button — delegate to channel
-        await deps.sendWebAppButton(
-          data.chatJid,
-          data.text,
-          data.webAppUrl,
-        );
+        await deps.sendWebAppButton(data.chatJid, data.text, data.webAppUrl);
         logger.info(
           { chatJid: data.chatJid, sourceGroup },
           'IPC WebApp button sent',
@@ -267,10 +258,7 @@ export async function processIpcMessage(
     // For compound groups, extract base group for authorization
     const sfBaseKey = fsPathToCompoundKey(sourceGroup);
     const { group: sfBaseGroup } = parseCompoundKey(sfBaseKey);
-    if (
-      isMain ||
-      (targetGroup && targetGroup.folder === sfBaseGroup)
-    ) {
+    if (isMain || (targetGroup && targetGroup.folder === sfBaseGroup)) {
       // Resolve container path to host path (or pass through absolute host paths)
       let hostFilePath: string | null;
       if (
@@ -298,11 +286,7 @@ export async function processIpcMessage(
           'IPC send_file: file not found or path not resolvable',
         );
       } else {
-        await deps.sendFile(
-          data.chatJid,
-          hostFilePath,
-          data.caption,
-        );
+        await deps.sendFile(data.chatJid, hostFilePath, data.caption);
         logger.info(
           {
             chatJid: data.chatJid,
@@ -566,6 +550,7 @@ export async function processTaskIpc(
           chat_jid: targetJid,
           prompt: data.prompt,
           script: data.script || null,
+          agent_name: (data as any).agent_name || null,
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
