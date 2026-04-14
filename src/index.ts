@@ -25,7 +25,9 @@ import {
   MAX_MESSAGES_PER_PROMPT,
   OLLAMA_HOST,
   OPS_ALERT_FOLDER,
+  ESCALATION_SLACK_JID,
   OLLAMA_MODEL,
+  STORE_DIR,
   POLL_INTERVAL,
   SESSION_IDLE_MS,
   SESSION_MAX_AGE_MS,
@@ -827,7 +829,9 @@ function ensureContainerSystemRunning(): void {
   cleanupOrphans();
 }
 
-/** Send an alert to OPS-claw + persist for digests. Always routes to OPS_ALERT_FOLDER. */
+let isSendingAlert = false;
+
+/** Send an alert with fallback chain: OPS-claw -> CLAIRE TG DM -> CLAIRE Slack DM -> file. */
 async function sendSystemAlert(
   service: string,
   message: string,
@@ -840,16 +844,73 @@ async function sendSystemAlert(
     fixInstructions,
   });
 
-  const jid = Object.keys(registeredGroups).find(
-    (j) => registeredGroups[j]?.folder === OPS_ALERT_FOLDER,
-  );
-  if (!jid) return;
-  const channel = findChannel(channels, jid);
-  if (!channel) return;
   const text = fixInstructions
     ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
     : `⚠️ *${service}*: ${message}`;
-  await channel.sendMessage(jid, text).catch(() => {});
+
+  // Re-entrancy guard: if we're already in the fallback chain, go straight to file
+  if (isSendingAlert) {
+    appendAlertToFile(text);
+    return;
+  }
+
+  isSendingAlert = true;
+  try {
+    // 1. Try OPS-claw
+    const opsJid = Object.keys(registeredGroups).find(
+      (j) => registeredGroups[j]?.folder === OPS_ALERT_FOLDER,
+    );
+    if (opsJid) {
+      const opsCh = findChannel(channels, opsJid);
+      if (opsCh) {
+        try {
+          await opsCh.sendMessage(opsJid, text);
+          return;
+        } catch {
+          // fall through
+        }
+      }
+    }
+
+    // 2. Try CLAIRE Telegram DM (first isMain tg: group)
+    const tgMainJid = Object.keys(registeredGroups).find(
+      (j) => j.startsWith('tg:') && registeredGroups[j]?.isMain,
+    );
+    if (tgMainJid) {
+      const tgCh = findChannel(channels, tgMainJid);
+      if (tgCh) {
+        try {
+          await tgCh.sendMessage(tgMainJid, text);
+          return;
+        } catch {
+          // fall through
+        }
+      }
+    }
+
+    // 3. Try CLAIRE Slack DM
+    const slackJid = ESCALATION_SLACK_JID;
+    const slackCh = findChannel(channels, slackJid);
+    if (slackCh) {
+      try {
+        await slackCh.sendMessage(slackJid, text);
+        return;
+      } catch {
+        // fall through
+      }
+    }
+
+    // 4. File fallback (always available, even during startup)
+    appendAlertToFile(text);
+  } finally {
+    isSendingAlert = false;
+  }
+}
+
+function appendAlertToFile(text: string): void {
+  const logPath = path.join(STORE_DIR, 'critical-alerts.log');
+  fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${text}\n`);
+  logger.warn({ logPath }, 'Alert written to file fallback (all channels failed)');
 }
 
 async function main(): Promise<void> {

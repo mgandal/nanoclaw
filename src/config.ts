@@ -150,6 +150,8 @@ export const BUS_HIGH_PRIORITY_INTERVAL = 5000;
 // Operational alerts: group folder that receives all system alerts
 export const OPS_ALERT_FOLDER =
   process.env.OPS_ALERT_FOLDER || 'telegram_ops-claw';
+export const ESCALATION_SLACK_JID =
+  process.env.ESCALATION_SLACK_JID || 'slack:D0AQ09RSF1B';
 
 // Health monitor thresholds
 export const HEALTH_MONITOR_INTERVAL = 60_000;
