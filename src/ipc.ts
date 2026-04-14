@@ -807,6 +807,46 @@ export async function processTaskIpc(
       break;
     }
 
+    case 'write_agent_memory': {
+      const d = data as Record<string, unknown>;
+      const content = d.content as string;
+      if (!content) break;
+
+      // Resolve agent name: compound key first, then payload agent_name
+      const { agent: compoundAgent } = parseCompoundKey(
+        fsPathToCompoundKey(sourceGroup),
+      );
+      const agentName = compoundAgent || (d.agent_name as string | undefined);
+      if (!agentName) {
+        logger.warn(
+          { sourceGroup },
+          'write_agent_memory: cannot determine agent name',
+        );
+        break;
+      }
+
+      // Validate agent directory exists (prevents path traversal)
+      const agentDir = path.join(AGENTS_DIR, agentName);
+      if (
+        !fs.existsSync(agentDir) ||
+        agentName.includes('..') ||
+        agentName.includes('/')
+      ) {
+        logger.warn(
+          { agentName, sourceGroup },
+          'write_agent_memory: invalid agent name',
+        );
+        break;
+      }
+
+      const memoryPath = path.join(agentDir, 'memory.md');
+      const tmpPath = `${memoryPath}.tmp`;
+      fs.writeFileSync(tmpPath, content);
+      fs.renameSync(tmpPath, memoryPath);
+      logger.info({ agent: agentName }, 'Agent memory updated via IPC');
+      break;
+    }
+
     case 'write_agent_state': {
       const d = data as Record<string, unknown>;
       const content = d.content as string;
@@ -981,6 +1021,13 @@ export async function processTaskIpc(
         } else {
           handled = handleSaveSkillIpc(data, sourceGroup);
         }
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type === 'skill_search'
+      ) {
+        handled = await handleSkillSearchIpc(data, sourceGroup);
       }
       if (!handled) {
         logger.warn({ type: data.type }, 'Unknown IPC task type');
@@ -1361,4 +1408,96 @@ function writeSkillResult(
   const tmpFile = `${resultFile}.tmp`;
   fs.writeFileSync(tmpFile, JSON.stringify(result));
   fs.renameSync(tmpFile, resultFile);
+}
+
+async function handleSkillSearchIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+): Promise<boolean> {
+  const query = data.query as string | undefined;
+  const requestId = data.requestId as string | undefined;
+
+  if (!query || !requestId) {
+    logger.warn({ data }, 'skill_search IPC missing query or requestId');
+    return true;
+  }
+
+  try {
+    const response = await fetch('http://localhost:8181/mcp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'query',
+          arguments: {
+            searches: [{ type: 'lex', query }],
+            collections: ['skill-catalog'],
+            intent: query,
+            limit: 5,
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const json = (await response.json()) as {
+      result?: {
+        content?: Array<{ text?: string }>;
+      };
+    };
+
+    const rawText = json.result?.content?.[0]?.text;
+    if (!rawText) {
+      writeSkillResult(sourceGroup, requestId, {
+        success: false,
+        message: 'QMD returned empty response',
+      });
+      return true;
+    }
+
+    const parsed = JSON.parse(rawText) as {
+      results: Array<{
+        file: string;
+        title: string;
+        score: number;
+        snippet: string;
+      }>;
+    };
+
+    if (!parsed.results || parsed.results.length === 0) {
+      writeSkillResult(sourceGroup, requestId, {
+        success: true,
+        message: 'No matching skills found.',
+      });
+      return true;
+    }
+
+    const formatted = parsed.results
+      .map(
+        (r) =>
+          `\u2022 *${r.title}* (score: ${r.score})\n  ${r.snippet}`,
+      )
+      .join('\n');
+
+    writeSkillResult(sourceGroup, requestId, {
+      success: true,
+      message: formatted,
+    });
+  } catch (err) {
+    const isTimeout =
+      err instanceof DOMException && err.name === 'AbortError';
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: isTimeout
+        ? 'Skill search timed out'
+        : 'QMD unavailable: ' +
+          (err instanceof Error ? err.message : String(err)),
+    });
+    logger.warn({ err, sourceGroup }, 'skill_search IPC error');
+  }
+
+  return true;
 }

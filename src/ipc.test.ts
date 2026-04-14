@@ -12,6 +12,7 @@ import {
   updateTask,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
+import { DATA_DIR } from './config.js';
 import { publishKnowledge } from './knowledge.js';
 import { RegisteredGroup } from './types.js';
 
@@ -1468,5 +1469,158 @@ describe('update_task rejects schedule_value change to invalid value for existin
     // Should be rejected - original value preserved
     expect(task!.schedule_value).toBe('3600000');
     expect(onTasksChangedSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --- skill_search IPC ---
+
+describe('skill_search', () => {
+  let origFetch: typeof globalThis.fetch;
+  const skillResultsDir = path.join(DATA_DIR, 'ipc', 'telegram_main', 'skill_results');
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    // Clean up result files written during tests
+    for (const reqId of ['req-test-123', 'req-fail-456', 'req-timeout-789', 'req-empty-000']) {
+      const f = path.join(skillResultsDir, `${reqId}.json`);
+      try { fs.unlinkSync(f); } catch { /* ignore */ }
+    }
+  });
+
+  it('queries QMD and writes formatted results', async () => {
+    const qmdResponse = {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              results: [
+                {
+                  file: 'skills/send-telegram.md',
+                  title: 'Send Telegram Messages',
+                  score: 0.85,
+                  snippet: 'Send messages via Telegram bot API',
+                },
+                {
+                  file: 'skills/notify.md',
+                  title: 'Notification Skill',
+                  score: 0.62,
+                  snippet: 'General notification dispatcher',
+                },
+              ],
+            }),
+          },
+        ],
+      },
+    };
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(qmdResponse),
+    });
+
+    await processTaskIpc(
+      {
+        type: 'skill_search',
+        query: 'send messages via telegram',
+        requestId: 'req-test-123',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const resultPath = path.join(skillResultsDir, 'req-test-123.json');
+    expect(fs.existsSync(resultPath)).toBe(true);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    expect(result.success).toBe(true);
+    expect(result.message).toContain('Send Telegram Messages');
+    expect(result.message).toContain('0.85');
+  });
+
+  it('handles QMD unavailable gracefully', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('connect ECONNREFUSED'));
+
+    await processTaskIpc(
+      {
+        type: 'skill_search',
+        query: 'anything',
+        requestId: 'req-fail-456',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const resultPath = path.join(skillResultsDir, 'req-fail-456.json');
+    expect(fs.existsSync(resultPath)).toBe(true);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('QMD unavailable');
+  });
+
+  it('handles timeout gracefully', async () => {
+    const abortError = new DOMException('The operation was aborted', 'AbortError');
+    globalThis.fetch = vi.fn().mockRejectedValue(abortError);
+
+    await processTaskIpc(
+      {
+        type: 'skill_search',
+        query: 'anything',
+        requestId: 'req-timeout-789',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const resultPath = path.join(skillResultsDir, 'req-timeout-789.json');
+    expect(fs.existsSync(resultPath)).toBe(true);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('timed out');
+  });
+
+  it('handles empty results from QMD', async () => {
+    const qmdResponse = {
+      jsonrpc: '2.0',
+      id: 1,
+      result: {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({ results: [] }),
+          },
+        ],
+      },
+    };
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(qmdResponse),
+    });
+
+    await processTaskIpc(
+      {
+        type: 'skill_search',
+        query: 'nonexistent skill xyz',
+        requestId: 'req-empty-000',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const resultPath = path.join(skillResultsDir, 'req-empty-000.json');
+    expect(fs.existsSync(resultPath)).toBe(true);
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8'));
+    expect(result.success).toBe(true);
+    expect(result.message).toContain('No matching skills');
   });
 });
