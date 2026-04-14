@@ -1170,8 +1170,15 @@ async function main(): Promise<void> {
           'Bus dispatching to agent',
         );
 
-        // Enqueue for processing through the normal queue system
-        queue.enqueueMessageCheck(cKey);
+        // Route bus messages through runAgent with the correct agent name
+        const group = registeredGroups[chatJid];
+        if (!group) return;
+
+        const busPrompt = messages
+          .map((m: any) => `[Bus from ${m.from}] ${m.summary || m.topic}`)
+          .join('\n');
+
+        void runAgent(group, busPrompt, chatJid, undefined, agent);
       },
     );
     busWatcher.start();
