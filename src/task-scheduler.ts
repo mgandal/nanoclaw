@@ -330,6 +330,7 @@ async function runTask(
         isMain,
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
+        agentName: task.agent_name || undefined,
         script: task.script || undefined,
       },
       (proc, containerName) =>

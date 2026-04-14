@@ -76,6 +76,7 @@ export interface ScheduledTask {
   last_run: string | null;
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
+  agent_name: string | null;
   created_at: string;
 }
 
