@@ -41,6 +41,10 @@ import {
   updateTask,
   updateTaskAfterRun,
   validateTaskSchedule,
+  insertActionLogEntries,
+  getActionLogRows,
+  insertPatternProposal,
+  getPatternProposals,
 } from './db.js';
 import { formatMessages } from './router.js';
 
@@ -2341,7 +2345,6 @@ describe('pattern_proposals table', () => {
 
 describe('insertActionLogEntries', () => {
   it('inserts multiple entries in one call', () => {
-    const { insertActionLogEntries } = require('./db.js');
     insertActionLogEntries('telegram_science-claw', [
       {
         tool: 'qmd_query',
@@ -2365,7 +2368,6 @@ describe('insertActionLogEntries', () => {
   });
 
   it('uses OR IGNORE to skip duplicates', () => {
-    const { insertActionLogEntries } = require('./db.js');
     const entries = [
       {
         tool: 'qmd_query',
@@ -2386,7 +2388,6 @@ describe('insertActionLogEntries', () => {
 
 describe('getActionLogRows', () => {
   it('returns rows since a given timestamp', () => {
-    const { insertActionLogEntries, getActionLogRows } = require('./db.js');
     insertActionLogEntries('group-a', [
       { tool: 'tool_a', paramsHash: 'h1', timestamp: '2026-04-10T10:00:00Z' },
       { tool: 'tool_b', paramsHash: 'h2', timestamp: '2026-04-12T10:00:00Z' },
@@ -2402,7 +2403,6 @@ describe('getActionLogRows', () => {
 
 describe('getPatternProposals', () => {
   it('returns recent proposals', () => {
-    const { insertPatternProposal, getPatternProposals } = require('./db.js');
     insertPatternProposal({
       id: 'prop-test-1',
       description: 'Test proposal',

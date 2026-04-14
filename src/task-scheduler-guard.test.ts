@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect } from 'vitest';
 import { runGuardScript } from './task-scheduler.js';
 
 describe('runGuardScript', () => {

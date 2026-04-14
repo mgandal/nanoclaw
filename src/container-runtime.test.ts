@@ -78,7 +78,7 @@ describe('stopContainer', () => {
     stopContainer('nanoclaw-test-123');
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-test-123`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
   });
 
@@ -165,12 +165,12 @@ describe('cleanupOrphans', () => {
     expect(mockExecSync).toHaveBeenNthCalledWith(
       2,
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group1-111`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
     expect(mockExecSync).toHaveBeenNthCalledWith(
       3,
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-group3-333`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
     expect(logger.info).toHaveBeenCalledWith(
       { count: 2, names: ['nanoclaw-group1-111', 'nanoclaw-group3-333'] },
@@ -277,11 +277,11 @@ describe('cleanupOrphans', () => {
     // Both valid orphans should still be stopped despite malformed entries
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-valid-1`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-valid-2`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
     expect(logger.warn).not.toHaveBeenCalled();
   });
@@ -308,7 +308,7 @@ describe('stopContainer edge cases', () => {
     stopContainer('1container');
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop 1container`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
   });
 
@@ -317,7 +317,7 @@ describe('stopContainer edge cases', () => {
     stopContainer('nanoclaw_group.test-123');
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw_group.test-123`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
   });
 
@@ -456,7 +456,7 @@ describe('cleanupOrphans edge cases', () => {
     // The valid orphan should still be stopped
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-good-1`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
   });
 
@@ -479,7 +479,7 @@ describe('cleanupOrphans edge cases', () => {
     // The valid orphan should still be stopped
     expect(mockExecSync).toHaveBeenCalledWith(
       `${CONTAINER_RUNTIME_BIN} stop nanoclaw-good-2`,
-      { stdio: 'pipe' },
+      { stdio: 'pipe', timeout: 15000 },
     );
   });
 

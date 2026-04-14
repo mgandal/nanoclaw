@@ -48,6 +48,7 @@ const botRef = vi.hoisted(() => ({
     getFile: vi.fn().mockResolvedValue({ file_path: 'documents/file.pdf' }),
     getMe: vi.fn().mockResolvedValue({ username: 'test_bot', id: 123 }),
     setMyName: vi.fn().mockResolvedValue(undefined),
+    setMyCommands: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

@@ -2,7 +2,12 @@ import { ChildProcess, execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 
-import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  OPS_ALERT_FOLDER,
+  SCHEDULER_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
 import { parseCompoundKey } from './compound-key.js';
 import {
   ContainerOutput,
@@ -552,9 +557,13 @@ function flushAlerts(deps: SchedulerDependencies): void {
   alertFlushTimer = null;
   if (pendingAlerts.length === 0) return;
 
-  // Find main group JID
+  // Find alert destination: prefer OPS_ALERT_FOLDER, fall back to main group
   const groups = deps.registeredGroups();
-  const mainEntry = Object.entries(groups).find(([, g]) => g.isMain);
+  const opsEntry = Object.entries(groups).find(
+    ([, g]) => g.folder === OPS_ALERT_FOLDER,
+  );
+  const mainEntry =
+    opsEntry || Object.entries(groups).find(([, g]) => g.isMain);
   if (!mainEntry) {
     logger.warn('No main group found for alert delivery');
     pendingAlerts = [];
