@@ -2,9 +2,15 @@
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
+Primary languages: TypeScript (main), Python (Cognee/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), Cognee (memory/KG), Todoist API, Slack/Telegram bots, Docker services, Ollama for local LLMs.
+
 ## Testing Policy
 
-ALWAYS run tests and verify fixes before declaring them done. Never ship code without confirming it works. Use test-first (TDD) methodology when fixing bugs.
+ALWAYS run tests and verify fixes before declaring them done. Run the relevant test suite (`bun test` or targeted `bun --bun vitest run src/foo.test.ts`) or manually verify the fix works before committing or moving on. Never ship code without confirming it works. Use test-first (TDD) methodology when fixing bugs.
+
+## Security
+
+CRITICAL: Never uncomment, expose, or use ANTHROPIC_API_KEY or other sensitive API keys without explicit user permission. All secrets should remain in secure files, never hardcoded.
 
 ## Scope Discipline
 
@@ -89,6 +95,7 @@ systemctl --user restart nanoclaw
 
 ## Infrastructure / Services
 
+- Before attempting to fix or restart a service, first confirm its actual status. Do not assume a service is broken — check if it's already running (e.g., in Docker) before creating local configs or starting duplicate instances
 - Honcho runs in Docker (shared with Hermes) on port 8010 — workspace "nanoclaw"
 - QMD must bind to IPv4 (0.0.0.0), not just IPv6
 - Todoist uses REST API v1 (not v2)
@@ -96,7 +103,9 @@ systemctl --user restart nanoclaw
 
 ## Debugging Rules
 
+- When debugging, identify the actual root cause before implementing fixes. Do not cycle through multiple approaches without diagnosis
 - Check for orphaned/stale processes FIRST when hitting database locks or port conflicts
+- Check for stale processes, orphaned locks (especially SQLite), and port conflicts before trying other hypotheses
 - When a user provides a new API token, trust it — don't claim it's identical to the old one
 - When hitting auth errors, verify you're using the correct API version before cycling through other hypotheses
 

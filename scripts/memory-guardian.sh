@@ -7,8 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PYTHON3="/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3"
 CHECKER="$PROJECT_DIR/groups/telegram_claire/memory_guardian/integrity_checker.py"
-IPC_DIR="$PROJECT_DIR/data/ipc/telegram_claire/messages"
-CLAIRE_JID="tg:8475020901"
+IPC_DIR="$PROJECT_DIR/data/ipc/telegram_ops-claw/messages"
+OPS_JID="tg:-5217849280"
 
 # Point integrity checker at host-side groups directory
 export MEMORY_GUARDIAN_GROUPS_DIR="$PROJECT_DIR/groups"
@@ -25,7 +25,7 @@ TIMESTAMP=$(date +%s%N)
 "$PYTHON3" -c "
 import json, sys
 
-claire_jid = '$CLAIRE_JID'
+claire_jid = '$OPS_JID'
 exit_code = $EXIT_CODE
 report_raw = sys.stdin.read()
 

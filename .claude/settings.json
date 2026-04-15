@@ -6,5 +6,35 @@
         "us.i.posthog.com"
       ]
     }
+  },
+  "enabledPlugins": {
+    "remember@claude-plugins-official": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-healthcheck.sh",
+            "timeout": 15,
+            "statusMessage": "Checking service status..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/run-colocated-test.sh 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "Running co-located tests..."
+          }
+        ]
+      }
+    ]
   }
 }

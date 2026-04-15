@@ -52,6 +52,33 @@ export interface IpcDeps {
 
 let ipcWatcherRunning = false;
 
+/**
+ * Tracks chatJids that received IPC send_message deliveries recently.
+ * Used by the streaming output callback to suppress duplicate sends
+ * when pool bots already delivered the agent's message via IPC.
+ * Entries auto-expire after 60 seconds.
+ */
+const recentIpcSends = new Map<string, number>(); // chatJid → timestamp
+
+export function markIpcSend(chatJid: string): void {
+  recentIpcSends.set(chatJid, Date.now());
+}
+
+export function hasRecentIpcSend(chatJid: string): boolean {
+  const ts = recentIpcSends.get(chatJid);
+  if (!ts) return false;
+  // Expire after 60 seconds
+  if (Date.now() - ts > 60_000) {
+    recentIpcSends.delete(chatJid);
+    return false;
+  }
+  return true;
+}
+
+export function clearIpcSend(chatJid: string): void {
+  recentIpcSends.delete(chatJid);
+}
+
 function cleanupStaleProcessing(ipcBaseDir: string): void {
   try {
     const errorDir = path.join(ipcBaseDir, 'errors');
@@ -235,6 +262,9 @@ export async function processIpcMessage(
           const prefixed = `*${data.sender}:*\n${data.text}`;
           await deps.sendMessage(data.chatJid, prefixed);
         }
+        // Mark that IPC delivered a message to this chat — the streaming
+        // output callback will suppress its own send to avoid duplicates.
+        markIpcSend(data.chatJid);
       } else {
         await deps.sendMessage(data.chatJid, data.text);
       }

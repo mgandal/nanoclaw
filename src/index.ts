@@ -78,7 +78,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
-import { startIpcWatcher } from './ipc.js';
+import { startIpcWatcher, hasRecentIpcSend, clearIpcSend } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
@@ -429,7 +429,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
         if (text) {
-          await channel.sendMessage(chatJid, text);
+          // If the agent already delivered a message to this chat via IPC
+          // (e.g. send_message → pool bot), skip the streaming send to
+          // avoid duplicate responses.
+          if (hasRecentIpcSend(chatJid)) {
+            logger.info(
+              { group: group.name },
+              'Suppressing streaming output — IPC send_message already delivered to this chat',
+            );
+          } else {
+            await channel.sendMessage(chatJid, text);
+          }
           outputSentToUser = true;
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
@@ -438,6 +448,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
       if (result.status === 'success') {
         queue.notifyIdle(chatJid);
+        // Clear IPC send tracking for this chat now that the container is done
+        clearIpcSend(chatJid);
       }
 
       if (result.status === 'error') {
