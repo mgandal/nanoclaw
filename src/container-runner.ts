@@ -18,6 +18,8 @@ import {
   IDLE_TIMEOUT,
   OLLAMA_ADMIN_TOOLS,
   OLLAMA_DEFAULT_MODEL,
+  ONECLI_API_KEY,
+  ONECLI_URL,
   TIMEZONE,
 } from './config.js';
 import { writeContextPacket } from './context-assembler.js';
@@ -34,6 +36,9 @@ import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import { OneCLI } from '@onecli-sh/sdk';
+
+const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';

@@ -13,6 +13,8 @@ const envConfig = readEnvFile([
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_DEFAULT_MODEL',
   'TELEGRAM_BOT_POOL',
+  'ONECLI_URL',
+  'ONECLI_API_KEY',
   'TZ',
 ]);
 
@@ -70,6 +72,8 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
 );
 export const ONECLI_URL =
   process.env.ONECLI_URL || envConfig.ONECLI_URL || 'http://localhost:10254';
+export const ONECLI_API_KEY =
+  process.env.ONECLI_API_KEY || envConfig.ONECLI_API_KEY;
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 
