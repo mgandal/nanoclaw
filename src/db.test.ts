@@ -512,6 +512,7 @@ describe('task CRUD', () => {
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
+      agent_name: null,
     });
 
     const task = getTaskById('task-1');
@@ -532,6 +533,7 @@ describe('task CRUD', () => {
       next_run: null,
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
+      agent_name: null,
     });
 
     updateTask('task-2', { status: 'paused' });
@@ -550,6 +552,7 @@ describe('task CRUD', () => {
       next_run: null,
       status: 'active',
       created_at: '2024-01-01T00:00:00.000Z',
+      agent_name: null,
     });
 
     deleteTask('task-3');
@@ -650,6 +653,7 @@ describe('dashboard DB queries', () => {
       next_run: null,
       status: 'active',
       created_at: '2026-01-01T00:00:00.000Z',
+      agent_name: null,
     });
   }
 
@@ -1197,6 +1201,7 @@ describe('task schedule validation', () => {
         context_mode: 'isolated',
         next_run: null,
         status: 'active',
+        agent_name: null,
         created_at: '2024-01-01T00:00:00.000Z',
       });
     }).toThrow(/minimum/i);
@@ -1248,6 +1253,7 @@ describe('task lifecycle (due tasks, run updates)', () => {
       context_mode: 'isolated',
       next_run: pastTime,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1268,6 +1274,7 @@ describe('task lifecycle (due tasks, run updates)', () => {
       context_mode: 'isolated',
       next_run: pastTime,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1287,6 +1294,7 @@ describe('task lifecycle (due tasks, run updates)', () => {
       context_mode: 'isolated',
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1309,6 +1317,7 @@ describe('task lifecycle (due tasks, run updates)', () => {
       context_mode: 'isolated',
       next_run: '2024-01-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1588,6 +1597,7 @@ describe('scheduled task status transitions', () => {
       context_mode: 'isolated',
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1618,6 +1628,7 @@ describe('scheduled task status transitions', () => {
       context_mode: 'isolated',
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1645,6 +1656,7 @@ describe('scheduled task status transitions', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1748,6 +1760,7 @@ describe('NULL handling in optional columns', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1818,6 +1831,7 @@ describe('transaction rollback on error', () => {
         context_mode: 'isolated',
         next_run: null,
         status: 'active',
+        agent_name: null,
         created_at: '2024-01-01T00:00:00.000Z',
       });
     }).toThrow(/too frequent/i);
@@ -1876,6 +1890,7 @@ describe('updateTask edge cases', () => {
       context_mode: 'isolated',
       next_run: '2026-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1898,6 +1913,7 @@ describe('updateTask edge cases', () => {
       context_mode: 'isolated',
       next_run: '2024-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2021,6 +2037,7 @@ describe('getDueTasks boundary conditions', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2039,6 +2056,7 @@ describe('getDueTasks boundary conditions', () => {
       context_mode: 'isolated',
       next_run: pastTime,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2059,6 +2077,7 @@ describe('getDueTasks boundary conditions', () => {
       context_mode: 'isolated',
       next_run: futureTime,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2114,6 +2133,7 @@ describe('getLastSuccessTime with mixed runs', () => {
       context_mode: 'isolated',
       next_run: '2026-01-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -2238,6 +2258,7 @@ describe('getTasksForGroup ordering and filtering', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2251,6 +2272,7 @@ describe('getTasksForGroup ordering and filtering', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-02T00:00:00.000Z',
     });
 
@@ -2274,6 +2296,7 @@ describe('getTasksForGroup ordering and filtering', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -2287,6 +2310,7 @@ describe('getTasksForGroup ordering and filtering', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-06-01T00:00:00.000Z',
     });
 

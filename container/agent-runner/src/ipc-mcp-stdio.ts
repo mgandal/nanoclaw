@@ -1066,10 +1066,10 @@ if (isMain) {
 
 const SLACK_RESULTS_DIR = path.join(IPC_DIR, 'slack_results');
 
-if (isMain) {
-  server.tool(
+// Available to all groups — trust enforcement is handled host-side in ipc.ts
+server.tool(
     'slack_dm',
-    'Send a Slack direct message to a user. Requires either a Slack user ID or email address.',
+    'Send a Slack direct message to a user. Requires either a Slack user ID or email address. Trust-gated: your agent must have send_slack_dm permission in trust.yaml.',
     {
       user_id: z.string().optional().describe('Slack user ID (e.g. "U01ABC123"). Provide this or user_email.'),
       user_email: z.string().optional().describe('User email address to look up in Slack. Provide this or user_id.'),
@@ -1099,15 +1099,14 @@ if (isMain) {
       };
     },
   );
-}
 
 // --- Slack DM Read Tool ---
 // Read Slack DM conversation history via the host bridge (port 19876).
 
-if (isMain) {
-  server.tool(
+// Available to all groups — trust enforcement is handled host-side in ipc.ts
+server.tool(
     'slack_dm_read',
-    'Read recent messages from a Slack DM conversation. Requires the DM channel ID.',
+    'Read recent messages from a Slack DM conversation. Requires the DM channel ID. Trust-gated: your agent must have read_slack_dm permission in trust.yaml.',
     {
       channel: z.string().describe('Slack DM channel ID (e.g. "D0AQ09RSF1B")'),
       limit: z.number().optional().describe('Number of messages to retrieve (default 10, max 50)'),
@@ -1129,7 +1128,6 @@ if (isMain) {
       };
     },
   );
-}
 
 // bus_publish — post a finding to the inter-agent message bus
 server.tool(

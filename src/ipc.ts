@@ -1261,11 +1261,36 @@ async function handleImessageIpc(
 async function handleSlackDmIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
-  isMain: boolean,
+  _isMain: boolean,
 ): Promise<boolean> {
-  if (!isMain) {
-    logger.warn({ sourceGroup }, 'Non-main slack_dm IPC attempt blocked');
-    return true; // handled (rejected)
+  // Trust enforcement: extract agent name from compound key
+  const baseKey = fsPathToCompoundKey(sourceGroup);
+  const { group: baseGroupFolder, agent: agentName } =
+    parseCompoundKey(baseKey);
+  if (agentName) {
+    const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
+    const decision = checkTrust(
+      agentName,
+      baseGroupFolder,
+      'send_slack_dm',
+      trust,
+    );
+    insertAgentAction({
+      agent_name: agentName,
+      group_folder: baseGroupFolder,
+      action_type: 'send_slack_dm',
+      trust_level: decision.level,
+      summary: (data.text as string)?.slice(0, 200) || '',
+      target: (data.user_email as string) || (data.user_id as string) || '',
+      outcome: decision.allowed ? 'allowed' : 'blocked',
+    });
+    if (!decision.allowed) {
+      logger.info(
+        { agentName, sourceGroup, level: decision.level },
+        'Trust: send_slack_dm blocked for agent',
+      );
+      return true;
+    }
   }
 
   const requestId = data.requestId as string | undefined;
@@ -1346,11 +1371,36 @@ async function handleSlackDmIpc(
 async function handleSlackDmReadIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
-  isMain: boolean,
+  _isMain: boolean,
 ): Promise<boolean> {
-  if (!isMain) {
-    logger.warn({ sourceGroup }, 'Non-main slack_dm_read IPC attempt blocked');
-    return true; // handled (rejected)
+  // Trust enforcement: extract agent name from compound key
+  const baseKey = fsPathToCompoundKey(sourceGroup);
+  const { group: baseGroupFolder, agent: agentName } =
+    parseCompoundKey(baseKey);
+  if (agentName) {
+    const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
+    const decision = checkTrust(
+      agentName,
+      baseGroupFolder,
+      'read_slack_dm',
+      trust,
+    );
+    insertAgentAction({
+      agent_name: agentName,
+      group_folder: baseGroupFolder,
+      action_type: 'read_slack_dm',
+      trust_level: decision.level,
+      summary: `Read DM channel: ${(data.channel as string) || 'unknown'}`,
+      target: (data.channel as string) || '',
+      outcome: decision.allowed ? 'allowed' : 'blocked',
+    });
+    if (!decision.allowed) {
+      logger.info(
+        { agentName, sourceGroup, level: decision.level },
+        'Trust: read_slack_dm blocked for agent',
+      );
+      return true;
+    }
   }
 
   const requestId = data.requestId as string | undefined;

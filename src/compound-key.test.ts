@@ -5,8 +5,8 @@ import {
   compoundKeyToFsPath,
   fsPathToCompoundKey,
   isCompoundKey,
-} from './compound-key';
-import { isValidGroupFolder } from './group-folder';
+} from './compound-key.js';
+import { isValidGroupFolder } from './group-folder.js';
 
 describe('compound-key', () => {
   describe('compoundKey', () => {

@@ -45,6 +45,7 @@ describe('handleDashboardIpc', () => {
       next_run: new Date().toISOString(),
       created_at: new Date().toISOString(),
       context_mode: 'isolated',
+      agent_name: null,
     });
 
     const result = await handleDashboardIpc(
@@ -86,6 +87,7 @@ describe('handleDashboardIpc', () => {
       next_run: new Date().toISOString(),
       created_at: new Date().toISOString(),
       context_mode: 'isolated',
+      agent_name: null,
     });
     logTaskRun({
       task_id: 't1',

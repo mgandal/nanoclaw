@@ -1,5 +1,7 @@
 actions:
   send_message: notify
+  send_slack_dm: ask
+  read_slack_dm: ask
   publish_to_bus: autonomous
   write_vault: notify
   write_agent_memory: autonomous

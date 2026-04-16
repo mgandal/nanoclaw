@@ -46,6 +46,7 @@ describe('task scheduler', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-02-22T00:00:00.000Z',
     });
 
@@ -83,6 +84,7 @@ describe('task scheduler', () => {
       last_run: null,
       last_result: null,
       status: 'active' as const,
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     };
 
@@ -107,6 +109,7 @@ describe('task scheduler', () => {
       last_run: null,
       last_result: null,
       status: 'active' as const,
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     };
 
@@ -131,6 +134,7 @@ describe('task scheduler', () => {
       last_run: null,
       last_result: null,
       status: 'active' as const,
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     };
 
@@ -179,6 +183,7 @@ function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
     next_run: new Date().toISOString(),
     last_run: null,
     last_result: null,
+    agent_name: null,
     created_at: new Date().toISOString(),
     context_mode: 'isolated',
     ...overrides,
@@ -195,6 +200,7 @@ function createTestTask(id = 'test-task') {
     schedule_value: '0 7 * * 1-5',
     status: 'active',
     next_run: new Date().toISOString(),
+    agent_name: null,
     created_at: new Date().toISOString(),
     context_mode: 'isolated',
   });
@@ -571,6 +577,7 @@ describe('scheduler loop lifecycle (regression)', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
@@ -851,6 +858,7 @@ describe('expired/past schedule handling (DB-level)', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 2 * 3600000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
@@ -870,6 +878,7 @@ describe('expired/past schedule handling (DB-level)', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
     // Pause it
@@ -896,6 +905,7 @@ describe('concurrent task execution prevention (DB-level)', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
@@ -1039,6 +1049,7 @@ describe('edge cases — concurrent execution and guards', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
@@ -1089,6 +1100,7 @@ describe('edge cases — concurrent execution and guards', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 60_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
     createTask({
@@ -1101,6 +1113,7 @@ describe('edge cases — concurrent execution and guards', () => {
       context_mode: 'isolated',
       next_run: new Date(Date.now() - 30_000).toISOString(),
       status: 'active',
+      agent_name: null,
       created_at: '2026-01-01T00:00:00.000Z',
     });
 

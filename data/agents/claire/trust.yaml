@@ -1,5 +1,7 @@
 actions:
   send_message: notify
+  send_slack_dm: notify
+  read_slack_dm: notify
   publish_to_bus: autonomous
   write_group_memory: autonomous
   schedule_task: notify

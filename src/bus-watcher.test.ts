@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { BusWatcher } from './bus-watcher';
+import { BusWatcher } from './bus-watcher.js';
 
 describe('BusWatcher', () => {
   let tmpDir: string;

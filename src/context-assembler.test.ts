@@ -75,6 +75,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
     ]);
@@ -149,15 +150,16 @@ describe('assembleContextPacket', () => {
       Array.from({ length: 100 }, (_, i) => ({
         id: `task-${i}`,
         prompt: 'B'.repeat(500),
-        schedule_type: 'cron',
+        schedule_type: 'cron' as const,
         schedule_value: '0 9 * * *',
         status: 'active' as const,
         group_folder: 'main',
         chat_jid: 'tg:123',
-        context_mode: 'group',
+        context_mode: 'group' as const,
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       })),
     );
@@ -197,6 +199,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
       {
@@ -211,6 +214,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
     ]);
@@ -233,6 +237,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
       {
@@ -247,6 +252,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
     ]);
@@ -375,6 +381,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
       {
@@ -389,6 +396,7 @@ describe('assembleContextPacket', () => {
         next_run: null,
         last_run: null,
         last_result: null,
+        agent_name: null,
         created_at: '2026-03-20',
       },
     ]);

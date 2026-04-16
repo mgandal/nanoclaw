@@ -39,11 +39,11 @@ vi.mock('os', async () => {
     ...actual,
     default: {
       ...actual,
-      platform: (...args: unknown[]) => mockPlatform(...args),
-      networkInterfaces: (...args: unknown[]) => mockNetworkInterfaces(...args),
+      platform: () => mockPlatform(),
+      networkInterfaces: () => mockNetworkInterfaces(),
     },
-    platform: (...args: unknown[]) => mockPlatform(...args),
-    networkInterfaces: (...args: unknown[]) => mockNetworkInterfaces(...args),
+    platform: () => mockPlatform(),
+    networkInterfaces: () => mockNetworkInterfaces(),
   };
 });
 

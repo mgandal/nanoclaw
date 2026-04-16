@@ -73,13 +73,13 @@ beforeEach(() => {
   syncGroupsSpy = vi.fn().mockResolvedValue(undefined);
 
   deps = {
-    sendMessage: sendMessageSpy,
+    sendMessage: sendMessageSpy as unknown as IpcDeps['sendMessage'],
     registeredGroups: () => groups,
-    registerGroup: registerGroupSpy,
-    syncGroups: syncGroupsSpy,
+    registerGroup: registerGroupSpy as unknown as IpcDeps['registerGroup'],
+    syncGroups: syncGroupsSpy as unknown as IpcDeps['syncGroups'],
     getAvailableGroups: () => [],
-    writeGroupsSnapshot: vi.fn(),
-    onTasksChanged: onTasksChangedSpy,
+    writeGroupsSnapshot: vi.fn() as unknown as IpcDeps['writeGroupsSnapshot'],
+    onTasksChanged: onTasksChangedSpy as unknown as IpcDeps['onTasksChanged'],
   };
 });
 
@@ -97,6 +97,7 @@ describe('update_task', () => {
       context_mode: 'isolated',
       next_run: '2025-06-01T09:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -206,6 +207,7 @@ describe('resume_task next_run recomputation', () => {
       context_mode: 'isolated',
       next_run: '2020-01-01T00:00:00.000Z', // stale
       status: 'paused',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -235,6 +237,7 @@ describe('resume_task next_run recomputation', () => {
       context_mode: 'isolated',
       next_run: '2020-01-01T00:00:00.000Z',
       status: 'paused',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -452,6 +455,7 @@ describe('onTasksChanged callback', () => {
       context_mode: 'isolated',
       next_run: '2025-12-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -475,6 +479,7 @@ describe('onTasksChanged callback', () => {
       context_mode: 'isolated',
       next_run: '2025-12-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -779,6 +784,7 @@ describe('concurrent task processing', () => {
       context_mode: 'isolated',
       next_run: '2025-12-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1262,6 +1268,7 @@ describe('resume_task on already-active task', () => {
       context_mode: 'isolated',
       next_run: '2020-01-01T00:00:00.000Z', // stale
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -1293,6 +1300,7 @@ describe('update_task with schedule_value only (no schedule_type)', () => {
       context_mode: 'isolated',
       next_run: '2025-06-01T09:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -1448,6 +1456,7 @@ describe('update_task rejects schedule_value change to invalid value for existin
       context_mode: 'isolated',
       next_run: '2025-06-01T09:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -1534,7 +1543,7 @@ describe('skill_search', () => {
       },
     };
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(qmdResponse),
     });
@@ -1544,7 +1553,7 @@ describe('skill_search', () => {
         type: 'skill_search',
         query: 'send messages via telegram',
         requestId: 'req-test-123',
-      },
+      } as any,
       'telegram_main',
       true,
       deps,
@@ -1559,7 +1568,7 @@ describe('skill_search', () => {
   });
 
   it('handles QMD unavailable gracefully', async () => {
-    globalThis.fetch = vi
+    (globalThis as any).fetch = vi
       .fn()
       .mockRejectedValue(new Error('connect ECONNREFUSED'));
 
@@ -1568,7 +1577,7 @@ describe('skill_search', () => {
         type: 'skill_search',
         query: 'anything',
         requestId: 'req-fail-456',
-      },
+      } as any,
       'telegram_main',
       true,
       deps,
@@ -1586,14 +1595,14 @@ describe('skill_search', () => {
       'The operation was aborted',
       'AbortError',
     );
-    globalThis.fetch = vi.fn().mockRejectedValue(abortError);
+    (globalThis as any).fetch = vi.fn().mockRejectedValue(abortError);
 
     await processTaskIpc(
       {
         type: 'skill_search',
         query: 'anything',
         requestId: 'req-timeout-789',
-      },
+      } as any,
       'telegram_main',
       true,
       deps,
@@ -1620,7 +1629,7 @@ describe('skill_search', () => {
       },
     };
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    (globalThis as any).fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve(qmdResponse),
     });
@@ -1630,7 +1639,7 @@ describe('skill_search', () => {
         type: 'skill_search',
         query: 'nonexistent skill xyz',
         requestId: 'req-empty-000',
-      },
+      } as any,
       'telegram_main',
       true,
       deps,

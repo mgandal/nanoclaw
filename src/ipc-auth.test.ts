@@ -159,6 +159,7 @@ describe('pause_task authorization', () => {
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
     createTask({
@@ -171,6 +172,7 @@ describe('pause_task authorization', () => {
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -220,6 +222,7 @@ describe('resume_task authorization', () => {
       context_mode: 'isolated',
       next_run: '2025-06-01T00:00:00.000Z',
       status: 'paused',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
   });
@@ -269,6 +272,7 @@ describe('cancel_task authorization', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -292,6 +296,7 @@ describe('cancel_task authorization', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
@@ -315,6 +320,7 @@ describe('cancel_task authorization', () => {
       context_mode: 'isolated',
       next_run: null,
       status: 'active',
+      agent_name: null,
       created_at: '2024-01-01T00:00:00.000Z',
     });
 
