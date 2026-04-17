@@ -188,7 +188,18 @@ export class GroupQueue {
       fs.writeFileSync(tempPath, JSON.stringify({ type: 'message', text }));
       fs.renameSync(tempPath, filepath);
       return true;
-    } catch {
+    } catch (err) {
+      // MED-2: callers treat `false` as "no active container" and silently
+      // fall back to spawn-a-new-container, so a disk-full / EACCES here
+      // never surfaced. Log so healthMonitor and operators can see it.
+      logger.error(
+        {
+          groupJid,
+          groupFolder: state.groupFolder,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'GroupQueue.sendMessage: failed to write IPC input file',
+      );
       return false;
     }
   }
@@ -204,8 +215,18 @@ export class GroupQueue {
     try {
       fs.mkdirSync(inputDir, { recursive: true });
       fs.writeFileSync(path.join(inputDir, '_close'), '');
-    } catch {
-      // ignore
+    } catch (err) {
+      // MED-2: if we can't write the close sentinel the container keeps
+      // running until IDLE_TIMEOUT (30 min). Scheduler preemption of idle
+      // containers (see notifyIdle) depends on this working — log it.
+      logger.error(
+        {
+          groupJid,
+          groupFolder: state.groupFolder,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'GroupQueue.closeStdin: failed to write _close sentinel',
+      );
     }
   }
 

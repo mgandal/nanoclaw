@@ -151,6 +151,19 @@ async function queryQmdForContext(query: string): Promise<string> {
 }
 
 /**
+ * Wrap an agent-written string in an XML-like tag for prompt assembly.
+ * Neutralizes any closing tag inside the body so the agent cannot break
+ * out of its block and inject a sibling (e.g. forge an elevated
+ * <agent-trust> block by writing one into its own state.md). Same class
+ * as the H6 YAML-frontmatter fix.
+ */
+function wrapAgentXml(tag: string, body: string): string {
+  const closer = new RegExp(`</${tag}>`, 'gi');
+  const escaped = body.replace(closer, `</${tag}-escaped>`);
+  return `<${tag}>\n${escaped}\n</${tag}>`;
+}
+
+/**
  * Sections assembled for the context packet, each tagged with a priority.
  * When the assembled packet exceeds CONTEXT_PACKET_MAX_SIZE, sections are
  * dropped from lowest priority to highest until it fits, and only then is
@@ -385,7 +398,7 @@ export async function assembleContextPacket(
       const identity = fs.readFileSync(identityPath, 'utf-8');
       sections.push({
         priority: 1,
-        content: `<agent-identity>\n${identity}\n</agent-identity>`,
+        content: wrapAgentXml('agent-identity', identity),
       });
     }
 
@@ -395,7 +408,7 @@ export async function assembleContextPacket(
       const state = fs.readFileSync(statePath, 'utf-8').slice(0, 2000);
       sections.push({
         priority: 1,
-        content: `<agent-state>\n${state}\n</agent-state>`,
+        content: wrapAgentXml('agent-state', state),
       });
     }
 
@@ -405,7 +418,7 @@ export async function assembleContextPacket(
       const trust = fs.readFileSync(trustPath, 'utf-8');
       sections.push({
         priority: 1,
-        content: `<agent-trust>\n${trust}\n</agent-trust>`,
+        content: wrapAgentXml('agent-trust', trust),
       });
     }
 

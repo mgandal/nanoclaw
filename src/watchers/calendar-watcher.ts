@@ -348,7 +348,13 @@ export class CalendarWatcher {
 
   private scheduleNext(): void {
     this.timer = setTimeout(() => {
-      void this.poll().then(() => this.scheduleNext());
+      // MED-3: poll() is currently wrapped in try/catch, but if a future
+      // refactor lets an error escape, a missing .catch here would kill
+      // the reschedule chain and the watcher would stop silently. Always
+      // reschedule regardless of outcome.
+      this.poll()
+        .catch((err) => logger.error({ err }, 'CalendarWatcher poll failed'))
+        .finally(() => this.scheduleNext());
     }, this.config.pollIntervalMs);
   }
 

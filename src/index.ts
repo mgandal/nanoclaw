@@ -908,73 +908,100 @@ async function sendSystemAlert(
   message: string,
   fixInstructions?: string,
 ): Promise<void> {
-  appendAlert({
-    timestamp: new Date().toISOString(),
-    service,
-    message,
-    fixInstructions,
-  });
-
-  const text = fixInstructions
-    ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
-    : `⚠️ *${service}*: ${message}`;
-
-  // Re-entrancy guard: if we're already in the fallback chain, go straight to file
-  if (isSendingAlert) {
-    appendAlertToFile(text);
-    return;
-  }
-
-  isSendingAlert = true;
+  // MED-4: the 10+ `void sendSystemAlert(...)` call sites discard any
+  // rejection, so any throw from inside this function becomes an
+  // unhandled promise rejection — and since `isSendingAlert` is then
+  // never reset, the re-entrancy guard jams "on" and every subsequent
+  // alert silently takes the file-only path forever. Wrap the whole
+  // body so this function can only resolve, never reject.
   try {
-    // 1. Try OPS-claw
-    const opsJid = Object.keys(registeredGroups).find(
-      (j) => registeredGroups[j]?.folder === OPS_ALERT_FOLDER,
-    );
-    if (opsJid) {
-      const opsCh = findChannel(channels, opsJid);
-      if (opsCh) {
-        try {
-          await opsCh.sendMessage(opsJid, text);
-          return;
-        } catch {
-          // fall through
-        }
-      }
+    try {
+      appendAlert({
+        timestamp: new Date().toISOString(),
+        service,
+        message,
+        fixInstructions,
+      });
+    } catch (err) {
+      logger.warn({ err, service }, 'sendSystemAlert: appendAlert failed');
     }
 
-    // 2. Try CLAIRE Telegram DM (first isMain tg: group)
-    const tgMainJid = Object.keys(registeredGroups).find(
-      (j) => j.startsWith('tg:') && registeredGroups[j]?.isMain,
-    );
-    if (tgMainJid) {
-      const tgCh = findChannel(channels, tgMainJid);
-      if (tgCh) {
-        try {
-          await tgCh.sendMessage(tgMainJid, text);
-          return;
-        } catch {
-          // fall through
-        }
-      }
-    }
+    const text = fixInstructions
+      ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
+      : `⚠️ *${service}*: ${message}`;
 
-    // 3. Try CLAIRE Slack DM
-    const slackJid = ESCALATION_SLACK_JID;
-    const slackCh = findChannel(channels, slackJid);
-    if (slackCh) {
+    // Re-entrancy guard: if we're already in the fallback chain, go straight to file
+    if (isSendingAlert) {
       try {
-        await slackCh.sendMessage(slackJid, text);
-        return;
-      } catch {
-        // fall through
+        appendAlertToFile(text);
+      } catch (err) {
+        logger.warn({ err, service }, 'sendSystemAlert: file fallback failed');
       }
+      return;
     }
 
-    // 4. File fallback (always available, even during startup)
-    appendAlertToFile(text);
-  } finally {
-    isSendingAlert = false;
+    isSendingAlert = true;
+    try {
+      // 1. Try OPS-claw
+      const opsJid = Object.keys(registeredGroups).find(
+        (j) => registeredGroups[j]?.folder === OPS_ALERT_FOLDER,
+      );
+      if (opsJid) {
+        const opsCh = findChannel(channels, opsJid);
+        if (opsCh) {
+          try {
+            await opsCh.sendMessage(opsJid, text);
+            return;
+          } catch {
+            // fall through
+          }
+        }
+      }
+
+      // 2. Try CLAIRE Telegram DM (first isMain tg: group)
+      const tgMainJid = Object.keys(registeredGroups).find(
+        (j) => j.startsWith('tg:') && registeredGroups[j]?.isMain,
+      );
+      if (tgMainJid) {
+        const tgCh = findChannel(channels, tgMainJid);
+        if (tgCh) {
+          try {
+            await tgCh.sendMessage(tgMainJid, text);
+            return;
+          } catch {
+            // fall through
+          }
+        }
+      }
+
+      // 3. Try CLAIRE Slack DM
+      const slackJid = ESCALATION_SLACK_JID;
+      const slackCh = findChannel(channels, slackJid);
+      if (slackCh) {
+        try {
+          await slackCh.sendMessage(slackJid, text);
+          return;
+        } catch {
+          // fall through
+        }
+      }
+
+      // 4. File fallback (always available, even during startup)
+      try {
+        appendAlertToFile(text);
+      } catch (err) {
+        logger.warn({ err, service }, 'sendSystemAlert: file fallback failed');
+      }
+    } finally {
+      isSendingAlert = false;
+    }
+  } catch (err) {
+    // Last-resort: never reject. All fire-and-forget call sites depend on
+    // this function resolving.
+    logger.error(
+      { err, service, message },
+      'sendSystemAlert: unexpected top-level error (swallowed)',
+    );
   }
 }
 

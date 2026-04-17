@@ -209,7 +209,11 @@ describe('handleDashboardIpc', () => {
     });
 
     await handleDashboardIpc(
-      { type: 'dashboard_query', requestId: 'r-own', queryType: 'task_summary' },
+      {
+        type: 'dashboard_query',
+        requestId: 'r-own',
+        queryType: 'task_summary',
+      },
       'telegram_other',
       false, // non-main
       tmpDir,
@@ -217,7 +221,13 @@ describe('handleDashboardIpc', () => {
 
     const data = JSON.parse(
       fs.readFileSync(
-        path.join(tmpDir, 'ipc', 'telegram_other', 'dashboard_results', 'r-own.json'),
+        path.join(
+          tmpDir,
+          'ipc',
+          'telegram_other',
+          'dashboard_results',
+          'r-own.json',
+        ),
         'utf-8',
       ),
     );
@@ -227,7 +237,10 @@ describe('handleDashboardIpc', () => {
   });
 
   it('M2: run_logs_24h returns only source-group run logs for non-main', async () => {
-    for (const [id, folder] of [['t-own', 'telegram_other'], ['t-other', 'telegram_claire']]) {
+    for (const [id, folder] of [
+      ['t-own', 'telegram_other'],
+      ['t-other', 'telegram_claire'],
+    ]) {
       createTask({
         id,
         group_folder: folder,
@@ -252,14 +265,24 @@ describe('handleDashboardIpc', () => {
     }
 
     await handleDashboardIpc(
-      { type: 'dashboard_query', requestId: 'r-logs', queryType: 'run_logs_24h' },
+      {
+        type: 'dashboard_query',
+        requestId: 'r-logs',
+        queryType: 'run_logs_24h',
+      },
       'telegram_other',
       false,
       tmpDir,
     );
     const data = JSON.parse(
       fs.readFileSync(
-        path.join(tmpDir, 'ipc', 'telegram_other', 'dashboard_results', 'r-logs.json'),
+        path.join(
+          tmpDir,
+          'ipc',
+          'telegram_other',
+          'dashboard_results',
+          'r-logs.json',
+        ),
         'utf-8',
       ),
     );
@@ -271,14 +294,24 @@ describe('handleDashboardIpc', () => {
 
   it('M2: group_summary is main-only', async () => {
     await handleDashboardIpc(
-      { type: 'dashboard_query', requestId: 'r-gs', queryType: 'group_summary' },
+      {
+        type: 'dashboard_query',
+        requestId: 'r-gs',
+        queryType: 'group_summary',
+      },
       'telegram_other',
       false,
       tmpDir,
     );
     const data = JSON.parse(
       fs.readFileSync(
-        path.join(tmpDir, 'ipc', 'telegram_other', 'dashboard_results', 'r-gs.json'),
+        path.join(
+          tmpDir,
+          'ipc',
+          'telegram_other',
+          'dashboard_results',
+          'r-gs.json',
+        ),
         'utf-8',
       ),
     );
@@ -288,14 +321,24 @@ describe('handleDashboardIpc', () => {
 
   it('M2: skill_inventory is main-only', async () => {
     await handleDashboardIpc(
-      { type: 'dashboard_query', requestId: 'r-si', queryType: 'skill_inventory' },
+      {
+        type: 'dashboard_query',
+        requestId: 'r-si',
+        queryType: 'skill_inventory',
+      },
       'telegram_other',
       false,
       tmpDir,
     );
     const data = JSON.parse(
       fs.readFileSync(
-        path.join(tmpDir, 'ipc', 'telegram_other', 'dashboard_results', 'r-si.json'),
+        path.join(
+          tmpDir,
+          'ipc',
+          'telegram_other',
+          'dashboard_results',
+          'r-si.json',
+        ),
         'utf-8',
       ),
     );

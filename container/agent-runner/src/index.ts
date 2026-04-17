@@ -468,6 +468,7 @@ function shouldClose(): boolean {
 function drainIpcInput(): string[] {
   try {
     fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
+    const errorsDir = path.join(IPC_INPUT_DIR, 'errors');
     const files = fs
       .readdirSync(IPC_INPUT_DIR)
       .filter((f) => f.endsWith('.json'))
@@ -478,6 +479,11 @@ function drainIpcInput(): string[] {
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        // Unlink only after we have a valid parsed payload. If the process
+        // dies between read and unlink, the file is re-read next startup —
+        // acceptable. If it dies between unlink and the SDK consuming the
+        // returned string, the message is lost; that window is milliseconds
+        // and not worth a rename/commit protocol for container-side drain.
         fs.unlinkSync(filePath);
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
@@ -486,10 +492,17 @@ function drainIpcInput(): string[] {
         log(
           `Failed to process input file ${file}: ${err instanceof Error ? err.message : String(err)}`,
         );
+        // Move corrupt payload to errors/ rather than silently unlinking,
+        // so the host or an operator can inspect it (MED-1).
         try {
-          fs.unlinkSync(filePath);
+          fs.mkdirSync(errorsDir, { recursive: true });
+          fs.renameSync(filePath, path.join(errorsDir, file));
         } catch {
-          /* ignore */
+          try {
+            fs.unlinkSync(filePath);
+          } catch {
+            /* ignore — file may already be gone */
+          }
         }
       }
     }
