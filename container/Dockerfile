@@ -65,6 +65,14 @@ RUN pip3 install \
 # Pre-configure agent-reach as the node user (so config lands in /home/node/)
 RUN su node -c "HOME=/home/node agent-reach install --env=auto"
 
+# Install paperclip-gxl CLI (GXL-ai biomedical papers, paperclip.gxl.ai).
+# Provides `paperclip mcp` stdio bridge registered in agent-runner when
+# ~/.paperclip/credentials.json is mounted from host. Auth is per-user; CLI
+# refreshes its own id_token using the mounted refresh_token.
+# Pinned to PyPI 0.1.4; host installer may ship a slightly newer build.
+RUN pip3 install 'gxl-paperclip==0.1.4' --break-system-packages && \
+    paperclip --version
+
 # Create app directory
 WORKDIR /app
 

@@ -232,6 +232,21 @@ export function buildVolumeMounts(
     });
   }
 
+  // Paperclip-gxl credentials (for biomedical papers MCP/CLI inside container).
+  // Mounted read-write for all groups because the CLI refreshes id_tokens on each call
+  // (refresh_token itself does not rotate). Security trade-off vs. Gmail: the refresh_token
+  // is readable by any agent with this mount — acceptable because paperclip is an external
+  // low-privilege service, and read-only would prevent non-main agents (e.g. Simon in
+  // code-claw/science-claw) from using it at all.
+  const paperclipDir = path.join(homeDir, '.paperclip');
+  if (fs.existsSync(path.join(paperclipDir, 'credentials.json'))) {
+    mounts.push({
+      hostPath: paperclipDir,
+      containerPath: '/home/node/.paperclip',
+      readonly: false,
+    });
+  }
+
   // Blogwatcher persistent state directory (for RSS read/unread tracking)
   // Only mounted for groups that use blogwatcher (VAULT-claw)
   if (group.folder === 'telegram_vault-claw') {

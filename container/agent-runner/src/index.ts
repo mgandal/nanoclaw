@@ -302,6 +302,11 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     };
   }
 
+  // Paperclip-gxl: exposed via CLI (Bash), not MCP. The CLI's `mcp` subcommand
+  // is a vsh internal command, not a stdio MCP bridge. Agents use `paperclip
+  // search`, `paperclip cat`, etc. via Bash — the skill doc in
+  // container/skills/paperclip-gxl/ explains usage.
+
   return servers;
 }
 
