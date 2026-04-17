@@ -164,7 +164,10 @@ describe('assembleContextPacket', () => {
       })),
     );
     const packet = await assembleContextPacket('main', true);
-    expect(packet).toContain('[...truncated]');
+    // H5: packet is now truncated by dropping lower-priority sections whole
+    // rather than slicing the string, so the marker explains which class
+    // of content was dropped. Either marker is acceptable.
+    expect(packet).toMatch(/\[\.\.\.(truncated|lower-priority context dropped)/);
   });
 
   it('survives DB error on getRecentMessages', async () => {
@@ -629,5 +632,71 @@ describe('writeContextPacket', () => {
           typeof c[0] === 'string' && (c[0] as string).includes('queue.json'),
       );
     expect(queueCopy).toBeUndefined();
+  });
+});
+
+describe('assembleContextPacket H5 — per-section truncation', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('keeps agent-identity XML tags intact under pressure', async () => {
+    // Make non-identity sections huge (to blow the budget), non-truncatable
+    // in the flat-slice sense unless we drop by priority.
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) =>
+        typeof p === 'string' &&
+        (p.includes('memory.md') ||
+          p.includes('current.md') ||
+          p.includes('identity.md')),
+    );
+    vi.mocked(fs.readFileSync).mockImplementation((p) => {
+      if (typeof p !== 'string') return '';
+      if (p.endsWith('identity.md')) {
+        return '<rules>\n- be terse\n- escalate to main on error\n</rules>';
+      }
+      // Group memory + current.md both get stuffed with garbage
+      return 'P'.repeat(50000);
+    });
+    vi.mocked(fs.statSync).mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
+    // agentName triggers the identity branch
+    const packet = await assembleContextPacket('main', true, 'claire');
+
+    // The XML open and close tags must both survive — the fix's whole purpose
+    expect(packet).toContain('<agent-identity>');
+    expect(packet).toContain('</agent-identity>');
+    // No half-cut tag (e.g. "<agent-ide" with no closing ">")
+    const openCount = (packet.match(/<agent-identity>/g) ?? []).length;
+    const closeCount = (packet.match(/<\/agent-identity>/g) ?? []).length;
+    expect(openCount).toBe(closeCount);
+  });
+
+  it('drops whole sections rather than slicing mid-content', async () => {
+    // Several non-overlapping section markers; after truncation, any marker
+    // present should be followed by a newline (section boundary), not cut off.
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('memory.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue('M'.repeat(30000));
+    vi.mocked(getRecentMessages).mockReturnValue(
+      Array.from({ length: 200 }, (_, i) => ({
+        sender: `u${i}`,
+        content: 'R'.repeat(200),
+        timestamp: '2026-03-20T10:00:00Z',
+      })),
+    );
+    const packet = await assembleContextPacket('main', true);
+    // No half-section: every "--- X ---" header must have content after it
+    // (or be preceded by a dropped marker). Check no header sits at end of packet.
+    const headerAtEnd = /---[^-]+---\s*$/.test(packet);
+    expect(headerAtEnd).toBe(false);
+  });
+
+  it('priority-1 (date/timezone) always survives', async () => {
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p) => typeof p === 'string' && p.includes('memory.md'),
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue('X'.repeat(100000));
+    const packet = await assembleContextPacket('main', true);
+    expect(packet).toContain('Current date:');
+    expect(packet).toContain('Timezone:');
   });
 });

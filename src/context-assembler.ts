@@ -150,29 +150,50 @@ async function queryQmdForContext(query: string): Promise<string> {
   }
 }
 
+/**
+ * Sections assembled for the context packet, each tagged with a priority.
+ * When the assembled packet exceeds CONTEXT_PACKET_MAX_SIZE, sections are
+ * dropped from lowest priority to highest until it fits, and only then is
+ * the packet truncated line-wise as a last resort. This prevents the flat
+ * string slice from cutting XML tags mid-token.
+ *
+ * Priority scale (lower number = more important):
+ *   1 — identity / structural (date, agent-identity, agent-state, agent-trust)
+ *   2 — load-bearing memory (Session Continuity, hot cache, group memory,
+ *       current priorities, staleness warnings)
+ *   3 — operational context (recent messages, scheduled tasks, bus items)
+ *   4 — bonus context (QMD snippets, legacy bus queue)
+ */
+type Section = { priority: 1 | 2 | 3 | 4; content: string };
+
 export async function assembleContextPacket(
   groupFolder: string,
   isMain: boolean,
   agentName?: string,
 ): Promise<string> {
-  const sections: string[] = [];
+  const sections: Section[] = [];
 
   // 1. Date and timezone
   const now = new Date();
-  sections.push(
-    `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
-  );
-  sections.push(
-    `Current time: ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`,
-  );
-  sections.push(`Timezone: ${TIMEZONE}`);
+  sections.push({
+    priority: 1,
+    content: `Current date: ${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
+  });
+  sections.push({
+    priority: 1,
+    content: `Current time: ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`,
+  });
+  sections.push({ priority: 1, content: `Timezone: ${TIMEZONE}` });
 
   // 2. Group memory.md
   const memoryPath = path.join(GROUPS_DIR, groupFolder, 'memory.md');
   if (fs.existsSync(memoryPath)) {
     const memory = fs.readFileSync(memoryPath, 'utf-8');
     if (memory.trim()) {
-      sections.push(`\n--- Group Memory ---\n${memory.slice(0, 2000)}`);
+      sections.push({
+        priority: 2,
+        content: `\n--- Group Memory ---\n${memory.slice(0, 2000)}`,
+      });
     }
   }
 
@@ -181,7 +202,10 @@ export async function assembleContextPacket(
   if (fs.existsSync(currentPath)) {
     const current = fs.readFileSync(currentPath, 'utf-8');
     if (current.trim()) {
-      sections.push(`\n--- Current Priorities ---\n${current.slice(0, 1500)}`);
+      sections.push({
+        priority: 2,
+        content: `\n--- Current Priorities ---\n${current.slice(0, 1500)}`,
+      });
     }
   }
 
@@ -195,9 +219,10 @@ export async function assembleContextPacket(
       );
       if (continuityMatch?.[1]?.trim()) {
         const continuity = continuityMatch[1].trim().slice(0, 1500);
-        sections.push(
-          `\n--- Session Continuity (from prior compaction) ---\n${continuity}`,
-        );
+        sections.push({
+          priority: 2,
+          content: `\n--- Session Continuity (from prior compaction) ---\n${continuity}`,
+        });
       }
     }
 
@@ -215,9 +240,10 @@ export async function assembleContextPacket(
         if (fs.existsSync(hotPath)) {
           const hot = fs.readFileSync(hotPath, 'utf-8').trim();
           if (hot) {
-            sections.push(
-              `\n--- Hot Cache (recent context from prior session) ---\n${hot.slice(0, 3000)}`,
-            );
+            sections.push({
+              priority: 2,
+              content: `\n--- Hot Cache (recent context from prior session) ---\n${hot.slice(0, 3000)}`,
+            });
           }
         }
       }
@@ -227,7 +253,10 @@ export async function assembleContextPacket(
   // 4. Staleness warnings for key state files and group memory
   const stalenessWarnings = checkStaleness(groupFolder, now);
   if (stalenessWarnings.length > 0) {
-    sections.push(`\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`);
+    sections.push({
+      priority: 2,
+      content: `\n--- ⚠️ Stale Files ---\n${stalenessWarnings.join('\n')}`,
+    });
   }
 
   // 5. Recent messages (last 30)
@@ -241,7 +270,10 @@ export async function assembleContextPacket(
             `[${new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}] ${m.sender}: ${m.content.slice(0, 200)}`,
         )
         .join('\n');
-      sections.push(`\n--- Recent messages ---\n${formatted}`);
+      sections.push({
+        priority: 3,
+        content: `\n--- Recent messages ---\n${formatted}`,
+      });
     }
   } catch {
     // DB not initialized yet or query failed, skip
@@ -254,7 +286,7 @@ export async function assembleContextPacket(
     if (lastMsg?.content && lastMsg.content.length > 10) {
       const qmdResult = await queryQmdForContext(lastMsg.content.slice(0, 300));
       if (qmdResult) {
-        sections.push(qmdResult);
+        sections.push({ priority: 4, content: qmdResult });
       }
     }
   } catch {
@@ -274,7 +306,10 @@ export async function assembleContextPacket(
             `- ${t.prompt.slice(0, 80)}... (${t.schedule_type}: ${t.schedule_value})`,
         )
         .join('\n');
-      sections.push(`\n--- Scheduled tasks ---\n${formatted}`);
+      sections.push({
+        priority: 3,
+        content: `\n--- Scheduled tasks ---\n${formatted}`,
+      });
     }
   } catch {
     // DB not initialized, skip
@@ -312,7 +347,10 @@ export async function assembleContextPacket(
         return `- From ${i.from}: ${(i.finding || '').slice(0, 150)}`;
       })
       .join('\n');
-    sections.push(`\n--- Pending items from other agents ---\n${formatted}`);
+    sections.push({
+      priority: 4,
+      content: `\n--- Pending items from other agents ---\n${formatted}`,
+    });
   }
 
   // 8. Classified events (from message bus)
@@ -331,7 +369,10 @@ export async function assembleContextPacket(
         return `[${ev.classification?.urgency || 'medium'}] ${ev.classification?.summary || ev.finding || 'No summary'} (from: ${ev.from || 'unknown'})`;
       })
       .join('\n');
-    sections.push(`\n--- Recent Events (classified) ---\n${formatted}`);
+    sections.push({
+      priority: 3,
+      content: `\n--- Recent Events (classified) ---\n${formatted}`,
+    });
   }
 
   // Agent identity sections (if compound group)
@@ -342,21 +383,30 @@ export async function assembleContextPacket(
     const identityPath = path.join(agentDir, 'identity.md');
     if (fs.existsSync(identityPath)) {
       const identity = fs.readFileSync(identityPath, 'utf-8');
-      sections.push(`<agent-identity>\n${identity}\n</agent-identity>`);
+      sections.push({
+        priority: 1,
+        content: `<agent-identity>\n${identity}\n</agent-identity>`,
+      });
     }
 
     // State
     const statePath = path.join(agentDir, 'state.md');
     if (fs.existsSync(statePath)) {
       const state = fs.readFileSync(statePath, 'utf-8').slice(0, 2000);
-      sections.push(`<agent-state>\n${state}\n</agent-state>`);
+      sections.push({
+        priority: 1,
+        content: `<agent-state>\n${state}\n</agent-state>`,
+      });
     }
 
     // Trust
     const trustPath = path.join(agentDir, 'trust.yaml');
     if (fs.existsSync(trustPath)) {
       const trust = fs.readFileSync(trustPath, 'utf-8');
-      sections.push(`<agent-trust>\n${trust}\n</agent-trust>`);
+      sections.push({
+        priority: 1,
+        content: `<agent-trust>\n${trust}\n</agent-trust>`,
+      });
     }
 
     // Pending bus messages (read-only scan — do NOT claim or delete)
@@ -378,21 +428,54 @@ export async function assembleContextPacket(
           })
           .filter(Boolean);
         if (pending.length > 0) {
-          sections.push(
-            `<pending-bus-messages count="${pendingFiles.length}">\n${JSON.stringify(pending, null, 2)}\n</pending-bus-messages>`,
-          );
+          sections.push({
+            priority: 3,
+            content: `<pending-bus-messages count="${pendingFiles.length}">\n${JSON.stringify(pending, null, 2)}\n</pending-bus-messages>`,
+          });
         }
       }
     }
   }
 
-  // Assemble and truncate
-  let packet = sections.join('\n');
-  if (packet.length > CONTEXT_PACKET_MAX_SIZE) {
-    packet = packet.slice(0, CONTEXT_PACKET_MAX_SIZE) + '\n[...truncated]';
+  return packSections(sections, CONTEXT_PACKET_MAX_SIZE);
+}
+
+/**
+ * Join sections into a single packet, respecting the size budget. Sections
+ * are dropped whole from lowest to highest priority until the packet fits.
+ * If a single must-keep (priority 1) section is larger than the budget, it
+ * is truncated at a line boundary with a visible marker — we never cut an
+ * XML tag mid-token.
+ */
+function packSections(sections: Section[], maxSize: number): string {
+  const join = (xs: Section[]): string => xs.map((s) => s.content).join('\n');
+
+  // Preserve original insertion order; drop by priority within that order.
+  const kept = sections.slice();
+  let packet = join(kept);
+  if (packet.length <= maxSize) return packet;
+
+  // Drop lowest-priority sections first (highest priority number). We iterate
+  // 4 -> 2 because priority 1 is must-keep and gets special-case truncation
+  // below if still oversized.
+  for (const dropLevel of [4, 3, 2] as const) {
+    for (let i = kept.length - 1; i >= 0; i--) {
+      if (kept[i].priority === dropLevel) kept.splice(i, 1);
+    }
+    packet = join(kept);
+    if (packet.length <= maxSize) {
+      return `${packet}\n[...lower-priority context dropped to fit budget]`;
+    }
   }
 
-  return packet;
+  // Only priority-1 sections remain and they still exceed the budget.
+  // Truncate line-wise at the end of the packet. This keeps earlier
+  // XML tags intact; the final (partial) block is all we sacrifice.
+  const lines = packet.split('\n');
+  while (lines.length > 1 && lines.join('\n').length > maxSize) {
+    lines.pop();
+  }
+  return `${lines.join('\n')}\n[...truncated: identity content exceeded budget]`;
 }
 
 const STALENESS_THRESHOLD_DAYS = 3;
