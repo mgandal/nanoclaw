@@ -11,7 +11,12 @@ import {
   setRegisteredGroup,
   updateTask,
 } from './db.js';
-import { processTaskIpc, processIpcMessage, IpcDeps } from './ipc.js';
+import {
+  processTaskIpc,
+  processIpcMessage,
+  deliverSendMessage,
+  IpcDeps,
+} from './ipc.js';
 import { DATA_DIR } from './config.js';
 import { publishKnowledge } from './knowledge.js';
 import { RegisteredGroup } from './types.js';
@@ -2037,5 +2042,62 @@ describe('send_file compound key auth', () => {
     } finally {
       fs.unlinkSync(hostFile);
     }
+  });
+});
+
+describe('deliverSendMessage', () => {
+  it('calls sendWebAppButton when webAppUrl is present', async () => {
+    const sendWebAppButton = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      {
+        chatJid: 'tg:main123',
+        text: 'Open app',
+        webAppUrl: 'https://example.com/app',
+      },
+      { sendMessage, sendWebAppButton },
+      'telegram_main',
+    );
+    expect(sendWebAppButton).toHaveBeenCalledWith(
+      'tg:main123',
+      'Open app',
+      'https://example.com/app',
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('falls back to plain sendMessage when no sender and no webAppUrl', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      { chatJid: 'tg:main123', text: 'hello' },
+      { sendMessage },
+      'telegram_main',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('tg:main123', 'hello');
+  });
+
+  it('falls back to plain sendMessage for non-tg chatJid even with sender', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      { chatJid: 'slack:C123', text: 'hello', sender: 'Einstein' },
+      { sendMessage },
+      'telegram_science-claw',
+    );
+    // Pool bots are Telegram-only; non-tg falls through to sendMessage
+    expect(sendMessage).toHaveBeenCalledWith('slack:C123', 'hello');
+  });
+
+  it('ignores webAppUrl when sendWebAppButton is not provided', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      {
+        chatJid: 'tg:main123',
+        text: 'hello',
+        webAppUrl: 'https://example.com',
+      },
+      { sendMessage },
+      'telegram_main',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('tg:main123', 'hello');
   });
 });

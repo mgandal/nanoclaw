@@ -80,6 +80,70 @@ export function clearIpcSend(chatJid: string): void {
   recentIpcSends.delete(chatJid);
 }
 
+/**
+ * Deliver a send_message payload through the appropriate channel path:
+ * WebApp button → pool bot with sender prefix → plain main-bot send.
+ *
+ * Pure delivery: no trust check, no audit log. Callers (processIpcMessage
+ * for fresh actions, approval executor for replayed ones) are responsible
+ * for those concerns so they can attribute outcomes correctly.
+ *
+ * On pool-bot delivery, marks the chatJid as recently-IPC-sent to suppress
+ * duplicate output from the streaming callback.
+ */
+export async function deliverSendMessage(
+  data: {
+    chatJid: string;
+    text: string;
+    sender?: string;
+    webAppUrl?: string;
+  },
+  deps: Pick<IpcDeps, 'sendMessage' | 'sendWebAppButton'>,
+  sourceGroup: string,
+): Promise<void> {
+  if (
+    data.webAppUrl &&
+    typeof data.webAppUrl === 'string' &&
+    deps.sendWebAppButton
+  ) {
+    await deps.sendWebAppButton(data.chatJid, data.text, data.webAppUrl);
+    logger.info(
+      { chatJid: data.chatJid, sourceGroup },
+      'IPC WebApp button sent',
+    );
+    return;
+  }
+
+  if (
+    data.sender &&
+    data.chatJid.startsWith('tg:') &&
+    TELEGRAM_BOT_POOL.length > 0
+  ) {
+    const sent = await sendPoolMessage(
+      data.chatJid,
+      data.text,
+      data.sender,
+      sourceGroup,
+    );
+    if (!sent) {
+      const prefixed = `*${data.sender}:*\n${data.text}`;
+      await deps.sendMessage(data.chatJid, prefixed);
+    }
+    markIpcSend(data.chatJid);
+    logger.info(
+      { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+      'IPC message sent',
+    );
+    return;
+  }
+
+  await deps.sendMessage(data.chatJid, data.text);
+  logger.info(
+    { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+    'IPC message sent',
+  );
+}
+
 function cleanupStaleProcessing(ipcBaseDir: string): void {
   try {
     const errorDir = path.join(ipcBaseDir, 'errors');
@@ -270,43 +334,15 @@ export async function processIpcMessage(
         }
       }
 
-      if (
-        data.webAppUrl &&
-        typeof data.webAppUrl === 'string' &&
-        deps.sendWebAppButton
-      ) {
-        // Telegram Mini App button — delegate to channel
-        await deps.sendWebAppButton(data.chatJid, data.text, data.webAppUrl);
-        logger.info(
-          { chatJid: data.chatJid, sourceGroup },
-          'IPC WebApp button sent',
-        );
-      } else if (
-        data.sender &&
-        data.chatJid.startsWith('tg:') &&
-        TELEGRAM_BOT_POOL.length > 0
-      ) {
-        const sent = await sendPoolMessage(
-          data.chatJid,
-          data.text,
-          data.sender,
-          sourceGroup,
-        );
-        if (!sent) {
-          // Pool bot can't reach this chat (e.g. DM) — fall back
-          // to main bot with sender name prefixed
-          const prefixed = `*${data.sender}:*\n${data.text}`;
-          await deps.sendMessage(data.chatJid, prefixed);
-        }
-        // Mark that IPC delivered a message to this chat — the streaming
-        // output callback will suppress its own send to avoid duplicates.
-        markIpcSend(data.chatJid);
-      } else {
-        await deps.sendMessage(data.chatJid, data.text);
-      }
-      logger.info(
-        { chatJid: data.chatJid, sourceGroup, sender: data.sender },
-        'IPC message sent',
+      await deliverSendMessage(
+        {
+          chatJid: data.chatJid,
+          text: data.text,
+          sender: data.sender,
+          webAppUrl: data.webAppUrl,
+        },
+        deps,
+        sourceGroup,
       );
 
       // Post-hoc notification: if the trust level was 'notify', surface a
