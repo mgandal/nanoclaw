@@ -138,3 +138,25 @@ def test_extract_empty_body_returns_none_without_ollama(mock_post):
     email = _email(body="")
     assert extract(email, direction="sent") is None
     mock_post.assert_not_called()
+
+
+def test_parse_markdown_fence_with_trailing_newline():
+    """Closing fence followed by trailing whitespace is still stripped."""
+    raw = "```json\n" + json.dumps({
+        "kind": "i-owe", "who": "X", "what": "Y", "due": "none",
+        "significant": False, "decision_summary": "",
+    }) + "\n```\n\n"
+    r = _parse_response(raw)
+    assert r is not None
+    assert r.kind == "i-owe"
+
+
+def test_parse_fence_without_language_tag():
+    """Bare triple-backtick fence with no language identifier."""
+    raw = "```\n" + json.dumps({
+        "kind": "i-owe", "who": "X", "what": "Y", "due": "none",
+        "significant": False, "decision_summary": "",
+    }) + "\n```"
+    r = _parse_response(raw)
+    assert r is not None
+    assert r.kind == "i-owe"

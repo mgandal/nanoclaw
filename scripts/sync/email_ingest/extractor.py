@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -10,6 +11,8 @@ import requests
 from email_ingest.types import NormalizedEmail
 
 log = logging.getLogger("email-ingest.extractor")
+
+_FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "phi4-mini"
@@ -67,11 +70,9 @@ def _parse_response(raw: str) -> Optional[ExtractionResult]:
     cleaned = (raw or "").strip()
     if not cleaned:
         return None
-    if cleaned.startswith("```"):
-        cleaned = "\n".join(cleaned.split("\n")[1:])
-    if cleaned.endswith("```"):
-        cleaned = "\n".join(cleaned.split("\n")[:-1])
-    cleaned = cleaned.strip()
+    fence_match = _FENCE_RE.match(cleaned)
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError:
