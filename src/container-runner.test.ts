@@ -141,6 +141,7 @@ import {
   collectToolCalls,
   clearStaleSessionContinuity,
   ContainerOutput,
+  _redactContainerArgsForTests,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 import { spawn } from 'child_process';
@@ -1780,5 +1781,37 @@ describe('clearStaleSessionContinuity', () => {
     expect(() =>
       clearStaleSessionContinuity('/nonexistent/path/memory.md'),
     ).not.toThrow();
+  });
+});
+
+describe('redactContainerArgs', () => {
+  it('redacts the proxy token inside ANTHROPIC_BASE_URL', () => {
+    const args = [
+      '-e',
+      'ANTHROPIC_BASE_URL=http://192.168.64.1:3001/0123-abcd-proxy-token',
+    ];
+    const redacted = _redactContainerArgsForTests(args);
+    expect(redacted[1]).toBe('ANTHROPIC_BASE_URL=http://192.168.64.1:3001/***');
+    expect(redacted[1]).not.toContain('0123-abcd-proxy-token');
+  });
+
+  it('redacts known sensitive env var values', () => {
+    const args = [
+      '-e',
+      'GITHUB_TOKEN=ghp_real_token_here',
+      '-e',
+      'READWISE_ACCESS_TOKEN=rw_real_token',
+      '-e',
+      'SUPADATA_API_KEY=sd_real_key',
+    ];
+    const redacted = _redactContainerArgsForTests(args);
+    expect(redacted[1]).toBe('GITHUB_TOKEN=***');
+    expect(redacted[3]).toBe('READWISE_ACCESS_TOKEN=***');
+    expect(redacted[5]).toBe('SUPADATA_API_KEY=***');
+  });
+
+  it('leaves non-sensitive args untouched', () => {
+    const args = ['-e', 'QMD_URL=http://host:8181', '-v', '/host:/container'];
+    expect(_redactContainerArgsForTests(args)).toEqual(args);
   });
 });

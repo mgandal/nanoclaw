@@ -292,11 +292,15 @@ export async function processIpcMessage(
       // Resolve container path to host path (or pass through absolute host paths)
       let hostFilePath: string | null;
       if (
+        isMain &&
         data.filePath.startsWith('/') &&
         !data.filePath.startsWith('/workspace/') &&
+        !data.filePath.includes('..') &&
         fs.existsSync(data.filePath)
       ) {
-        // Absolute host path (e.g. from Hermes MCP) — pass through
+        // Absolute host path pass-through: restricted to main group only.
+        // Non-main groups would otherwise be able to exfiltrate arbitrary
+        // host files (SSH keys, credentials) by sending them to their own JID.
         hostFilePath = data.filePath;
       } else {
         hostFilePath = resolveContainerFilePathToHost(
@@ -835,9 +839,21 @@ export async function processTaskIpc(
         fsPathToCompoundKey(sourceGroup),
       );
 
+      // Authorization: non-main senders can only publish to their own base
+      // group. Otherwise a specialist could inject a prompt into any other
+      // group's lead agent via the bus-watcher dispatch (see index.ts
+      // bus dispatch path, which renders m.summary directly into the
+      // runAgent prompt).
+      const targetGroup = toGroup || pubBaseGroup;
+      if (!isMain && targetGroup !== pubBaseGroup) {
+        logger.warn(
+          { sourceGroup, targetGroup, sourceAgent },
+          'Unauthorized publish_to_bus attempt blocked (cross-group)',
+        );
+        break;
+      }
+
       if (deps.messageBus) {
-        // Use the base group folder if to_group not specified
-        const targetGroup = toGroup || pubBaseGroup;
         const targetFsKey = `${targetGroup}--${toAgent}`;
         deps.messageBus.writeAgentMessage(targetFsKey, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,

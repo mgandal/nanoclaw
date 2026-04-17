@@ -57,13 +57,27 @@ function isQmdReachable(): boolean {
   return qmdReachable;
 }
 
+export function _redactContainerArgsForTests(args: string[]): string[] {
+  return redactContainerArgs(args);
+}
+
 function redactContainerArgs(args: string[]): string[] {
   const sensitiveKeys =
-    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|GITHUB_TOKEN|SUPADATA_API_KEY)=/i;
+    /^(ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_AUTH_TOKEN|CREDENTIAL_PROXY_TOKEN|GITHUB_TOKEN|SUPADATA_API_KEY|READWISE_ACCESS_TOKEN)=/i;
+  // ANTHROPIC_BASE_URL carries the credential-proxy token as a URL path
+  // segment (http://host:port/{UUID}); redact that segment specifically
+  // while keeping host:port visible for diagnostics.
+  const baseUrlKey = /^ANTHROPIC_BASE_URL=/i;
   return args.map((arg, i) => {
     if (i > 0 && args[i - 1] === '-e' && sensitiveKeys.test(arg)) {
       const eqIdx = arg.indexOf('=');
       return arg.slice(0, eqIdx + 1) + '***';
+    }
+    if (i > 0 && args[i - 1] === '-e' && baseUrlKey.test(arg)) {
+      return arg.replace(
+        /^(ANTHROPIC_BASE_URL=https?:\/\/[^/]+\/)[^/\s]+/i,
+        '$1***',
+      );
     }
     return arg;
   });
