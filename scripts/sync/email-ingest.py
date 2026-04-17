@@ -14,18 +14,26 @@ import os
 import sys
 import time
 
+import requests
+
 # Add parent dir to path so email_ingest package is importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from email_ingest.types import IngestState, STATE_DIR, LOG_FILE
+from email_ingest.types import IngestState, STATE_DIR, LOG_FILE, FollowUp, FOLLOWUPS_FILE
 from email_ingest.gmail_adapter import GmailAdapter
 from email_ingest.exchange_adapter import ExchangeAdapter
 from email_ingest.classifier import should_fast_skip, classify_email
 from email_ingest.exporter import export_email, retain_in_hindsight
+import email_ingest.followups as _followups_mod
+import email_ingest.extractor as _extractor_mod
+import email_ingest.closure as _closure_mod
+import email_ingest.aging as _aging_mod
 
 RELEVANCE_THRESHOLD = float(os.environ.get("EMAIL_INGEST_THRESHOLD", "0.3"))
 HINDSIGHT_THRESHOLD = 0.7
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8889")
+
+FOLLOWUP_GMAIL_SENDER = "mgandal@gmail.com"
 
 
 def _setup_logging():
@@ -53,6 +61,7 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
         "total_fetched": 0, "classified": 0, "fast_skipped": 0,
         "exported": 0, "hindsight_retained": 0,
     }
+    all_classified = []
 
     # --- Gmail ---
     gmail_epoch = state.last_gmail_epoch or state.default_epoch()
@@ -89,6 +98,7 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
                 continue
 
             state.processed_gmail_ids.append(email.id)
+            all_classified.append((email, result.relevance))
 
             if result.relevance >= RELEVANCE_THRESHOLD:
                 export_email(email, result)
@@ -137,6 +147,7 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
                 continue
 
             state.processed_exchange_ids.append(email.id)
+            all_classified.append((email, result.relevance))
 
             if result.relevance >= RELEVANCE_THRESHOLD:
                 export_email(email, result)
@@ -153,6 +164,23 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
     else:
         log.warning("Exchange adapter not available — skipping Exchange")
 
+    # --- Follow-ups pipeline (gated by EMAIL_FOLLOWUPS_ENABLED=1) ---
+    try:
+        fu_stats = run_followups_passes(gmail, exchange, new_emails=all_classified)
+        if not fu_stats.get("skipped"):
+            for k, v in fu_stats.items():
+                stats[k] = v
+            log.info(
+                "followups: closed=%d aged=%d commitments=%d asks=%d decisions=%d",
+                fu_stats.get("followups_closed", 0),
+                fu_stats.get("followups_aged", 0),
+                fu_stats.get("commitments_added", 0),
+                fu_stats.get("asks_added", 0),
+                fu_stats.get("decisions_retained", 0),
+            )
+    except Exception as e:
+        log.warning("Follow-ups pipeline failed (non-fatal): %s", e)
+
     state.stats = stats
     state.save()
 
@@ -162,6 +190,141 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
         stats["exported"], stats["hindsight_retained"],
     )
     return stats
+
+
+def _direction_for(email):
+    """Return 'sent' | 'received' | None (skip)."""
+    if email.source == "gmail":
+        from_addr = email.from_addr.lower()
+        if FOLLOWUP_GMAIL_SENDER in from_addr:
+            return "sent"
+        return "received"
+    if email.source == "exchange":
+        if email.metadata.get("is_sent") or email.metadata.get("mailbox") == "Sent Items":
+            return "sent"
+        return "received"
+    return None
+
+
+def _email_qualifies_for_extraction(email, relevance):
+    """Return direction to extract with, or None to skip."""
+    direction = _direction_for(email)
+    if direction is None:
+        return None
+    if email.source == "gmail" and "mikejg1838" in email.from_addr.lower():
+        return None
+    if direction == "sent":
+        return "sent"
+    if relevance >= 0.7:
+        return "received"
+    return None
+
+
+def _ext_to_followup(email, r):
+    if r.kind not in ("i-owe", "they-owe-me"):
+        return None
+    thread_src = email.source
+    thread_id = email.metadata.get("threadId") or email.metadata.get("conversationId") or email.id
+    return FollowUp(
+        kind=r.kind,
+        who=r.who or email.from_addr,
+        what=r.what,
+        due=r.due or "none",
+        thread=f"{thread_src}:{thread_id}",
+        source_msg=f"{thread_src}:{email.id}",
+        created=email.date,
+        status="open",
+    )
+
+
+def _retain_decision(email, r):
+    """Retain a decision to Hindsight. Fire-and-forget; returns 1 on send attempted."""
+    hindsight_url = os.environ.get("HINDSIGHT_URL", "http://localhost:8889")
+    date_slug = email.date[:10] if email.date else "unknown-date"
+    who_slug = (r.who or "unknown").replace(" ", "-").lower()[:40]
+    doc_id = f"decision-{date_slug}-{who_slug}"
+    content = (
+        f"Decision: {r.decision_summary}\n\n"
+        f"Subject: {email.subject}\n"
+        f"Thread: {email.source}:{email.metadata.get('threadId', email.id)}\n"
+        f"Excerpt: {email.body[:500]}"
+    )
+    try:
+        requests.post(
+            f"{hindsight_url}/retain",
+            json={
+                "bank": "hermes",
+                "content": content,
+                "metadata": {
+                    "source": "email-ingest-decision",
+                    "document_id": doc_id,
+                    "message_id": email.id,
+                    "kind": "decision",
+                },
+            },
+            timeout=10,
+        )
+        return 1
+    except Exception as e:
+        log.debug("Decision retain failed (non-blocking): %s", e)
+        return 0
+
+
+def run_followups_passes(
+    gmail_adapter,
+    exchange_adapter,
+    new_emails=None,
+    now=None,
+):
+    """Run closure → aging → extraction → write in sequence.
+    No-op unless EMAIL_FOLLOWUPS_ENABLED=1.
+    new_emails is a list of (email, relevance) produced by the main ingest loop."""
+    if os.environ.get("EMAIL_FOLLOWUPS_ENABLED") != "1":
+        return {"skipped": True}
+
+    from datetime import datetime, timezone
+    if now is None:
+        now = datetime.now(timezone.utc)
+    new_emails = new_emails or []
+
+    items = _followups_mod.parse_file(FOLLOWUPS_FILE)
+
+    items, closed_count = _closure_mod.apply_closure(items, gmail_adapter, exchange_adapter, now=now)
+    items, aged_count = _aging_mod.apply_aging(items, now=now)
+
+    commitments_added = 0
+    asks_added = 0
+    decisions_retained = 0
+
+    for email, relevance in new_emails:
+        direction = _email_qualifies_for_extraction(email, relevance)
+        if direction is None:
+            continue
+        result = _extractor_mod.extract(email, direction=direction)
+        if result is None:
+            continue
+        if result.significant and direction == "sent":
+            decisions_retained += _retain_decision(email, result)
+        fu = _ext_to_followup(email, result)
+        if fu is None:
+            continue
+        if any(_followups_mod.is_duplicate(fu, existing) for existing in items):
+            continue
+        items.append(fu)
+        if fu.kind == "i-owe":
+            commitments_added += 1
+        else:
+            asks_added += 1
+
+    _followups_mod.write_file(FOLLOWUPS_FILE, items)
+
+    return {
+        "followups_closed": closed_count,
+        "followups_aged": aged_count,
+        "commitments_added": commitments_added,
+        "asks_added": asks_added,
+        "decisions_retained": decisions_retained,
+    }
 
 
 def show_status(state: IngestState):
