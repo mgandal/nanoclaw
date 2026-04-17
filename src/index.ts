@@ -128,7 +128,29 @@ let lastSeq = 0;
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentSeq: Record<string, number> = {};
+// H2: pending cursor advances for messages piped to an already-running
+// container. Committed when the container's streaming callback fires a
+// 'success' (turn-end signal); discarded if the container dies first, so
+// the messages re-enter the loop on the next poll.
+const pendingPipedAdvance = new Map<string, number>();
 let messageLoopRunning = false;
+
+/** H2 helpers — small enough to inline but extracted so tests can exercise
+ * commit-vs-discard semantics without spinning the full message loop. */
+function recordPendingPipedAdvance(chatJid: string, seq: number): void {
+  pendingPipedAdvance.set(chatJid, seq);
+}
+function commitPendingPipedAdvance(chatJid: string): boolean {
+  const pending = pendingPipedAdvance.get(chatJid);
+  if (pending === undefined) return false;
+  lastAgentSeq[chatJid] = pending;
+  pendingPipedAdvance.delete(chatJid);
+  saveState();
+  return true;
+}
+function discardPendingPipedAdvance(chatJid: string): boolean {
+  return pendingPipedAdvance.delete(chatJid);
+}
 let healthMonitor: HealthMonitor;
 let loadedAgents: AgentIdentity[] = [];
 let agentRegistry: AgentRegistryRow[] = [];
@@ -251,6 +273,23 @@ export function _setRegisteredGroups(
 ): void {
   registeredGroups = groups;
 }
+
+/** @internal - H2 pending piped-message advance map view, for tests only. */
+export function _pendingPipedAdvanceForTests(): Map<string, number> {
+  return pendingPipedAdvance;
+}
+
+/** @internal - H2 primitives exposed for direct unit testing. */
+export const _h2ForTests = {
+  record: recordPendingPipedAdvance,
+  commit: commitPendingPipedAdvance,
+  discard: discardPendingPipedAdvance,
+  readCursor: (chatJid: string): number | undefined => lastAgentSeq[chatJid],
+  resetCursors: (): void => {
+    for (const k of Object.keys(lastAgentSeq)) delete lastAgentSeq[k];
+    pendingPipedAdvance.clear();
+  },
+};
 
 /**
  * Process all pending messages for a group.
@@ -450,6 +489,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         queue.notifyIdle(chatJid);
         // Clear IPC send tracking for this chat now that the container is done
         clearIpcSend(chatJid);
+        // H2: commit any pending piped-message cursor advance now that the
+        // container has completed a turn.
+        commitPendingPipedAdvance(chatJid);
       }
 
       if (result.status === 'error') {
@@ -460,6 +502,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+
+  // H2: the container has exited. Any pending piped-message advance left
+  // over never reached a 'success' turn — discard it so those messages get
+  // re-read on the next poll (lastAgentSeq stays where it was).
+  if (discardPendingPipedAdvance(chatJid)) {
+    logger.warn(
+      { group: group.name, chatJid },
+      'Container exited with unconfirmed piped messages; they will be re-read next poll',
+    );
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -788,9 +840,14 @@ async function startMessageLoop(): Promise<void> {
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',
             );
-            lastAgentSeq[chatJid] =
-              messagesToSend[messagesToSend.length - 1].seq;
-            saveState();
+            // H2: defer cursor advance until the container confirms the turn
+            // completed (see commitPendingPipedAdvance in the streaming
+            // callback). If the container dies first, the pending advance is
+            // discarded and messages re-enter the loop on next poll.
+            recordPendingPipedAdvance(
+              chatJid,
+              messagesToSend[messagesToSend.length - 1].seq,
+            );
             // Update session last_used so expiry timer resets on active use
             const grp = registeredGroups[chatJid];
             if (grp && sessions[grp.folder]) {

@@ -1180,3 +1180,56 @@ describe('router state persistence round-trip', () => {
     expect(parsed['chat@g.us']).toBe(2147483647);
   });
 });
+
+describe('H2: pending piped-message cursor advance', () => {
+  beforeEach(async () => {
+    _initTestDatabase();
+    const { _h2ForTests } = await import('./index.js');
+    _h2ForTests.resetCursors();
+  });
+
+  it('record + commit advances the cursor to the pending seq', async () => {
+    const { _h2ForTests } = await import('./index.js');
+    _h2ForTests.record('tg:group1', 42);
+    // Cursor not yet advanced — sanity check
+    expect(_h2ForTests.readCursor('tg:group1')).toBeUndefined();
+
+    const committed = _h2ForTests.commit('tg:group1');
+    expect(committed).toBe(true);
+    expect(_h2ForTests.readCursor('tg:group1')).toBe(42);
+  });
+
+  it('commit with nothing pending is a no-op', async () => {
+    const { _h2ForTests } = await import('./index.js');
+    expect(_h2ForTests.commit('tg:unknown')).toBe(false);
+    expect(_h2ForTests.readCursor('tg:unknown')).toBeUndefined();
+  });
+
+  it('discard drops the pending without advancing the cursor', async () => {
+    const { _h2ForTests } = await import('./index.js');
+    _h2ForTests.record('tg:group1', 99);
+    const discarded = _h2ForTests.discard('tg:group1');
+    expect(discarded).toBe(true);
+    // Cursor unchanged — the next poll will re-read those messages
+    expect(_h2ForTests.readCursor('tg:group1')).toBeUndefined();
+  });
+
+  it('pending advance is per-chatJid (no cross-contamination)', async () => {
+    const { _h2ForTests } = await import('./index.js');
+    _h2ForTests.record('tg:a', 10);
+    _h2ForTests.record('tg:b', 20);
+    _h2ForTests.commit('tg:a');
+    expect(_h2ForTests.readCursor('tg:a')).toBe(10);
+    expect(_h2ForTests.readCursor('tg:b')).toBeUndefined();
+    _h2ForTests.discard('tg:b');
+    expect(_h2ForTests.readCursor('tg:b')).toBeUndefined();
+  });
+
+  it('record twice without commit only keeps the latest seq', async () => {
+    const { _h2ForTests } = await import('./index.js');
+    _h2ForTests.record('tg:group', 5);
+    _h2ForTests.record('tg:group', 9);
+    _h2ForTests.commit('tg:group');
+    expect(_h2ForTests.readCursor('tg:group')).toBe(9);
+  });
+});
