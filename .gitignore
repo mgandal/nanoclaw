@@ -38,6 +38,13 @@ scripts/sync/__pycache__/
 scripts/sync/*.pyc
 scripts/sync/*.log
 scripts/sync/gmail-sync-state.json
+scripts/sync/gmail-sync-latest.json
+scripts/paperpile-wiki/pipeline.log
+
+# Skill output and runtime state
+graphify-out/
+.remember/
+.claude/scheduled_tasks.lock
 
 # Temp files
 .tmp-*
