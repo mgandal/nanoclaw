@@ -1861,6 +1861,77 @@ describe('trust enforcement on send_message', () => {
       'hello from other',
     );
   });
+
+  // --- A2: draft-level trust stages to pending_actions ---
+
+  it('A2: draft-level send_message stages a pending_action and does not send', async () => {
+    const { listPendingActions } = await import('./db.js');
+    const TEST_AGENT = 'a2-draft-agent';
+    const agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: draft\n',
+    );
+    try {
+      sendMessageSpy.mockClear();
+      await processIpcMessage(
+        {
+          type: 'message',
+          chatJid: 'tg:other456',
+          text: 'draft reply to collaborator',
+        },
+        `telegram_other--${TEST_AGENT}`,
+        false,
+        deps,
+      );
+
+      // Nothing actually sent over the wire
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+
+      // Pending action row created for this group with the replay payload
+      const pending = listPendingActions({ groupFolder: 'telegram_other' });
+      expect(pending).toHaveLength(1);
+      expect(pending[0].action_type).toBe('send_message');
+      expect(pending[0].agent_name).toBe(TEST_AGENT);
+      expect(pending[0].summary).toContain('draft reply');
+      const payload = JSON.parse(pending[0].payload_json);
+      expect(payload.chatJid).toBe('tg:other456');
+      expect(payload.text).toBe('draft reply to collaborator');
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('A2: notify-level send_message sends AND posts receipt to main', async () => {
+    const TEST_AGENT = 'a2-notify-agent';
+    const agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+    try {
+      sendMessageSpy.mockClear();
+      await processIpcMessage(
+        {
+          type: 'message',
+          chatJid: 'tg:other456',
+          text: 'FYI: updated the deck',
+        },
+        `telegram_other--${TEST_AGENT}`,
+        false,
+        deps,
+      );
+
+      // Sent to the target + a receipt to main
+      const calls = sendMessageSpy.mock.calls.map((c) => c[0]);
+      expect(calls).toContain('tg:other456'); // actual delivery
+      expect(calls).toContain('tg:main123'); // notify receipt
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // --- send_file compound key auth ---

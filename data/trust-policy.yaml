@@ -1,0 +1,29 @@
+# Trust promotion ceilings.
+#
+# Controls the maximum trust level that `analyze-promotions` and `apply-promotion`
+# will ever propose or apply for a given action_type. Promotions beyond the ceiling
+# require a manual edit to this file.
+#
+# Ladder (low → high autonomy): ask → draft → notify → autonomous
+#
+# An omitted action has NO ceiling → eligible for promotion up to `autonomous`.
+# That is intentional for low-risk actions (read-only, internal-only).
+#
+# Per VISION4.md §5: outbound actions touching external humans must not reach
+# `autonomous` without a deliberate manual edit.
+
+ceilings:
+  # --- Outbound to external humans: never autonomous without manual edit ---
+  send_message: notify           # Telegram/Slack to group (external-ish)
+  send_slack_dm: notify          # DMs — higher reputational risk
+  send_email: draft              # email — highest risk, stays draft-max
+  send_file: notify              # file drops
+
+  # --- Internal / low-risk: no ceiling (eligible for autonomous) ---
+  # publish_to_bus: (omitted — no ceiling)
+  # search_literature: (omitted — no ceiling)
+  # write_agent_memory: (omitted — no ceiling)
+  # read_slack_dm: (omitted — no ceiling, read-only)
+
+  # --- Writes to shared state: cap at notify so user sees them ---
+  write_vault: notify

@@ -1,6 +1,31 @@
 import type { NewMessage } from './types.js';
 import { logger } from './logger.js';
 
+export type ApprovalCommand =
+  | { kind: 'approve'; id: string }
+  | { kind: 'reject'; id: string }
+  | { kind: 'pending' };
+
+/**
+ * Extract an approval-queue command from a message. Returns null if the
+ * message is not an approval command. Accepts:
+ *   /approve <id>
+ *   /reject <id>
+ *   /pending        (list pending actions for this group)
+ */
+export function extractApprovalCommand(
+  content: string,
+  triggerPattern: RegExp,
+): ApprovalCommand | null {
+  const text = content.trim().replace(triggerPattern, '').trim();
+  if (text === '/pending') return { kind: 'pending' };
+  const approve = text.match(/^\/approve\s+([A-Za-z0-9_-]{1,80})$/);
+  if (approve) return { kind: 'approve', id: approve[1] };
+  const reject = text.match(/^\/reject\s+([A-Za-z0-9_-]{1,80})$/);
+  if (reject) return { kind: 'reject', id: reject[1] };
+  return null;
+}
+
 /**
  * Extract a session slash command from a message, stripping the trigger prefix if present.
  * Returns the slash command (e.g., '/compact') or null if not a session command.
@@ -25,6 +50,142 @@ export function isSessionCommandAllowed(
   isFromMe: boolean,
 ): boolean {
   return isMainGroup || isFromMe;
+}
+
+/**
+ * Handle an approval-queue command host-side. Does NOT involve the agent —
+ * reads the pending_actions row, replays the action via the provided
+ * executor, updates DB status, and returns a short status line for the
+ * calling group.
+ *
+ * Authorization: main group can approve/reject any pending action. Non-main
+ * groups can only touch their own pending actions.
+ */
+export async function handleApprovalCommand(opts: {
+  command: ApprovalCommand;
+  sourceGroupFolder: string;
+  isMainGroup: boolean;
+  db: {
+    getPendingAction: (id: string) => {
+      id: string;
+      group_folder: string;
+      action_type: string;
+      summary: string;
+      payload_json: string;
+      status: string;
+      created_at: string;
+      agent_name: string;
+    } | null;
+    listPendingActions: (opts: {
+      groupFolder?: string;
+      status?: 'pending';
+      limit?: number;
+    }) => Array<{
+      id: string;
+      created_at: string;
+      agent_name: string;
+      action_type: string;
+      summary: string;
+    }>;
+    updatePendingActionStatus: (
+      id: string,
+      status: 'approved' | 'rejected' | 'executed' | 'failed',
+      result?: string,
+    ) => void;
+  };
+  /**
+   * Replay an approved payload. Return a short text result or throw on failure.
+   * The payload is the JSON-decoded stored payload; action_type identifies
+   * the handler (e.g. 'send_message' → route through IPC message path).
+   */
+  execute: (action: {
+    action_type: string;
+    payload: unknown;
+    group_folder: string;
+    agent_name: string;
+  }) => Promise<string>;
+}): Promise<string> {
+  const { command, sourceGroupFolder, isMainGroup, db } = opts;
+
+  if (command.kind === 'pending') {
+    const scope = isMainGroup ? undefined : sourceGroupFolder;
+    const rows = db.listPendingActions({ groupFolder: scope, limit: 20 });
+    if (rows.length === 0) return 'No pending actions.';
+    const lines = rows.map((r) => {
+      const ageMin = Math.round(
+        (Date.now() - new Date(r.created_at).getTime()) / 60000,
+      );
+      const ageLabel =
+        ageMin < 60
+          ? `${ageMin}m`
+          : ageMin < 1440
+            ? `${Math.round(ageMin / 60)}h`
+            : `${Math.round(ageMin / 1440)}d`;
+      return `• ${r.id} — ${r.agent_name} ${r.action_type} (${ageLabel} ago): ${r.summary.slice(0, 100)}`;
+    });
+    return `Pending (${rows.length}):\n${lines.join('\n')}`;
+  }
+
+  const row = db.getPendingAction(command.id);
+  if (!row) return `No pending action with id ${command.id}.`;
+
+  // Authorization: non-main can only touch own-group rows.
+  if (!isMainGroup && row.group_folder !== sourceGroupFolder) {
+    logger.warn(
+      {
+        id: command.id,
+        sourceGroupFolder,
+        rowGroup: row.group_folder,
+        command: command.kind,
+      },
+      'Approval command denied: cross-group access',
+    );
+    return `Pending action ${command.id} is not in this group.`;
+  }
+
+  if (row.status !== 'pending') {
+    return `Pending action ${command.id} is already ${row.status}.`;
+  }
+
+  if (command.kind === 'reject') {
+    db.updatePendingActionStatus(command.id, 'rejected');
+    logger.info({ id: command.id, sourceGroupFolder }, 'Action rejected');
+    return `Rejected ${command.id}.`;
+  }
+
+  // approve → replay
+  db.updatePendingActionStatus(command.id, 'approved');
+  let payload: unknown;
+  try {
+    payload = JSON.parse(row.payload_json);
+  } catch (err) {
+    db.updatePendingActionStatus(
+      command.id,
+      'failed',
+      `payload parse error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return `Failed to parse payload for ${command.id}.`;
+  }
+
+  try {
+    const result = await opts.execute({
+      action_type: row.action_type,
+      payload,
+      group_folder: row.group_folder,
+      agent_name: row.agent_name,
+    });
+    db.updatePendingActionStatus(command.id, 'executed', result.slice(0, 200));
+    logger.info(
+      { id: command.id, sourceGroupFolder, result: result.slice(0, 80) },
+      'Action approved + executed',
+    );
+    return `Approved ${command.id}: ${result}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    db.updatePendingActionStatus(command.id, 'failed', msg.slice(0, 200));
+    logger.error({ err, id: command.id }, 'Action execution failed');
+    return `Approved but execution failed for ${command.id}: ${msg}`;
+  }
 }
 
 /** Minimal agent result interface — matches the subset of ContainerOutput used here. */

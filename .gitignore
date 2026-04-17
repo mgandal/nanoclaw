@@ -12,6 +12,7 @@ data/*
 !data/agents/
 !data/agent-knowledge/
 !data/skill-catalog/
+!data/trust-policy.yaml
 
 # Groups - only track base structure and specific CLAUDE.md files
 groups/*

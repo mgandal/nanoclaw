@@ -19,6 +19,7 @@ import {
   deleteTask,
   getTaskById,
   insertAgentAction,
+  insertPendingAction,
   updateTask,
   validateTaskSchedule,
 } from './db.js';
@@ -203,6 +204,7 @@ export async function processIpcMessage(
       parseCompoundKey(baseKey);
     if (isMain || (targetGroup && targetGroup.folder === baseGroupFolder)) {
       // Trust enforcement for compound groups (agents)
+      let trustDecisionForNotify: ReturnType<typeof checkTrust> | null = null;
       if (agentName) {
         const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
         const decision = checkTrust(
@@ -211,6 +213,7 @@ export async function processIpcMessage(
           'send_message',
           trust,
         );
+        trustDecisionForNotify = decision;
         insertAgentAction({
           agent_name: agentName,
           group_folder: baseGroupFolder,
@@ -218,18 +221,51 @@ export async function processIpcMessage(
           trust_level: decision.level,
           summary: data.text.slice(0, 200),
           target: data.chatJid,
-          outcome: decision.allowed ? 'allowed' : 'blocked',
+          outcome: decision.allowed
+            ? 'allowed'
+            : decision.stage
+              ? 'staged'
+              : 'blocked',
         });
         if (!decision.allowed) {
-          logger.info(
-            {
-              agentName,
-              chatJid: data.chatJid,
-              sourceGroup,
-              level: decision.level,
-            },
-            'Trust: send_message blocked for agent',
-          );
+          if (decision.stage) {
+            // Route through the approval queue instead of silently dropping.
+            const pendingId = insertPendingAction({
+              agent_name: agentName,
+              group_folder: baseGroupFolder,
+              action_type: 'send_message',
+              summary: data.text.slice(0, 500),
+              payload: {
+                type: 'message',
+                chatJid: data.chatJid,
+                text: data.text,
+                sender: data.sender,
+                webAppUrl: data.webAppUrl,
+              },
+            });
+            logger.info(
+              {
+                pendingId,
+                agentName,
+                level: decision.level,
+                chatJid: data.chatJid,
+              },
+              'Trust: send_message staged for approval',
+            );
+            // TODO(A4): surface pending actions in morning briefing; for now
+            // the agent's next session will see it via the pending_approvals
+            // dashboard query or the /pending session command.
+          } else {
+            logger.info(
+              {
+                agentName,
+                chatJid: data.chatJid,
+                sourceGroup,
+                level: decision.level,
+              },
+              'Trust: send_message blocked for agent',
+            );
+          }
           return;
         }
       }
@@ -272,6 +308,29 @@ export async function processIpcMessage(
         { chatJid: data.chatJid, sourceGroup, sender: data.sender },
         'IPC message sent',
       );
+
+      // Post-hoc notification: if the trust level was 'notify', surface a
+      // short receipt in the main group so the user sees what happened
+      // without needing to check the group directly. Best-effort; failure
+      // to notify does not roll back the already-sent message.
+      if (trustDecisionForNotify?.notify && agentName) {
+        try {
+          const mainJid = Object.entries(registeredGroups).find(
+            ([, g]) => g.isMain,
+          )?.[0];
+          if (mainJid && mainJid !== data.chatJid) {
+            await deps.sendMessage(
+              mainJid,
+              `ℹ️ ${agentName} → ${registeredGroups[data.chatJid]?.name || data.chatJid}: ${data.text.slice(0, 200)}`,
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, agentName, chatJid: data.chatJid },
+            'notify-level post-hoc notification failed',
+          );
+        }
+      }
     } else {
       logger.warn(
         { chatJid: data.chatJid, sourceGroup },

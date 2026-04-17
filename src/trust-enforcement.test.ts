@@ -33,7 +33,7 @@ describe('checkTrust', () => {
     expect(result.notify).toBe(true);
   });
 
-  it('returns blocked for ask actions', () => {
+  it('returns stage=true for ask actions (not silent drop)', () => {
     const trust = { actions: { schedule_meeting: 'ask' } };
     const result = checkTrust(
       'einstein',
@@ -42,10 +42,11 @@ describe('checkTrust', () => {
       trust,
     );
     expect(result.allowed).toBe(false);
+    expect(result.stage).toBe(true);
     expect(result.level).toBe('ask');
   });
 
-  it('returns blocked for draft actions (treated as ask)', () => {
+  it('returns stage=true for draft actions', () => {
     const trust = { actions: { send_email: 'draft' } };
     const result = checkTrust(
       'einstein',
@@ -54,10 +55,11 @@ describe('checkTrust', () => {
       trust,
     );
     expect(result.allowed).toBe(false);
+    expect(result.stage).toBe(true);
     expect(result.level).toBe('draft');
   });
 
-  it('defaults unknown actions to ask (blocked)', () => {
+  it('defaults unknown actions to ask (stage, not silent drop)', () => {
     const trust = { actions: {} };
     const result = checkTrust(
       'einstein',
@@ -66,6 +68,7 @@ describe('checkTrust', () => {
       trust,
     );
     expect(result.allowed).toBe(false);
+    expect(result.stage).toBe(true);
     expect(result.level).toBe('ask');
   });
 
@@ -78,5 +81,20 @@ describe('checkTrust', () => {
     );
     expect(result.allowed).toBe(true);
     expect(result.level).toBe('autonomous');
+    expect(result.stage).toBe(false);
+  });
+
+  it('autonomous and notify both have stage=false (execute immediately)', () => {
+    const a = checkTrust('x', 'g', 'a', { actions: { a: 'autonomous' } });
+    const n = checkTrust('x', 'g', 'a', { actions: { a: 'notify' } });
+    expect(a.stage).toBe(false);
+    expect(n.stage).toBe(false);
+  });
+
+  it('invalid level string also stages (fail-safe)', () => {
+    const trust = { actions: { x: 'unrecognized_level_xyz' } };
+    const result = checkTrust('einstein', 'g', 'x', trust);
+    expect(result.allowed).toBe(false);
+    expect(result.stage).toBe(true);
   });
 });

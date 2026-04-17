@@ -127,6 +127,28 @@ function createSchema(database: Database): void {
       proposal_count_date TEXT,
       proposal_count INTEGER DEFAULT 0
     );
+
+    -- Actions an agent has prepared but which require user approval before
+    -- execution. Populated when trust level for the action is 'draft' or
+    -- 'ask'. Consumed by /approve <id> and /reject <id> session commands.
+    -- The payload is a JSON blob the host-side handler replays verbatim
+    -- through the normal IPC dispatch when approved.
+    CREATE TABLE IF NOT EXISTS pending_actions (
+      id TEXT PRIMARY KEY,
+      created_at TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      group_folder TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      executed_at TEXT,
+      result TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_actions_status
+      ON pending_actions(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_pending_actions_group
+      ON pending_actions(group_folder, status);
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
@@ -1182,6 +1204,106 @@ export function insertAgentAction(action: AgentActionInput): void {
     action.outcome || 'completed',
     new Date().toISOString(),
   );
+}
+
+// --- Pending actions (draft / ask approval queue) ---
+
+export type PendingActionStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'executed'
+  | 'failed';
+
+export interface PendingActionInput {
+  agent_name: string;
+  group_folder: string;
+  action_type: string;
+  summary: string;
+  payload: unknown;
+}
+
+export interface PendingActionRow {
+  id: string;
+  created_at: string;
+  agent_name: string;
+  group_folder: string;
+  action_type: string;
+  summary: string;
+  payload_json: string;
+  status: PendingActionStatus;
+  executed_at: string | null;
+  result: string | null;
+}
+
+export function insertPendingAction(input: PendingActionInput): string {
+  const id = `pa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(
+    `INSERT INTO pending_actions
+     (id, created_at, agent_name, group_folder, action_type, summary, payload_json, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
+  ).run(
+    id,
+    new Date().toISOString(),
+    input.agent_name,
+    input.group_folder,
+    input.action_type,
+    input.summary.slice(0, 500),
+    JSON.stringify(input.payload),
+  );
+  return id;
+}
+
+export function getPendingAction(id: string): PendingActionRow | null {
+  const row = db
+    .prepare('SELECT * FROM pending_actions WHERE id = ?')
+    .get(id) as PendingActionRow | undefined;
+  return row ?? null;
+}
+
+/**
+ * List pending actions. If groupFolder is provided, only returns actions from
+ * that group. If status is provided (default 'pending'), filters to that
+ * status. Ordered oldest first so the queue surfaces by creation age.
+ */
+export function listPendingActions(opts: {
+  groupFolder?: string;
+  status?: PendingActionStatus;
+  limit?: number;
+}): PendingActionRow[] {
+  const status = opts.status ?? 'pending';
+  const limit = opts.limit ?? 100;
+  if (opts.groupFolder) {
+    return db
+      .prepare(
+        `SELECT * FROM pending_actions
+         WHERE group_folder = ? AND status = ?
+         ORDER BY created_at ASC LIMIT ?`,
+      )
+      .all(opts.groupFolder, status, limit) as PendingActionRow[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM pending_actions WHERE status = ?
+       ORDER BY created_at ASC LIMIT ?`,
+    )
+    .all(status, limit) as PendingActionRow[];
+}
+
+export function updatePendingActionStatus(
+  id: string,
+  status: PendingActionStatus,
+  result?: string,
+): void {
+  const executedAt =
+    status === 'executed' || status === 'failed'
+      ? new Date().toISOString()
+      : null;
+  db.prepare(
+    `UPDATE pending_actions
+     SET status = ?, executed_at = ?, result = ?
+     WHERE id = ?`,
+  ).run(status, executedAt, result ?? null, id);
 }
 
 // --- JSON migration ---

@@ -50,6 +50,10 @@ import {
   getPatternProposals,
   upsertAgentRegistry,
   insertAgentAction,
+  insertPendingAction,
+  getPendingAction,
+  listPendingActions,
+  updatePendingActionStatus,
 } from './db.js';
 import { formatMessages } from './router.js';
 
@@ -2656,5 +2660,103 @@ describe('insertAgentAction', () => {
     expect(rows).toHaveLength(1);
     expect((rows[0] as any).agent_name).toBe('einstein');
     expect((rows[0] as any).trust_level).toBe('notify');
+  });
+});
+
+describe('pending_actions CRUD', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('insert + get round-trips the payload', () => {
+    const id = insertPendingAction({
+      agent_name: 'marvin',
+      group_folder: 'telegram_lab-claw',
+      action_type: 'send_email',
+      summary: 'Reply to Sylvanus K99/R00',
+      payload: { to: 'sylvanus@example.edu', body: 'Hi Sylvanus, ...' },
+    });
+    expect(id).toMatch(/^pa-/);
+
+    const row = getPendingAction(id);
+    expect(row).not.toBeNull();
+    expect(row!.agent_name).toBe('marvin');
+    expect(row!.group_folder).toBe('telegram_lab-claw');
+    expect(row!.action_type).toBe('send_email');
+    expect(row!.status).toBe('pending');
+    const payload = JSON.parse(row!.payload_json);
+    expect(payload.to).toBe('sylvanus@example.edu');
+  });
+
+  it('listPendingActions filters by group and status', () => {
+    insertPendingAction({
+      agent_name: 'marvin',
+      group_folder: 'telegram_lab-claw',
+      action_type: 'send_email',
+      summary: 'lab reply',
+      payload: {},
+    });
+    insertPendingAction({
+      agent_name: 'claire',
+      group_folder: 'telegram_claire',
+      action_type: 'schedule',
+      summary: 'main sched',
+      payload: {},
+    });
+
+    const lab = listPendingActions({ groupFolder: 'telegram_lab-claw' });
+    expect(lab).toHaveLength(1);
+    expect(lab[0].agent_name).toBe('marvin');
+
+    const allPending = listPendingActions({});
+    expect(allPending).toHaveLength(2);
+  });
+
+  it('updatePendingActionStatus transitions state + stamps executed_at', () => {
+    const id = insertPendingAction({
+      agent_name: 'marvin',
+      group_folder: 'telegram_lab-claw',
+      action_type: 'send_email',
+      summary: 'x',
+      payload: {},
+    });
+
+    updatePendingActionStatus(id, 'approved');
+    let row = getPendingAction(id);
+    expect(row!.status).toBe('approved');
+    expect(row!.executed_at).toBeNull();
+
+    updatePendingActionStatus(id, 'executed', 'sent ok');
+    row = getPendingAction(id);
+    expect(row!.status).toBe('executed');
+    expect(row!.executed_at).toBeTruthy();
+    expect(row!.result).toBe('sent ok');
+  });
+
+  it('executed/rejected rows are excluded from default pending listing', () => {
+    const a = insertPendingAction({
+      agent_name: 'marvin',
+      group_folder: 'g',
+      action_type: 'x',
+      summary: 'a',
+      payload: {},
+    });
+    const b = insertPendingAction({
+      agent_name: 'marvin',
+      group_folder: 'g',
+      action_type: 'x',
+      summary: 'b',
+      payload: {},
+    });
+    updatePendingActionStatus(a, 'rejected');
+    updatePendingActionStatus(b, 'executed', 'done');
+
+    expect(listPendingActions({ groupFolder: 'g' })).toHaveLength(0);
+    expect(
+      listPendingActions({ groupFolder: 'g', status: 'executed' }),
+    ).toHaveLength(1);
+    expect(
+      listPendingActions({ groupFolder: 'g', status: 'rejected' }),
+    ).toHaveLength(1);
   });
 });

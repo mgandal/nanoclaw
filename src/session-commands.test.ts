@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
+  extractApprovalCommand,
   extractSessionCommand,
+  handleApprovalCommand,
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
@@ -446,5 +448,226 @@ describe('handleSessionCommand', () => {
     });
     expect(result).toEqual({ handled: true, success: true });
     expect(deps.sendMessage).toHaveBeenCalledWith('Visible text  more visible');
+  });
+});
+
+describe('extractApprovalCommand', () => {
+  const tp = /@Claire\s*/i;
+
+  it('parses /approve <id>', () => {
+    expect(extractApprovalCommand('/approve pa-123-abc', tp)).toEqual({
+      kind: 'approve',
+      id: 'pa-123-abc',
+    });
+  });
+
+  it('parses /reject <id>', () => {
+    expect(extractApprovalCommand('/reject pa-xyz', tp)).toEqual({
+      kind: 'reject',
+      id: 'pa-xyz',
+    });
+  });
+
+  it('parses /pending (no arg)', () => {
+    expect(extractApprovalCommand('/pending', tp)).toEqual({ kind: 'pending' });
+  });
+
+  it('strips trigger prefix', () => {
+    expect(extractApprovalCommand('@Claire /approve pa-42', tp)).toEqual({
+      kind: 'approve',
+      id: 'pa-42',
+    });
+  });
+
+  it('rejects ids with invalid chars', () => {
+    expect(extractApprovalCommand('/approve pa-foo/../bar', tp)).toBeNull();
+  });
+
+  it('returns null for non-approval text', () => {
+    expect(extractApprovalCommand('hello world', tp)).toBeNull();
+    expect(extractApprovalCommand('/compact', tp)).toBeNull();
+  });
+});
+
+describe('handleApprovalCommand', () => {
+  const makeDb = (rows: Record<string, any>) => {
+    const statusUpdates: Array<[string, string, string?]> = [];
+    return {
+      statusUpdates,
+      getPendingAction: (id: string) => rows[id] ?? null,
+      listPendingActions: (opts: { groupFolder?: string }) =>
+        Object.values(rows).filter((r: any) =>
+          opts.groupFolder ? r.group_folder === opts.groupFolder : true,
+        ) as any,
+      updatePendingActionStatus: (id: string, status: any, result?: string) => {
+        statusUpdates.push([id, status, result]);
+        if (rows[id]) rows[id].status = status;
+      },
+    };
+  };
+
+  it('approve path calls execute and marks executed', async () => {
+    const db = makeDb({
+      'pa-1': {
+        id: 'pa-1',
+        group_folder: 'g',
+        agent_name: 'marvin',
+        action_type: 'send_message',
+        summary: 'hi',
+        payload_json: '{"chatJid":"tg:x","text":"hi"}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const execute = vi.fn(async () => 'sent');
+    const result = await handleApprovalCommand({
+      command: { kind: 'approve', id: 'pa-1' },
+      sourceGroupFolder: 'g',
+      isMainGroup: false,
+      db: db as any,
+      execute,
+    });
+    expect(result).toContain('Approved');
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({ action_type: 'send_message' }),
+    );
+    expect(db.statusUpdates.map((u) => u[1])).toEqual(['approved', 'executed']);
+  });
+
+  it('reject path marks rejected and does not execute', async () => {
+    const db = makeDb({
+      'pa-2': {
+        id: 'pa-2',
+        group_folder: 'g',
+        agent_name: 'x',
+        action_type: 'y',
+        summary: 's',
+        payload_json: '{}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const execute = vi.fn(async () => 'no');
+    const result = await handleApprovalCommand({
+      command: { kind: 'reject', id: 'pa-2' },
+      sourceGroupFolder: 'g',
+      isMainGroup: false,
+      db: db as any,
+      execute,
+    });
+    expect(result).toContain('Rejected');
+    expect(execute).not.toHaveBeenCalled();
+    expect(db.statusUpdates[0][1]).toBe('rejected');
+  });
+
+  it('non-main cannot approve cross-group pending actions', async () => {
+    const db = makeDb({
+      'pa-3': {
+        id: 'pa-3',
+        group_folder: 'telegram_claire',
+        agent_name: 'claire',
+        action_type: 'send_message',
+        summary: 'main-only',
+        payload_json: '{}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const execute = vi.fn(async () => 'x');
+    const result = await handleApprovalCommand({
+      command: { kind: 'approve', id: 'pa-3' },
+      sourceGroupFolder: 'telegram_other',
+      isMainGroup: false,
+      db: db as any,
+      execute,
+    });
+    expect(result).toMatch(/not in this group/);
+    expect(execute).not.toHaveBeenCalled();
+    expect(db.statusUpdates).toHaveLength(0);
+  });
+
+  it('already-processed rows cannot be re-approved', async () => {
+    const db = makeDb({
+      'pa-4': {
+        id: 'pa-4',
+        group_folder: 'g',
+        agent_name: 'x',
+        action_type: 'y',
+        summary: 's',
+        payload_json: '{}',
+        status: 'executed',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const result = await handleApprovalCommand({
+      command: { kind: 'approve', id: 'pa-4' },
+      sourceGroupFolder: 'g',
+      isMainGroup: true,
+      db: db as any,
+      execute: vi.fn(),
+    });
+    expect(result).toMatch(/already executed/);
+  });
+
+  it('pending listing scopes non-main to own group', async () => {
+    const db = makeDb({
+      'pa-own': {
+        id: 'pa-own',
+        group_folder: 'telegram_other',
+        agent_name: 'marvin',
+        action_type: 'send_message',
+        summary: 'own',
+        payload_json: '{}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+      'pa-main': {
+        id: 'pa-main',
+        group_folder: 'telegram_claire',
+        agent_name: 'claire',
+        action_type: 'send_message',
+        summary: 'confidential',
+        payload_json: '{}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const result = await handleApprovalCommand({
+      command: { kind: 'pending' },
+      sourceGroupFolder: 'telegram_other',
+      isMainGroup: false,
+      db: db as any,
+      execute: vi.fn(),
+    });
+    expect(result).toContain('pa-own');
+    expect(result).not.toContain('pa-main');
+    expect(result).not.toContain('confidential');
+  });
+
+  it('execute failure marks failed', async () => {
+    const db = makeDb({
+      'pa-f': {
+        id: 'pa-f',
+        group_folder: 'g',
+        agent_name: 'x',
+        action_type: 'y',
+        summary: 's',
+        payload_json: '{}',
+        status: 'pending',
+        created_at: new Date().toISOString(),
+      },
+    });
+    const execute = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    const result = await handleApprovalCommand({
+      command: { kind: 'approve', id: 'pa-f' },
+      sourceGroupFolder: 'g',
+      isMainGroup: true,
+      db: db as any,
+      execute,
+    });
+    expect(result).toMatch(/failed.*boom/);
+    expect(db.statusUpdates.map((u) => u[1])).toEqual(['approved', 'failed']);
   });
 });
