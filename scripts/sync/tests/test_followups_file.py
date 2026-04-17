@@ -242,3 +242,28 @@ def test_parse_corrupt_entry_preserves_others(tmp_path):
     assert len(items) == 2
     assert items[0].who == "A"
     assert items[1].who == "B"
+
+
+def test_manual_hyphen_key_preserved_roundtrip(tmp_path):
+    """Hyphenated user-added field keys survive parse→write round-trip in extra."""
+    p = _sample(tmp_path, """# Follow-ups
+
+## Open
+
+### 2026-04-17 · i-owe · User
+- **what:** do thing
+- **due:** none
+- **thread:** gmail:z
+- **source_msg:** gmail:z
+- **created:** 2026-04-17T00:00:00Z
+- **status:** open
+- **user-note:** hand-typed context
+""")
+    items = parse_file(p)
+    assert len(items) == 1
+    assert items[0].extra == {"user-note": "hand-typed context"}
+
+    out = tmp_path / "out.md"
+    write_file(out, items)
+    parsed = parse_file(out)
+    assert parsed[0].extra == {"user-note": "hand-typed context"}

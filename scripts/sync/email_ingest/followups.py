@@ -28,7 +28,7 @@ STOPWORDS = {
 _HEADING_RE = re.compile(
     r"^###\s+(\d{4}-\d{2}-\d{2})\s+·\s+(i-owe|they-owe-me)\s+·\s+(.+)$"
 )
-_FIELD_RE = re.compile(r"^-\s+\*\*(\w+):\*\*\s+(.*)$")
+_FIELD_RE = re.compile(r"^-\s+\*\*([\w-]+):\*\*\s+(.*)$")
 _SECTION_RE = re.compile(r"^##\s+(Open|Stale|Closed)\s*$")
 
 _KNOWN_FIELDS = {
