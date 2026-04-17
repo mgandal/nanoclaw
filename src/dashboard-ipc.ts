@@ -6,6 +6,7 @@ import {
   getAllSessions,
   getAllTasks,
   getTaskRunLogs,
+  getTaskRunLogsForGroup,
 } from './db.js';
 import { logger } from './logger.js';
 
@@ -20,7 +21,7 @@ const SESSIONS_DIR = path.join(process.cwd(), 'data', 'sessions');
 export async function handleDashboardIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
-  _isMain: boolean,
+  isMain: boolean,
   dataDir: string,
 ): Promise<boolean> {
   if (data.type !== 'dashboard_query') return false;
@@ -47,10 +48,23 @@ export async function handleDashboardIpc(
     fs.renameSync(tmpFile, resultFile);
   };
 
+  const denyNonMain = (): boolean => {
+    logger.warn(
+      { sourceGroup, queryType },
+      'dashboard IPC query restricted to main group',
+    );
+    writeResult({ success: false, error: 'query restricted to main group' });
+    return true;
+  };
+
   try {
     switch (queryType) {
       case 'task_summary': {
-        const tasks = getAllTasks();
+        // Non-main callers see only their own tasks. last_result may contain
+        // task output text, so cross-group exposure is a real leak.
+        const tasks = isMain
+          ? getAllTasks()
+          : getAllTasks().filter((t) => t.group_folder === sourceGroup);
         writeResult({
           success: true,
           tasks: tasks.map((t) => ({
@@ -70,19 +84,27 @@ export async function handleDashboardIpc(
 
       case 'run_logs_24h': {
         const since = new Date(Date.now() - 24 * 3600000).toISOString();
-        const logs = getTaskRunLogs(since);
+        const logs = isMain
+          ? getTaskRunLogs(since)
+          : getTaskRunLogsForGroup(since, sourceGroup);
         writeResult({ success: true, logs });
         break;
       }
 
       case 'run_logs_7d': {
         const since = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
-        const logs = getTaskRunLogs(since);
+        const logs = isMain
+          ? getTaskRunLogs(since)
+          : getTaskRunLogsForGroup(since, sourceGroup);
         writeResult({ success: true, logs });
         break;
       }
 
       case 'group_summary': {
+        // Main-only: exposes every group's JID and isMain flag, which
+        // is useful reconnaissance for a cross-group prompt-injection
+        // attempt (see C2's class of bug).
+        if (!isMain) return denyNonMain();
         const groups = getAllRegisteredGroups();
         const sessions = getAllSessions();
         writeResult({
@@ -99,6 +121,9 @@ export async function handleDashboardIpc(
       }
 
       case 'skill_inventory': {
+        // Main-only: lists every group's skill count — an operational
+        // admin view, not something a non-main agent needs.
+        if (!isMain) return denyNonMain();
         const groups = getAllRegisteredGroups();
         const inventory: Record<string, number> = {};
         for (const g of Object.values(groups)) {
@@ -120,6 +145,9 @@ export async function handleDashboardIpc(
       }
 
       case 'state_freshness': {
+        // Shared global state dir; its contents are already injected into
+        // every group's context packet, so mtime/filename exposure is not
+        // new information. Leave accessible to all groups.
         const stateDir = path.join(GROUPS_DIR, 'global', 'state');
         const freshness: Record<string, string> = {};
         try {

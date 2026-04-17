@@ -753,6 +753,25 @@ export function getTaskRunLogs(since: string): TaskRunLog[] {
     .all(since) as TaskRunLog[];
 }
 
+/**
+ * Like getTaskRunLogs but restricted to tasks belonging to a specific group
+ * folder. Used by the dashboard IPC handler to avoid leaking other groups'
+ * task output to a non-main caller.
+ */
+export function getTaskRunLogsForGroup(
+  since: string,
+  groupFolder: string,
+): TaskRunLog[] {
+  return db
+    .prepare(
+      `SELECT l.* FROM task_run_logs l
+       JOIN scheduled_tasks t ON t.id = l.task_id
+       WHERE l.run_at >= ? AND t.group_folder = ?
+       ORDER BY l.run_at ASC`,
+    )
+    .all(since, groupFolder) as TaskRunLog[];
+}
+
 /** Get success rate for a task over the last N days. */
 export function getTaskSuccessRate(
   taskId: string,
