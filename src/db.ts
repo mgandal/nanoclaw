@@ -685,13 +685,47 @@ export function updateTaskAfterRun(
   lastResult: string,
 ): void {
   const now = new Date().toISOString();
+  // After a run: one-time tasks (no next_run) become 'completed'. Tasks that
+  // were 'running' (see markTaskRunning) return to 'active' so they can be
+  // picked up on the next poll. Tasks paused or cancelled mid-run keep that
+  // status — we only transition out of 'running', never over user intent.
   db.prepare(
     `
     UPDATE scheduled_tasks
-    SET next_run = ?, last_run = ?, last_result = ?, status = CASE WHEN ? IS NULL THEN 'completed' ELSE status END
+    SET next_run = ?, last_run = ?, last_result = ?,
+        status = CASE
+          WHEN ? IS NULL THEN 'completed'
+          WHEN status = 'running' THEN 'active'
+          ELSE status
+        END
     WHERE id = ?
   `,
   ).run(nextRun, now, lastResult, nextRun, id);
+}
+
+/**
+ * Mark a task as running at dispatch time. Until updateTaskAfterRun fires,
+ * getDueTasks (which filters by status='active') will not return it, so a
+ * long-running task cannot be re-enqueued on subsequent scheduler polls.
+ */
+export function markTaskRunning(id: string): void {
+  db.prepare(
+    `UPDATE scheduled_tasks SET status = 'running' WHERE id = ? AND status = 'active'`,
+  ).run(id);
+}
+
+/**
+ * Startup recovery: any task left in 'running' after a crash/restart gets
+ * flipped back to 'active' so the scheduler can pick it up on the next poll.
+ * Nothing can actually be running in a freshly-booted process.
+ */
+export function recoverRunningTasks(): number {
+  const result = db
+    .prepare(
+      `UPDATE scheduled_tasks SET status = 'active' WHERE status = 'running'`,
+    )
+    .run();
+  return result.changes as number;
 }
 
 export function logTaskRun(log: TaskRunLog): void {

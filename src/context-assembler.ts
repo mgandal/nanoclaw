@@ -280,7 +280,12 @@ export async function assembleContextPacket(
     // DB not initialized, skip
   }
 
-  // Read bus queue once for sections 7 and 8
+  // Legacy group-level bus queue (see message-bus.ts:217 appendToAgentQueue,
+  // now unused). The compound-key per-message format below (pending-bus-messages)
+  // is the current path. We still read queue.json if present so an older install
+  // isn't silently stranded, but nothing in this codebase writes it anymore —
+  // deleting the stray file is safe if you see one. Follow-up: drop this read
+  // and the associated dead methods in message-bus.ts.
   const busQueuePath = path.join(
     DATA_DIR,
     'bus',
@@ -455,6 +460,7 @@ export async function writeContextPacket(
   fs.writeFileSync(tmpPacketPath, packet);
   fs.renameSync(tmpPacketPath, packetPath);
 
-  // Bus messages are now delivered via per-message files (writeAgentMessage/listAgentMessages).
-  // queue.json copy+clear removed — no longer used.
+  // Bus messages are delivered via per-message files
+  // (writeAgentMessage/listAgentMessages). No queue.json is produced here;
+  // the read above is legacy-compat only.
 }

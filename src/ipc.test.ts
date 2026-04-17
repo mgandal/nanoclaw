@@ -463,7 +463,10 @@ describe('publish_to_bus', () => {
 
     expect(writeAgentMessageSpy).toHaveBeenCalledWith(
       'telegram_other--einstein',
-      expect.objectContaining({ to_group: 'telegram_other', topic: 'broadcast' }),
+      expect.objectContaining({
+        to_group: 'telegram_other',
+        topic: 'broadcast',
+      }),
     );
   });
 });

@@ -29,7 +29,9 @@ import {
   getTasksForGroup,
   getTaskSuccessRate,
   logTaskRun,
+  markTaskRunning,
   migrateGroupJid,
+  recoverRunningTasks,
   setLastGroupSync,
   setRegisteredGroup,
   setRouterState,
@@ -1325,6 +1327,88 @@ describe('task lifecycle (due tasks, run updates)', () => {
     const task = getTaskById('recurring-task');
     expect(task!.status).toBe('active');
     expect(task!.next_run).toBe(futureTime);
+  });
+
+  it('markTaskRunning + getDueTasks: running task is not redispatched', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'long-task',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'overruns poll interval',
+      schedule_type: 'interval',
+      schedule_value: '1800000',
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      agent_name: null,
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    // First poll picks it up
+    expect(getDueTasks().find((t) => t.id === 'long-task')).toBeDefined();
+
+    // Scheduler flips to running before enqueue
+    markTaskRunning('long-task');
+
+    // Subsequent polls (while still running) must not re-return it
+    expect(getDueTasks().find((t) => t.id === 'long-task')).toBeUndefined();
+
+    // After the run completes, status returns to 'active'
+    const nextRun = new Date(Date.now() + 1800000).toISOString();
+    updateTaskAfterRun('long-task', nextRun, 'done');
+    const task = getTaskById('long-task');
+    expect(task!.status).toBe('active');
+  });
+
+  it('updateTaskAfterRun preserves paused status set during a running task', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'paused-mid-run',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'user pauses while running',
+      schedule_type: 'interval',
+      schedule_value: '1800000',
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      agent_name: null,
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+
+    markTaskRunning('paused-mid-run');
+    // User pauses mid-run
+    updateTask('paused-mid-run', { status: 'paused' });
+
+    // Run completes — status must stay 'paused', not be clobbered back to 'active'
+    const nextRun = new Date(Date.now() + 1800000).toISOString();
+    updateTaskAfterRun('paused-mid-run', nextRun, 'done');
+    const task = getTaskById('paused-mid-run');
+    expect(task!.status).toBe('paused');
+  });
+
+  it('recoverRunningTasks flips orphaned running tasks back to active', () => {
+    const pastTime = new Date(Date.now() - 60000).toISOString();
+    createTask({
+      id: 'orphan',
+      group_folder: 'main',
+      chat_jid: 'group@g.us',
+      prompt: 'crashed mid-run',
+      schedule_type: 'interval',
+      schedule_value: '1800000',
+      context_mode: 'isolated',
+      next_run: pastTime,
+      status: 'active',
+      agent_name: null,
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+    markTaskRunning('orphan');
+    expect(getTaskById('orphan')!.status).toBe('running');
+
+    const count = recoverRunningTasks();
+    expect(count).toBe(1);
+    expect(getTaskById('orphan')!.status).toBe('active');
   });
 });
 

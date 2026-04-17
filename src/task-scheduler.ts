@@ -21,6 +21,8 @@ import {
   getLastSuccessTime,
   getTaskById,
   logTaskRun,
+  markTaskRunning,
+  recoverRunningTasks,
   setSession,
   touchSession,
   updateTask,
@@ -390,6 +392,14 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
     return;
   }
   schedulerRunning = true;
+
+  // Recover any task left in 'running' after a previous crash/restart —
+  // nothing can actually be running in a freshly-booted process.
+  const recovered = recoverRunningTasks();
+  if (recovered > 0) {
+    logger.info({ recovered }, 'Recovered orphaned running tasks to active');
+  }
+
   logger.info('Scheduler loop started');
 
   const loop = async () => {
@@ -405,6 +415,11 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }
+
+        // Flip to 'running' before enqueue so long-running tasks cannot
+        // reappear in getDueTasks on the next poll (H4). updateTaskAfterRun
+        // flips 'running' back to 'active' (or 'completed' for once-tasks).
+        markTaskRunning(currentTask.id);
 
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),

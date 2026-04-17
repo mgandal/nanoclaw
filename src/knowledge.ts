@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import YAML from 'yaml';
 
 export interface KnowledgeEntry {
   topic: string;
@@ -32,22 +33,17 @@ export function publishKnowledge(
   const fileName = `${date}-${slug}-${id}.md`;
   const filePath = path.join(knowledgeDir, fileName);
 
-  const tagsYaml =
-    entry.tags.length > 0
-      ? `tags:\n${entry.tags.map((t) => `  - ${t}`).join('\n')}`
-      : 'tags: []';
+  // Serialize frontmatter via the YAML library so topic/tag values containing
+  // newlines, `---`, colons, or other YAML metacharacters can't break out of
+  // the frontmatter block.
+  const frontmatter = YAML.stringify({
+    agent: sourceGroup,
+    topic: entry.topic,
+    date,
+    tags: entry.tags,
+  }).trimEnd();
 
-  const content = `---
-agent: ${sourceGroup}
-topic: ${entry.topic}
-date: ${date}
-${tagsYaml}
----
-
-${entry.finding}
-
-**Evidence:** ${entry.evidence}
-`;
+  const content = `---\n${frontmatter}\n---\n\n${entry.finding}\n\n**Evidence:** ${entry.evidence}\n`;
 
   fs.writeFileSync(filePath, content, 'utf-8');
   return filePath;

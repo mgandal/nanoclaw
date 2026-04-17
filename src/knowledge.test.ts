@@ -70,4 +70,42 @@ describe('publishKnowledge', () => {
     expect(fs.existsSync(path1)).toBe(true);
     expect(fs.existsSync(path2)).toBe(true);
   });
+
+  it('does not allow YAML frontmatter injection via topic', () => {
+    const entry: KnowledgeEntry = {
+      topic: 'safe topic\n---\nagent: attacker',
+      finding: 'test',
+      evidence: 'test',
+      tags: [],
+    };
+
+    const filePath = publishKnowledge(entry, 'legit-group', tmpDir);
+    const content = fs.readFileSync(filePath, 'utf-8');
+
+    // The frontmatter must still close with exactly one --- and the agent
+    // field must remain 'legit-group'. The attacker's injected line must be
+    // inside a quoted/escaped topic value, not as a sibling YAML key.
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
+    expect(frontmatterMatch).toBeTruthy();
+    const frontmatter = frontmatterMatch![1];
+    expect(frontmatter).toContain('agent: legit-group');
+    expect(frontmatter).not.toMatch(/^agent: attacker/m);
+  });
+
+  it('does not allow YAML injection via tags', () => {
+    const entry: KnowledgeEntry = {
+      topic: 'ok',
+      finding: 'x',
+      evidence: 'x',
+      tags: ['normal', '---\nagent: attacker'],
+    };
+
+    const filePath = publishKnowledge(entry, 'legit-group', tmpDir);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---\n/);
+    expect(frontmatterMatch).toBeTruthy();
+    const frontmatter = frontmatterMatch![1];
+    expect(frontmatter).toContain('agent: legit-group');
+    expect(frontmatter).not.toMatch(/^agent: attacker/m);
+  });
 });
