@@ -222,3 +222,52 @@ class GmailAdapter:
 
         log.info("Fetched %d Gmail emails since epoch %d", len(emails), epoch)
         return emails
+
+    def fetch_thread_messages(
+        self, thread_id: str, since_epoch: int
+    ) -> list[NormalizedEmail]:
+        """Fetch messages in a Gmail thread with internalDate > since_epoch (ms-resolution).
+        Read-only. Returns [] on any failure."""
+        if not self._service:
+            return []
+        try:
+            resp = (
+                self._service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="full")
+                .execute()
+            )
+        except Exception as e:
+            log.warning("Gmail thread fetch failed for %s: %s", thread_id, e)
+            return []
+
+        since_ms = since_epoch * 1000
+        out: list[NormalizedEmail] = []
+        for raw in resp.get("messages", []):
+            try:
+                internal = int(raw.get("internalDate", "0"))
+            except (TypeError, ValueError):
+                internal = 0
+            if internal <= since_ms:
+                continue
+            try:
+                out.append(normalize_gmail_message(raw))
+            except Exception as e:
+                log.warning("Gmail thread normalize failed: %s", e)
+        return out
+
+    def fetch_message(self, msg_id: str) -> NormalizedEmail | None:
+        """Fetch a single message by id. Returns None on failure."""
+        if not self._service:
+            return None
+        try:
+            raw = (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=msg_id, format="full")
+                .execute()
+            )
+            return normalize_gmail_message(raw)
+        except Exception as e:
+            log.warning("Gmail message fetch failed for %s: %s", msg_id, e)
+            return None

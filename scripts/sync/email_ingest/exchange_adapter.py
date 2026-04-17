@@ -139,3 +139,17 @@ class ExchangeAdapter:
 
         log.info("Fetched %d Exchange emails (batch limit: %d)", len(emails), self.batch_limit)
         return emails
+
+    def fetch_thread_messages(
+        self, conversation_id: str, since_epoch: int
+    ) -> list[NormalizedEmail]:
+        """Fetch Exchange messages in a conversation after since_epoch.
+        v1: exchange-mail.sh does not expose a conversation endpoint, so this
+        always returns []. Closure is Gmail-only until the bridge adds it.
+        Returns [] if the adapter is not available."""
+        if not self.is_available():
+            return []
+        log.debug(
+            "Exchange conversation fetch not yet implemented in bridge; returning []"
+        )
+        return []
