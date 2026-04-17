@@ -250,7 +250,7 @@ def _retain_decision(email, r):
         f"Excerpt: {email.body[:500]}"
     )
     try:
-        requests.post(
+        resp = requests.post(
             f"{hindsight_url}/retain",
             json={
                 "bank": "hermes",
@@ -264,6 +264,7 @@ def _retain_decision(email, r):
             },
             timeout=10,
         )
+        resp.raise_for_status()
         return 1
     except Exception as e:
         log.debug("Decision retain failed (non-blocking): %s", e)

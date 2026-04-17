@@ -232,3 +232,84 @@ def test_dedupe_skips_second_write_same_thread(mock_extract, mock_parse, mock_wr
     written = write_args[1]
     assert len(written) == 1
     assert written[0].source_msg == "gmail:msg0"  # unchanged
+
+
+@patch.dict(os.environ, {"EMAIL_FOLLOWUPS_ENABLED": "1"})
+@patch("email_ingest.followups.write_file")
+@patch("email_ingest.followups.parse_file")
+@patch("email_ingest.extractor.extract")
+def test_hindsight_http_error_counted_as_zero(mock_extract, mock_parse, mock_write):
+    """HTTP 500 from Hindsight should not inflate decisions_retained."""
+    import email_ingest_module_under_test as m
+    from email_ingest.types import NormalizedEmail
+    from email_ingest.extractor import ExtractionResult
+    import requests as _requests
+
+    mock_parse.return_value = []
+    mock_extract.return_value = ExtractionResult(
+        kind="none", who="PO", what="", due="none",
+        significant=True, decision_summary="Decision",
+    )
+    sent = NormalizedEmail(
+        id="msg1", source="gmail", from_addr="mgandal@gmail.com",
+        to=["po@nih.gov"], cc=[], subject="re",
+        date="2026-04-17T10:00:00Z", body="msg",
+        labels=["SENT"], metadata={"threadId": "tid"},
+    )
+
+    fake_resp = MagicMock()
+    fake_resp.raise_for_status.side_effect = _requests.HTTPError("500")
+    with patch("email_ingest_module_under_test.requests.post", return_value=fake_resp):
+        result = m.run_followups_passes(
+            gmail_adapter=MagicMock(),
+            exchange_adapter=MagicMock(),
+            new_emails=[(sent, 0.5)],
+            now=datetime(2026, 4, 17, tzinfo=timezone.utc),
+        )
+    assert result["decisions_retained"] == 0
+
+
+@patch.dict(os.environ, {"EMAIL_FOLLOWUPS_ENABLED": "1"})
+def test_run_ingest_calls_followups_pipeline_with_classified_emails():
+    """run_ingest must accumulate (email, relevance) tuples and hand them to run_followups_passes."""
+    import email_ingest_module_under_test as m
+    from email_ingest.types import NormalizedEmail, ClassificationResult, IngestState
+
+    # Fake Gmail that returns one email; Exchange disabled.
+    fake_gmail = MagicMock()
+    fake_gmail.connect.return_value = True
+    fake_email = NormalizedEmail(
+        id="g1", source="gmail", from_addr="mgandal@gmail.com",
+        to=["x@y.com"], cc=[], subject="re",
+        date="2026-04-17T10:00:00Z", body="body",
+        labels=["SENT"], metadata={"threadId": "t"},
+    )
+    fake_gmail.fetch_since.return_value = [fake_email]
+
+    fake_exchange = MagicMock()
+    fake_exchange.is_available.return_value = False
+
+    cls = ClassificationResult(
+        relevance=0.5, topic="research", summary="", entities=[], action_items=[],
+    )
+
+    state = IngestState()
+
+    with patch.object(m, "GmailAdapter", return_value=fake_gmail), \
+         patch.object(m, "ExchangeAdapter", return_value=fake_exchange), \
+         patch.object(m, "classify_email", return_value=cls), \
+         patch.object(m, "should_fast_skip", return_value=None), \
+         patch.object(m, "export_email"), \
+         patch.object(m, "run_followups_passes") as mock_run_fu:
+        mock_run_fu.return_value = {
+            "followups_closed": 0, "followups_aged": 0,
+            "commitments_added": 0, "asks_added": 0, "decisions_retained": 0,
+        }
+        m.run_ingest(state, backfill_days=None, exchange_batch=100)
+
+        mock_run_fu.assert_called_once()
+        kwargs = mock_run_fu.call_args.kwargs
+        new_emails = kwargs.get("new_emails", [])
+        assert len(new_emails) == 1
+        assert new_emails[0][0].id == "g1"
+        assert new_emails[0][1] == 0.5
