@@ -209,8 +209,7 @@ export async function assembleContextPacket(
       const fmMatch = identity.match(/^---\n([\s\S]*?)\n---/);
       const isLead =
         fmMatch?.[1] &&
-        (fmMatch[1].includes('lead: true') ||
-          fmMatch[1].includes('lead:true'));
+        (fmMatch[1].includes('lead: true') || fmMatch[1].includes('lead:true'));
       if (isLead) {
         const hotPath = path.join(AGENTS_DIR, agentName, 'hot.md');
         if (fs.existsSync(hotPath)) {

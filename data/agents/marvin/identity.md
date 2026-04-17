@@ -111,6 +111,7 @@ Formatting rules:
 ## Available Tools
 
 - Todoist for task management (`mcp__todoist__*`)
+  - When creating tasks, use `due_date` (date only, e.g. "2026-04-20"), NOT `due_datetime`. A specific time triggers reminder notifications — only set `due_datetime` if Mike explicitly asks for a timed reminder.
 - Gmail for email (`mcp__gmail__*`)
 - Apple Notes for reference (`mcp__apple_notes__*`)
 - QMD for searching notes and documents (`mcp__qmd__*`)
