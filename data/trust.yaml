@@ -1,0 +1,56 @@
+# Event-router trust matrix — decides how classified events are routed.
+#
+# Evaluated in order — first matching rule wins. If no rule matches, falls
+# back to default_routing. See src/event-router.ts applyTrustRules.
+#
+# Routing outcomes:
+#   autonomous — classified + published to bus, no escalation (silent)
+#   notify     — classified + published; surface in next context packet
+#   escalate   — invoke the onEscalate handler → route to target agent
+#                via bus for an immediate action response
+#
+# Matching conditions:
+#   event_type       — 'email' or 'calendar'
+#   importance_lt    — classification.importance < value
+#   importance_gte   — classification.importance >= value
+#   change_type      — payload.changeType (calendar only)
+#   sender_domain    — payload.fromDomain ∈ list (email only)
+
+default_routing: notify
+
+rules:
+  # Very high importance emails → always escalate
+  - event_type: email
+    conditions:
+      importance_gte: 0.85
+    routing: escalate
+
+  # Medium-high importance emails from key senders → escalate
+  - event_type: email
+    conditions:
+      importance_gte: 0.65
+      sender_domain:
+        - nih.gov
+        - nimh.nih.gov
+        - nsf.gov
+        - sfari.org
+        - chop.edu
+        - pennmedicine.upenn.edu
+        - upenn.edu
+    routing: escalate
+
+  # Low-importance email → autonomous (filed, not surfaced)
+  - event_type: email
+    conditions:
+      importance_lt: 0.3
+    routing: autonomous
+
+  # Calendar new/deleted events at high importance → escalate
+  - event_type: calendar
+    conditions:
+      importance_gte: 0.75
+    routing: escalate
+
+  # All other calendar noise → autonomous
+  - event_type: calendar
+    routing: autonomous

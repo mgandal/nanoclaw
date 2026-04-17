@@ -121,7 +121,12 @@ import {
   type AgentIdentity,
   type AgentRegistryRow,
 } from './agent-registry.js';
-import { compoundKey, parseCompoundKey } from './compound-key.js';
+import {
+  compoundKey,
+  compoundKeyToFsPath,
+  parseCompoundKey,
+} from './compound-key.js';
+import { routeClassifiedEvent } from './event-routing.js';
 import { BusWatcher } from './bus-watcher.js';
 
 let lastSeq = 0;
@@ -1271,7 +1276,20 @@ async function main(): Promise<void> {
         if (!group) return;
 
         const busPrompt = messages
-          .map((m: any) => `[Bus from ${m.from}] ${m.summary || m.topic}`)
+          .map((m: any) => {
+            const header = `[Bus from ${m.from}${m.priority ? ` • ${m.priority}` : ''}] ${m.summary || m.topic}`;
+            // If the sender attached a structured payload (e.g. from the
+            // event-router's escalate path), render it as a second block so
+            // the agent has enough context to act without another round-trip.
+            if (m.payload && typeof m.payload === 'object') {
+              const payloadStr = JSON.stringify(m.payload, null, 2).slice(
+                0,
+                4000,
+              );
+              return `${header}\n<bus-payload topic="${m.topic}">\n${payloadStr}\n</bus-payload>`;
+            }
+            return header;
+          })
           .join('\n');
 
         // Awaited so BusWatcher sees the throw and restores the .processing
@@ -1310,7 +1328,72 @@ async function main(): Promise<void> {
       messageBus,
       healthMonitor,
       onEscalate: async (event) => {
-        void sendSystemAlert('Event Escalation', event.classification.summary);
+        // Route the classified event to the best-matching agent via the bus.
+        // The bus-watcher will spawn that agent with the event's full payload
+        // attached (see the <bus-payload> enrichment above). If routing can't
+        // find a target, fall back to a main-group system alert so the event
+        // isn't dropped silently.
+        const target = routeClassifiedEvent(
+          event,
+          loadedAgents,
+          registeredGroups,
+        );
+
+        if (!target) {
+          logger.warn(
+            { eventId: event.event.id, topic: event.classification.topic },
+            'Event escalated but no agent target resolved; falling back to alert',
+          );
+          void sendSystemAlert(
+            'Event Escalation',
+            event.classification.summary,
+          );
+          return;
+        }
+
+        logger.info(
+          {
+            eventId: event.event.id,
+            targetAgent: target.agentName,
+            targetGroup: target.groupFolder,
+            score: target.score,
+            reason: target.reason,
+          },
+          'Event escalated → dispatching to agent via bus',
+        );
+
+        try {
+          const targetFsKey = compoundKeyToFsPath(
+            compoundKey(target.groupFolder, target.agentName),
+          );
+          messageBus.writeAgentMessage(targetFsKey, {
+            id: `evt-${event.event.id}-${Date.now()}`,
+            from: 'event-router',
+            topic: `escalate:${event.classification.topic || 'general'}`,
+            priority: 'high',
+            summary:
+              event.classification.summary ||
+              `${event.event.type} event requires attention`,
+            payload: {
+              eventType: event.event.type,
+              eventId: event.event.id,
+              eventTimestamp: event.event.timestamp,
+              eventPayload: event.event.payload,
+              classification: event.classification,
+              routing: event.routing,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (err) {
+          logger.error(
+            { err, eventId: event.event.id, target },
+            'Bus dispatch failed for escalated event; falling back to alert',
+          );
+          void sendSystemAlert(
+            'Event Escalation',
+            event.classification.summary,
+          );
+        }
       },
     });
 
