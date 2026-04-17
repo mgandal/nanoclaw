@@ -1247,7 +1247,12 @@ async function main(): Promise<void> {
           .map((m: any) => `[Bus from ${m.from}] ${m.summary || m.topic}`)
           .join('\n');
 
-        void runAgent(group, busPrompt, chatJid, undefined, agent);
+        // Awaited so BusWatcher sees the throw and restores the .processing
+        // file back to .json on container/runAgent failure. If we fire-and-forget
+        // (the previous behavior), the watcher moves messages to done/
+        // regardless of downstream success — silently losing bus deliveries
+        // whenever the target container fails to spawn or crashes on startup.
+        await runAgent(group, busPrompt, chatJid, undefined, agent);
       },
     );
     busWatcher.start();

@@ -1794,6 +1794,45 @@ describe('write_agent_memory section upsert', () => {
     expect(content).toBe('# Completely new file\n');
     expect(content).not.toContain('Old content');
   });
+
+  it('C4: blocks non-main non-compound group from writing via payload agent_name', async () => {
+    // A plain (non-compound) non-main group must not be able to target a
+    // named agent via payload agent_name — the only legitimate authorization
+    // comes from the compound-key directory identity.
+    fs.writeFileSync(path.join(agentDir, 'memory.md'), '# original\n');
+
+    await processTaskIpc(
+      {
+        type: 'write_agent_memory',
+        content: '# PWNED by non-compound sender\n',
+        agent_name: TEST_AGENT,
+      } as any,
+      'telegram_other', // plain non-main group, no compound key
+      false,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toBe('# original\n'); // unchanged
+  });
+
+  it('C4: allows main group to target a named agent via payload agent_name', async () => {
+    // Main retains the ability to write to any agent by specifying
+    // agent_name in the payload — admin escape hatch, explicitly gated.
+    await processTaskIpc(
+      {
+        type: 'write_agent_memory',
+        content: '# admin update\n',
+        agent_name: TEST_AGENT,
+      } as any,
+      'telegram_main', // plain main group, not compound
+      true, // isMain
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toBe('# admin update\n');
+  });
 });
 
 // --- Trust enforcement on send_message ---

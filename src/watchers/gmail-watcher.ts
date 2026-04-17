@@ -201,6 +201,7 @@ export class GmailWatcher {
       const historyItems = historyRes.data.history ?? [];
       const processedSet = new Set(this.state.processedIds);
       let newCount = 0;
+      let failedCount = 0;
 
       for (const record of historyItems) {
         const added = record.messagesAdded ?? [];
@@ -230,6 +231,7 @@ export class GmailWatcher {
             this.messagesProcessed++;
             newCount++;
           } catch (err) {
+            failedCount++;
             logger.warn(
               { err, messageId: msgId, account: this.config.account },
               'GmailWatcher.fetchNewMessagesByHistory failed to fetch/route message — skipping',
@@ -238,10 +240,20 @@ export class GmailWatcher {
         }
       }
 
-      // Update watermark from the response's historyId
-      if (historyRes.data.historyId) {
+      // Update watermark from the response's historyId, but only if every
+      // message in this window was processed successfully. If we advance
+      // past a failed message, it is permanently lost (the push-mode ack
+      // pattern means no redelivery for per-message failures). A repeated
+      // poll at the same watermark will re-try; processedSet dedupes so
+      // we don't double-route successful siblings (C6 secondary).
+      if (historyRes.data.historyId && failedCount === 0) {
         this.historyWatermark = historyRes.data.historyId;
         this.state.lastHistoryId = historyRes.data.historyId;
+      } else if (failedCount > 0) {
+        logger.warn(
+          { failedCount, account: this.config.account },
+          'GmailWatcher.fetchNewMessagesByHistory: not advancing watermark due to per-message failures',
+        );
       }
 
       // Persist processed IDs (bounded to last 2000)
@@ -341,24 +353,38 @@ export class GmailWatcher {
 
       subscription.on(
         'message',
-        (message: { data: Buffer; ack: () => void }) => {
+        async (message: { data: Buffer; ack: () => void }) => {
+          // Ack only after fetch completes. If the Gmail fetch fails
+          // (transient 5xx, network, expired OAuth), leaving the message
+          // unacked causes Pub/Sub to redeliver — otherwise the historyId
+          // gap from this delivery is permanently skipped (C6).
+          let historyId: string | undefined;
           try {
             const data = JSON.parse(message.data.toString());
-            const historyId = data.historyId as string | undefined;
-            message.ack();
-            if (historyId) {
-              void this.fetchNewMessagesByHistory(historyId).catch((err) => {
-                logger.warn(
-                  { err, account: this.config.account },
-                  'GmailWatcher push handler failed',
-                );
-              });
-            }
+            historyId = data.historyId as string | undefined;
           } catch (err) {
+            // Unparseable Pub/Sub payload is not retryable — ack to drop it.
             message.ack();
             logger.warn(
               { err },
               'GmailWatcher failed to parse Pub/Sub message',
+            );
+            return;
+          }
+
+          if (!historyId) {
+            message.ack();
+            return;
+          }
+
+          try {
+            await this.fetchNewMessagesByHistory(historyId);
+            message.ack();
+          } catch (err) {
+            // Don't ack — Pub/Sub will redeliver this message.
+            logger.error(
+              { err, account: this.config.account, historyId },
+              'GmailWatcher push fetch failed — leaving unacked for redelivery',
             );
           }
         },

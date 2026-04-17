@@ -907,15 +907,21 @@ export async function processTaskIpc(
       const content = d.content as string;
       if (!content) break;
 
-      // Resolve agent name: compound key first, then payload agent_name
+      // Authorization: agent name must come from the authenticated compound
+      // directory (telegram_foo--einstein → einstein). Main group may
+      // additionally target a named agent via payload agent_name; non-main
+      // non-compound groups must not — otherwise any group could overwrite
+      // any agent's memory with arbitrary content (a prompt-injection primitive
+      // since memory.md is read back into future context packets).
       const { agent: compoundAgent } = parseCompoundKey(
         fsPathToCompoundKey(sourceGroup),
       );
-      const agentName = compoundAgent || (d.agent_name as string | undefined);
+      const payloadAgent = d.agent_name as string | undefined;
+      const agentName = compoundAgent || (isMain ? payloadAgent : undefined);
       if (!agentName) {
         logger.warn(
-          { sourceGroup },
-          'write_agent_memory: cannot determine agent name',
+          { sourceGroup, payloadAgentProvided: Boolean(payloadAgent) },
+          'write_agent_memory: cannot determine agent name (must be sent from a compound-key directory, or from main with agent_name)',
         );
         break;
       }
@@ -978,6 +984,27 @@ export async function processTaskIpc(
         logger.warn(
           { sourceGroup },
           'write_agent_state from non-compound group',
+        );
+        break;
+      }
+
+      // Mirror the guard already present in write_agent_memory. The agent
+      // name should already be traversal-clean (it comes from a directory
+      // that was created by the host), but this is the defense-in-depth
+      // version of the check — cheap.
+      if (agent.includes('..') || agent.includes('/')) {
+        logger.warn(
+          { agent, sourceGroup },
+          'write_agent_state: invalid agent name',
+        );
+        break;
+      }
+
+      const agentDir = path.join(AGENTS_DIR, agent);
+      if (!fs.existsSync(agentDir)) {
+        logger.warn(
+          { agent, sourceGroup },
+          'write_agent_state: agent directory does not exist',
         );
         break;
       }

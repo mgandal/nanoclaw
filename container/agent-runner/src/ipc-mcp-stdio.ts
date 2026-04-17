@@ -399,11 +399,13 @@ server.tool(
   'Pause a scheduled task. It will not run until resumed.',
   { task_id: z.string().describe('The task ID to pause') },
   async (args) => {
+    // Authority (isMain) is determined host-side from the IPC directory,
+    // NOT from the payload. Do not include isMain here — a future handler
+    // that accidentally reads it would create a confused-deputy bypass.
     const data = {
       type: 'pause_task',
       taskId: args.task_id,
       groupFolder,
-      isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -429,7 +431,6 @@ server.tool(
       type: 'resume_task',
       taskId: args.task_id,
       groupFolder,
-      isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -455,7 +456,6 @@ server.tool(
       type: 'cancel_task',
       taskId: args.task_id,
       groupFolder,
-      isMain,
       timestamp: new Date().toISOString(),
     };
 
@@ -541,7 +541,6 @@ server.tool(
       type: 'update_task',
       taskId: args.task_id,
       groupFolder,
-      isMain: String(isMain),
       timestamp: new Date().toISOString(),
     };
     if (args.prompt !== undefined) data.prompt = args.prompt;
