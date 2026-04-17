@@ -514,6 +514,87 @@ describe('Session Continuity injection', () => {
   });
 });
 
+describe('Hot cache injection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('injects hot.md when agent is lead', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      return (
+        s.endsWith('agents/claire/identity.md') ||
+        s.endsWith('agents/claire/hot.md')
+      );
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith('agents/claire/identity.md')) {
+        return '---\nname: Claire\nlead: true\n---\nClaire identity body';
+      }
+      if (s.endsWith('agents/claire/hot.md')) {
+        return '# Hot Cache\n\n## Key Recent Facts\n- User approved hot-cache pattern\n';
+      }
+      return '';
+    });
+
+    const packet = await assembleContextPacket(
+      'telegram_claire',
+      true,
+      'claire',
+    );
+    expect(packet).toContain('Hot Cache (recent context from prior session)');
+    expect(packet).toContain('User approved hot-cache pattern');
+  });
+
+  it('does not inject hot.md when agent is not lead', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      return (
+        s.endsWith('agents/simon/identity.md') ||
+        s.endsWith('agents/simon/hot.md')
+      );
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith('agents/simon/identity.md')) {
+        return '---\nname: Simon\nrole: Data scientist\n---\nSimon body';
+      }
+      if (s.endsWith('agents/simon/hot.md')) {
+        return 'should not appear';
+      }
+      return '';
+    });
+
+    const packet = await assembleContextPacket(
+      'telegram_lab-claw',
+      false,
+      'simon',
+    );
+    expect(packet).not.toContain('Hot Cache');
+    expect(packet).not.toContain('should not appear');
+  });
+
+  it('skips hot.md silently when file does not exist', async () => {
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      return s.endsWith('agents/claire/identity.md');
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith('agents/claire/identity.md')) {
+        return '---\nname: Claire\nlead: true\n---\n';
+      }
+      return '';
+    });
+
+    const packet = await assembleContextPacket(
+      'telegram_claire',
+      true,
+      'claire',
+    );
+    expect(packet).not.toContain('Hot Cache');
+  });
+});
+
 describe('writeContextPacket', () => {
   beforeEach(() => vi.clearAllMocks());
 

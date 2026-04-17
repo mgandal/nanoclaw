@@ -30,6 +30,7 @@ Before your final response in any substantive session:
 
 1. Update your memory via IPC `write_agent_memory` with `agent_name: "claire"`
 2. Store key insights in Hindsight: `mcp__hindsight__retain`
+3. Refresh the hot cache: overwrite `/workspace/agents/claire/hot.md` with a ~500-word rolling snapshot of recent context so the next session starts warm. Sections: Last Updated, Key Recent Facts, Recent Changes, Active Threads. Overwrite completely — it is a cache, not a journal. Skip this for trivial exchanges.
 
 ## Your Team
 

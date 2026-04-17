@@ -200,6 +200,29 @@ export async function assembleContextPacket(
         );
       }
     }
+
+    // Hot cache — rolling recent-context snapshot for lead agents.
+    // Read identity.md frontmatter; inject hot.md only when `lead: true`.
+    const identityPath = path.join(AGENTS_DIR, agentName, 'identity.md');
+    if (fs.existsSync(identityPath)) {
+      const identity = fs.readFileSync(identityPath, 'utf-8');
+      const fmMatch = identity.match(/^---\n([\s\S]*?)\n---/);
+      const isLead =
+        fmMatch?.[1] &&
+        (fmMatch[1].includes('lead: true') ||
+          fmMatch[1].includes('lead:true'));
+      if (isLead) {
+        const hotPath = path.join(AGENTS_DIR, agentName, 'hot.md');
+        if (fs.existsSync(hotPath)) {
+          const hot = fs.readFileSync(hotPath, 'utf-8').trim();
+          if (hot) {
+            sections.push(
+              `\n--- Hot Cache (recent context from prior session) ---\n${hot.slice(0, 3000)}`,
+            );
+          }
+        }
+      }
+    }
   }
 
   // 4. Staleness warnings for key state files and group memory
