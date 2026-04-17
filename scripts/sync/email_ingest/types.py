@@ -72,3 +72,31 @@ class IngestState:
     def default_epoch(self, days_back: int = 14) -> int:
         """Return epoch for N days ago, used for first run."""
         return int(time.time()) - (days_back * 86400)
+
+
+# --- Follow-ups ---
+
+FOLLOWUPS_FILE = (
+    Path(__file__).resolve().parents[3]
+    / "groups"
+    / "global"
+    / "state"
+    / "followups.md"
+)
+AGE_THRESHOLD_DAYS = 14
+JACCARD_THRESHOLD = 0.6
+
+
+@dataclass
+class FollowUp:
+    kind: str  # "i-owe" | "they-owe-me"
+    who: str
+    what: str
+    due: str  # ISO date or "none"
+    thread: str  # "gmail:<id>" | "exchange:<id>"
+    source_msg: str  # "gmail:<id>" | "exchange:<id>"
+    created: str  # ISO timestamp
+    status: str = "open"  # "open" | "stale" | "closed" | "snoozed"
+    closed_reason: Optional[str] = None
+    closed_at: Optional[str] = None
+    extra: dict = field(default_factory=dict)
