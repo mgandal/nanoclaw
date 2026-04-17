@@ -35,7 +35,7 @@ import {
 import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { AllowedSecret, RegisteredGroup } from './types.js';
 import { OneCLI } from '@onecli-sh/sdk';
 
 const onecli = new OneCLI({ url: ONECLI_URL, apiKey: ONECLI_API_KEY });
@@ -363,6 +363,7 @@ function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   isMain: boolean,
+  group: RegisteredGroup,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -544,31 +545,46 @@ function buildContainerArgs(
     }
   }
 
+  // H1: Secondary tokens bypass the credential proxy — they land directly
+  // in container env, visible to any tool the agent runs. Main group gets
+  // everything (it's the admin group). Non-main groups must opt in explicitly
+  // via containerConfig.allowedSecrets.
+  const allowed = new Set(group.containerConfig?.allowedSecrets ?? []);
+  const isSecretAllowed = (name: AllowedSecret): boolean =>
+    isMain || allowed.has(name);
+
   // Pass Readwise access token (for readwise CLI in container)
-  const readwiseEnv = readEnvFile(['READWISE_ACCESS_TOKEN']);
-  const readwiseToken =
-    process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
-  if (readwiseToken) {
-    args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
+  if (isSecretAllowed('READWISE_ACCESS_TOKEN')) {
+    const readwiseEnv = readEnvFile(['READWISE_ACCESS_TOKEN']);
+    const readwiseToken =
+      process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
+    if (readwiseToken) {
+      args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
+    }
   }
 
   // Pass GitHub credentials (for gh CLI in container)
-  const githubEnv = readEnvFile(['GITHUB_TOKEN', 'GH_REPO']);
-  const githubToken = process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
-  if (githubToken) {
-    args.push('-e', `GITHUB_TOKEN=${githubToken}`);
-  }
-  const ghRepo = process.env.GH_REPO || githubEnv.GH_REPO;
-  if (ghRepo) {
-    args.push('-e', `GH_REPO=${ghRepo}`);
+  if (isSecretAllowed('GITHUB_TOKEN')) {
+    const githubEnv = readEnvFile(['GITHUB_TOKEN', 'GH_REPO']);
+    const githubToken = process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
+    if (githubToken) {
+      args.push('-e', `GITHUB_TOKEN=${githubToken}`);
+    }
+    // GH_REPO is not a secret — a repo slug — so it rides alongside the token.
+    const ghRepo = process.env.GH_REPO || githubEnv.GH_REPO;
+    if (ghRepo) {
+      args.push('-e', `GH_REPO=${ghRepo}`);
+    }
   }
 
   // Pass Supadata API key (for follow-builders podcast transcripts)
-  const supadataEnv = readEnvFile(['SUPADATA_API_KEY']);
-  const supadataKey =
-    process.env.SUPADATA_API_KEY || supadataEnv.SUPADATA_API_KEY;
-  if (supadataKey) {
-    args.push('-e', `SUPADATA_API_KEY=${supadataKey}`);
+  if (isSecretAllowed('SUPADATA_API_KEY')) {
+    const supadataEnv = readEnvFile(['SUPADATA_API_KEY']);
+    const supadataKey =
+      process.env.SUPADATA_API_KEY || supadataEnv.SUPADATA_API_KEY;
+    if (supadataKey) {
+      args.push('-e', `SUPADATA_API_KEY=${supadataKey}`);
+    }
   }
 
   // Pass Ollama host URL for container access
@@ -621,7 +637,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain, input.agentName);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    input.isMain,
+    group,
+  );
 
   logger.debug(
     {

@@ -167,7 +167,9 @@ describe('assembleContextPacket', () => {
     // H5: packet is now truncated by dropping lower-priority sections whole
     // rather than slicing the string, so the marker explains which class
     // of content was dropped. Either marker is acceptable.
-    expect(packet).toMatch(/\[\.\.\.(truncated|lower-priority context dropped)/);
+    expect(packet).toMatch(
+      /\[\.\.\.(truncated|lower-priority context dropped)/,
+    );
   });
 
   it('survives DB error on getRecentMessages', async () => {

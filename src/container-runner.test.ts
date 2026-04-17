@@ -1140,24 +1140,93 @@ describe('container-runner MCP URL injection', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
-  it('passes READWISE_ACCESS_TOKEN when configured', async () => {
+  it('passes READWISE_ACCESS_TOKEN when group opts in via allowedSecrets', async () => {
+    const saved = process.env.READWISE_ACCESS_TOKEN;
+    delete process.env.READWISE_ACCESS_TOKEN;
     vi.mocked(readEnvFile).mockReturnValue({
       READWISE_ACCESS_TOKEN: 'rwt_test123',
     });
 
+    try {
+      const optedIn = {
+        ...testGroup,
+        containerConfig: {
+          allowedSecrets: ['READWISE_ACCESS_TOKEN' as const],
+        },
+      };
+      const resultPromise = runContainerAgent(optedIn, testInput, () => {});
+      await vi.advanceTimersByTimeAsync(10);
+
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+      const readwiseVar = envVars.find((a) =>
+        a.startsWith('READWISE_ACCESS_TOKEN='),
+      );
+      expect(readwiseVar).toBe('READWISE_ACCESS_TOKEN=rwt_test123');
+
+      fakeProc.emit('close', 0);
+      await vi.advanceTimersByTimeAsync(10);
+    } finally {
+      if (saved !== undefined) process.env.READWISE_ACCESS_TOKEN = saved;
+    }
+  });
+
+  it('omits READWISE_ACCESS_TOKEN for non-main groups without opt-in', async () => {
+    vi.mocked(readEnvFile).mockReturnValue({
+      READWISE_ACCESS_TOKEN: 'rwt_test123',
+    });
+
+    // testGroup is non-main, has no allowedSecrets — token should NOT leak
     const resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
     const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
 
-    const readwiseVar = envVars.find((a) =>
-      a.startsWith('READWISE_ACCESS_TOKEN='),
-    );
-    expect(readwiseVar).toBe('READWISE_ACCESS_TOKEN=rwt_test123');
+    expect(
+      envVars.find((a) => a.startsWith('READWISE_ACCESS_TOKEN=')),
+    ).toBeUndefined();
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
+  });
+
+  it('passes all secondary tokens to main group unconditionally', async () => {
+    // Prevent shell env from shadowing the mocked file values
+    const savedRw = process.env.READWISE_ACCESS_TOKEN;
+    const savedGh = process.env.GITHUB_TOKEN;
+    const savedSd = process.env.SUPADATA_API_KEY;
+    delete process.env.READWISE_ACCESS_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.SUPADATA_API_KEY;
+
+    vi.mocked(readEnvFile).mockReturnValue({
+      READWISE_ACCESS_TOKEN: 'rwt_main',
+      GITHUB_TOKEN: 'ghp_main',
+      SUPADATA_API_KEY: 'sd_main',
+    });
+
+    try {
+      const mainInput = { ...testInput, isMain: true };
+      const mainGroup = { ...testGroup, isMain: true };
+      const resultPromise = runContainerAgent(mainGroup, mainInput, () => {});
+      await vi.advanceTimersByTimeAsync(10);
+
+      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+
+      expect(envVars).toContain('READWISE_ACCESS_TOKEN=rwt_main');
+      expect(envVars).toContain('GITHUB_TOKEN=ghp_main');
+      expect(envVars).toContain('SUPADATA_API_KEY=sd_main');
+
+      fakeProc.emit('close', 0);
+      await vi.advanceTimersByTimeAsync(10);
+    } finally {
+      if (savedRw !== undefined) process.env.READWISE_ACCESS_TOKEN = savedRw;
+      if (savedGh !== undefined) process.env.GITHUB_TOKEN = savedGh;
+      if (savedSd !== undefined) process.env.SUPADATA_API_KEY = savedSd;
+    }
   });
 
   it('always passes OLLAMA_HOST with host gateway', async () => {
@@ -1568,7 +1637,12 @@ describe('container-runner process.env takes precedence over readEnvFile', () =>
     });
     process.env.READWISE_ACCESS_TOKEN = 'token-from-env';
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    // Group must opt in for a non-main group to receive the token (H1)
+    const optedIn = {
+      ...testGroup,
+      containerConfig: { allowedSecrets: ['READWISE_ACCESS_TOKEN' as const] },
+    };
+    const resultPromise = runContainerAgent(optedIn, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];

@@ -27,9 +27,26 @@ export interface AllowedRoot {
   description?: string;
 }
 
+/**
+ * Secrets a container may receive via environment variables. Only secrets
+ * listed here are injected for non-main groups. The main group always gets
+ * everything (it's the admin control group). Keep this list small — secrets
+ * here bypass the credential proxy and are visible to any tool the agent
+ * runs inside its container.
+ */
+export type AllowedSecret =
+  | 'GITHUB_TOKEN'
+  | 'READWISE_ACCESS_TOKEN'
+  | 'SUPADATA_API_KEY';
+
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  /**
+   * Per-group opt-in for secondary tokens. Ignored for main (main gets all).
+   * Omit or leave empty to pass no secondary tokens to this group.
+   */
+  allowedSecrets?: AllowedSecret[];
 }
 
 export interface RegisteredGroup {
