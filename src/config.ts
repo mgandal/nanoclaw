@@ -184,6 +184,22 @@ export const GMAIL_CREDENTIALS_PATH =
   path.join(HOME_DIR, '.gmail-mcp', 'credentials.json');
 export const GMAIL_ACCOUNT = process.env.GMAIL_ACCOUNT || 'mgandal@gmail.com';
 
+// Gmail plus-addressing routing: maps +tag to group folder
+// Format: "tag1:folder1,tag2:folder2" e.g. "hermes:telegram_claire,marvin:telegram_claire"
+// Emails to mgandal+hermes@gmail.com route to the group with folder "telegram_claire"
+// Unmatched plus-tags and plain emails fall through to isMain group
+export const GMAIL_PLUS_ROUTING: Record<string, string> = Object.fromEntries(
+  (process.env.GMAIL_PLUS_ROUTING || '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [tag, folder] = entry.split(':').map((s) => s.trim());
+      return [tag, folder] as const;
+    })
+    .filter(([tag, folder]) => tag && folder),
+);
+
 // Calendar watcher
 export const CALENDAR_WATCHER_ENABLED =
   (process.env.CALENDAR_WATCHER_ENABLED || 'false').toLowerCase() === 'true';

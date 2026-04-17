@@ -5,8 +5,7 @@ import path from 'path';
 import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
-// isMain flag is used instead of MAIN_GROUP_FOLDER constant
-import { DATA_DIR } from '../config.js';
+import { DATA_DIR, GMAIL_PLUS_ROUTING } from '../config.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -251,6 +250,7 @@ export class GmailChannel implements Channel {
         ?.value || '';
 
     const from = getHeader('From');
+    const to = getHeader('To');
     const subject = getHeader('Subject');
     const rfc2822MessageId = getHeader('Message-ID');
     const threadId = msg.data.threadId || messageId;
@@ -295,24 +295,23 @@ export class GmailChannel implements Channel {
     // Store chat metadata for group discovery
     this.opts.onChatMetadata(chatJid, timestamp, subject, 'gmail', false);
 
-    // Find the main group to deliver the email notification
+    // Resolve target group: check plus-addressing first, fall back to isMain
     const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+    const targetJid = this.resolveTargetGroup(to, groups);
 
-    if (!mainEntry) {
+    if (!targetJid) {
       logger.debug(
         { chatJid, subject },
-        'No main group registered, skipping email',
+        'No target group for email (no plus-route match and no main group)',
       );
       return;
     }
 
-    const mainJid = mainEntry[0];
     const content = `[Email from ${senderName} <${senderEmail}>]\nSubject: ${subject}\n\n${body}`;
 
-    this.opts.onMessage(mainJid, {
+    this.opts.onMessage(targetJid, {
       id: messageId,
-      chat_jid: mainJid,
+      chat_jid: targetJid,
       sender: senderEmail,
       sender_name: senderName,
       content,
@@ -332,9 +331,58 @@ export class GmailChannel implements Channel {
     }
 
     logger.info(
-      { mainJid, from: senderName, subject },
-      'Gmail email delivered to main group',
+      { targetJid, from: senderName, subject, to },
+      'Gmail email delivered',
     );
+  }
+
+  /**
+   * Resolve target group JID from the To header using plus-addressing.
+   * Parses addresses like "mgandal+hermes@gmail.com" to extract the "hermes" tag,
+   * looks it up in GMAIL_PLUS_ROUTING, and finds the matching registered group.
+   * Falls back to the isMain group if no plus-route matches.
+   */
+  private resolveTargetGroup(
+    toHeader: string,
+    groups: Record<string, RegisteredGroup>,
+  ): string | null {
+    // Check plus-addressing routing if any routes are configured
+    if (Object.keys(GMAIL_PLUS_ROUTING).length > 0 && toHeader) {
+      // Parse all addresses in the To header (may contain multiple)
+      const addresses = toHeader.split(',').map((a) => a.trim());
+      for (const addr of addresses) {
+        // Extract email from "Name <email>" or bare "email" format
+        const emailMatch = addr.match(/<(.+?)>/) || [null, addr];
+        const email = emailMatch[1]?.toLowerCase() || '';
+        // Match plus-tag: user+TAG@domain
+        const plusMatch = email.match(/^[^+]+\+([^@]+)@/);
+        if (plusMatch) {
+          const tag = plusMatch[1];
+          const targetFolder = GMAIL_PLUS_ROUTING[tag];
+          if (targetFolder) {
+            // Find the group JID that matches this folder
+            const groupEntry = Object.entries(groups).find(
+              ([, g]) => g.folder === targetFolder,
+            );
+            if (groupEntry) {
+              logger.info(
+                { tag, targetFolder, targetJid: groupEntry[0] },
+                'Gmail plus-route matched',
+              );
+              return groupEntry[0];
+            }
+            logger.warn(
+              { tag, targetFolder },
+              'Gmail plus-route folder not found in registered groups',
+            );
+          }
+        }
+      }
+    }
+
+    // Fall back to main group
+    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
+    return mainEntry ? mainEntry[0] : null;
   }
 
   private loadProcessedIds(): void {

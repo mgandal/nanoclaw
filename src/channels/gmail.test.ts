@@ -127,6 +127,100 @@ describe('GmailChannel', () => {
     });
   });
 
+  describe('plus-address routing', () => {
+    it('routes to mapped group when To header has plus-tag', async () => {
+      const onMessage = vi.fn();
+      const ch = new GmailChannel(
+        makeOpts({
+          onMessage,
+          registeredGroups: () => ({
+            'main-group@g.us': { isMain: true, folder: 'main' } as any,
+            'tg:-1001': { isMain: false, folder: 'telegram_claire' } as any,
+          }),
+        }),
+      );
+
+      const internal = ch as unknown as {
+        gmail: unknown;
+        userEmail: string;
+        processMessage: (id: string) => Promise<void>;
+        resolveTargetGroup: (
+          to: string,
+          groups: Record<string, any>,
+        ) => string | null;
+      };
+
+      // Test the resolveTargetGroup method directly
+      const { GMAIL_PLUS_ROUTING } = await import('../config.js');
+      // Inject test routing
+      GMAIL_PLUS_ROUTING['hermes'] = 'telegram_claire';
+
+      const groups = {
+        'main-group@g.us': { isMain: true, folder: 'main' },
+        'tg:-1001': { isMain: false, folder: 'telegram_claire' },
+      } as Record<string, any>;
+
+      const result = internal.resolveTargetGroup(
+        'Mike Gandal <mgandal+hermes@gmail.com>',
+        groups,
+      );
+      expect(result).toBe('tg:-1001');
+
+      // Clean up
+      delete GMAIL_PLUS_ROUTING['hermes'];
+    });
+
+    it('falls back to main group when plus-tag is not in routing', async () => {
+      const ch = new GmailChannel(makeOpts());
+      const internal = ch as unknown as {
+        resolveTargetGroup: (
+          to: string,
+          groups: Record<string, any>,
+        ) => string | null;
+      };
+
+      const groups = {
+        'main-group@g.us': { isMain: true, folder: 'main' },
+      } as Record<string, any>;
+
+      const result = internal.resolveTargetGroup(
+        'mgandal+unknown@gmail.com',
+        groups,
+      );
+      expect(result).toBe('main-group@g.us');
+    });
+
+    it('falls back to main group when no plus-tag in To header', async () => {
+      const ch = new GmailChannel(makeOpts());
+      const internal = ch as unknown as {
+        resolveTargetGroup: (
+          to: string,
+          groups: Record<string, any>,
+        ) => string | null;
+      };
+
+      const groups = {
+        'main-group@g.us': { isMain: true, folder: 'main' },
+      } as Record<string, any>;
+
+      const result = internal.resolveTargetGroup('mgandal@gmail.com', groups);
+      expect(result).toBe('main-group@g.us');
+    });
+
+    it('returns null when no main group and no plus-route match', () => {
+      const ch = new GmailChannel(makeOpts());
+      const internal = ch as unknown as {
+        resolveTargetGroup: (
+          to: string,
+          groups: Record<string, any>,
+        ) => string | null;
+      };
+
+      const result = internal.resolveTargetGroup('mgandal@gmail.com', {});
+      expect(result).toBeNull();
+    });
+  });
+
   describe('threadMeta cap', () => {
     it('caps threadMeta to prevent unbounded growth', () => {
       const ch = new GmailChannel(makeOpts());
