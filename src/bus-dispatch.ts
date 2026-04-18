@@ -49,7 +49,10 @@ export function buildBusPrompt(messages: BusMessage[]): string {
     const parts = [`<bus-message ${attrs}>`, summary];
 
     if (m.payload && typeof m.payload === 'object') {
-      const payloadStr = JSON.stringify(m.payload, null, 2).slice(0, PAYLOAD_MAX);
+      const payloadStr = JSON.stringify(m.payload, null, 2).slice(
+        0,
+        PAYLOAD_MAX,
+      );
       parts.push(`<payload>\n${escapeXml(payloadStr)}\n</payload>`);
     }
 

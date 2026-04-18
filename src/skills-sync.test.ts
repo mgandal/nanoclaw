@@ -75,9 +75,9 @@ describe('syncSkillsForGroup — A2 hardening', () => {
 
     syncSkillsForGroup(groupDir, sessionsDir);
 
-    expect(
-      fs.existsSync(path.join(sessionsDir, 'skills', 'bashskill')),
-    ).toBe(false);
+    expect(fs.existsSync(path.join(sessionsDir, 'skills', 'bashskill'))).toBe(
+      false,
+    );
   });
 
   it('accepts a group skill without Bash in allowed-tools', () => {
