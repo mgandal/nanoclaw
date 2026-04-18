@@ -11,17 +11,17 @@ teardown() { teardown_queue; }
 @test "list: empty queue shows no pending items" {
   run "$RUNNER" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PENDING (0)"* ]]
+  assert_contains "PENDING (0)"
 }
 
 @test "list: shows one pending item with verdict" {
   seed_pending "gbrain" "STEAL" "garrytan/gbrain" "2026-04-18"
   run "$RUNNER" list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"PENDING (1)"* ]]
-  [[ "$output" == *"gbrain"* ]]
-  [[ "$output" == *"STEAL"* ]]
-  [[ "$output" == *"garrytan/gbrain"* ]]
+  assert_contains "PENDING (1)"
+  assert_contains "gbrain"
+  assert_contains "STEAL"
+  assert_contains "garrytan/gbrain"
 }
 
 @test "list: sorts pending items newest first by queued_at" {
@@ -38,26 +38,27 @@ teardown() { teardown_queue; }
   seed_pending "datasette" "ADOPT" "simonw/datasette" "2026-04-17"
   run "$RUNNER" show datasette
   [ "$status" -eq 0 ]
-  [[ "$output" == *"=== datasette ==="* ]]
-  [[ "$output" == *"URL:"* ]]
-  [[ "$output" == *"https://github.com/simonw/datasette"* ]]
-  [[ "$output" == *"Verdict:"* ]]
-  [[ "$output" == *"ADOPT"* ]]
-  [[ "$output" == *"Test fixture."* ]]
+  assert_contains "=== datasette ==="
+  assert_contains "URL:"
+  assert_contains "https://github.com/simonw/datasette"
+  assert_contains "Verdict:"
+  assert_contains "ADOPT"
+  assert_contains "Test fixture."
 }
 
 @test "show: exits nonzero with helpful message when id not found" {
   run "$RUNNER" show nonexistent
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No pending item: nonexistent"* ]]
-  [[ "$output" == *"list"* ]]
+  # stderr is merged by `run` into $output
+  assert_contains "No pending item: nonexistent"
+  assert_contains "list"
 }
 
 @test "done: moves pending file to archive with date suffix" {
   seed_pending "old-tool" "STEAL" "ex/old-tool" "2026-04-18"
   run "$RUNNER" done old-tool
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Archived old-tool"* ]]
+  assert_contains "Archived old-tool"
   [ ! -f "$ADOPT_QUEUE_ROOT/pending/old-tool.md" ]
   archived=$(ls "$ADOPT_QUEUE_ROOT/archive/" | grep "^old-tool-" | head -1)
   [ -n "$archived" ]
@@ -66,16 +67,18 @@ teardown() { teardown_queue; }
 @test "done: archived file has status done and done_at set" {
   seed_pending "old-tool" "ADOPT" "ex/old-tool" "2026-04-18"
   run "$RUNNER" done old-tool
+  [ "$status" -eq 0 ]
   archived=$(ls "$ADOPT_QUEUE_ROOT/archive/" | grep "^old-tool-" | head -1)
+  [ -n "$archived" ]
   content=$(cat "$ADOPT_QUEUE_ROOT/archive/$archived")
-  [[ "$content" == *"status: done"* ]]
-  [[ "$content" == *"done_at:"* ]]
+  assert_contains "status: done" "$content"
+  assert_contains "done_at:" "$content"
 }
 
 @test "done: exits nonzero when id not in pending" {
   run "$RUNNER" done nonexistent
   [ "$status" -ne 0 ]
-  [[ "$output" == *"No pending item: nonexistent"* ]]
+  assert_contains "No pending item: nonexistent"
 }
 
 @test "clone: invokes git clone with url and target path" {
@@ -97,9 +100,9 @@ STUB
   [ "$status" -eq 0 ]
   [ -f "$git_log" ]
   logged=$(cat "$git_log")
-  [[ "$logged" == *"clone"* ]]
-  [[ "$logged" == *"https://github.com/simonw/datasette"* ]]
-  [[ "$logged" == *"datasette"* ]]
+  assert_contains "clone" "$logged"
+  assert_contains "https://github.com/simonw/datasette" "$logged"
+  assert_contains "datasette" "$logged"
 }
 
 @test "clone: prints install commands from frontmatter after cloning" {
@@ -130,11 +133,51 @@ STUB
 
   run "$RUNNER" clone mylib
   [ "$status" -eq 0 ]
-  [[ "$output" == *"pip install -e ."* ]]
-  [[ "$output" == *"pytest tests/"* ]]
+  assert_contains "pip install -e ."
+  assert_contains "pytest tests/"
 }
 
 @test "clone: exits nonzero when id not found" {
   run "$RUNNER" clone nonexistent
   [ "$status" -ne 0 ]
+}
+
+@test "list: shows archived items from last 7 days" {
+  seed_pending "current" "ADOPT" "ex/current" "2026-04-18"
+  today=$(date +%Y%m%d)
+  cat > "$ADOPT_QUEUE_ROOT/archive/pastitem-$today.md" <<EOF
+---
+id: pastitem
+url: https://github.com/ex/pastitem
+verdict: STEAL
+repo_name: pastitem
+queued_at: 2026-04-15T12:00:00Z
+status: done
+done_at: 2026-04-18T09:00:00Z
+---
+EOF
+  run "$RUNNER" list
+  [ "$status" -eq 0 ]
+  assert_contains "PENDING (1)"
+  assert_contains "ARCHIVED"
+  assert_contains "pastitem"
+  assert_contains "current"
+}
+
+@test "list: omits archived items older than 7 days" {
+  cat > "$ADOPT_QUEUE_ROOT/archive/ancient-20260101.md" <<EOF
+---
+id: ancient
+url: https://github.com/ex/ancient
+verdict: ADOPT
+repo_name: ancient
+queued_at: 2025-12-25T12:00:00Z
+status: done
+done_at: 2026-01-01T09:00:00Z
+---
+EOF
+  touch -t $(date -v-30d +%Y%m%d0000.00) "$ADOPT_QUEUE_ROOT/archive/ancient-20260101.md"
+  run "$RUNNER" list
+  [ "$status" -eq 0 ]
+  assert_not_contains "ancient"
 }

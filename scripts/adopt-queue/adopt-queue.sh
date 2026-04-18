@@ -47,24 +47,44 @@ render_item_row() {
   printf "  %-20s %s %-6s %-12s %s\n" "$id" "$emoji" "$verdict" "$date_part" "$short"
 }
 
-cmd_list() {
-  mkdir -p "$PENDING_DIR" "$ARCHIVE_DIR"
-  local pending_files=()
-  while IFS= read -r f; do
-    [[ -n "$f" ]] && pending_files+=("$f")
-  done < <(
-    find "$PENDING_DIR" -maxdepth 1 -name '*.md' -type f 2>/dev/null |
+_collect_sorted() {
+  local dir="$1"
+  local max_days="${2:-}"
+  local find_args=(-maxdepth 1 -name '*.md' -type f)
+  [[ -n "$max_days" ]] && find_args+=(-mtime "-$max_days")
+  find "$dir" "${find_args[@]}" 2>/dev/null |
     while read -r f; do
       qa=$(get_field "$f" "queued_at")
       printf "%s\t%s\n" "$qa" "$f"
     done |
     sort -r |
     cut -f2
-  )
+}
+
+cmd_list() {
+  mkdir -p "$PENDING_DIR" "$ARCHIVE_DIR"
+
+  local pending_files=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && pending_files+=("$f")
+  done < <(_collect_sorted "$PENDING_DIR")
 
   echo "PENDING (${#pending_files[@]}):"
   if [[ ${#pending_files[@]} -gt 0 ]]; then
     for f in "${pending_files[@]}"; do
+      render_item_row "$f"
+    done
+  fi
+
+  local archived_files=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && archived_files+=("$f")
+  done < <(_collect_sorted "$ARCHIVE_DIR" 7)
+
+  echo
+  echo "ARCHIVED (${#archived_files[@]}, last 7 days):"
+  if [[ ${#archived_files[@]} -gt 0 ]]; then
+    for f in "${archived_files[@]}"; do
       render_item_row "$f"
     done
   fi
