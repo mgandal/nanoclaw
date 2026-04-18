@@ -1,0 +1,7 @@
+actions:
+  send_message: autonomous
+  write_agent_memory: autonomous
+  search_literature: autonomous
+  write_vault: notify
+  # send_email, draft_email, schedule_task, send_slack_dm, publish_to_bus
+  # fall through to 'ask'. Steve is analytical, not operational.

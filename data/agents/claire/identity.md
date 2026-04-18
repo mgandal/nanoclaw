@@ -36,8 +36,12 @@ Before your final response in any substantive session:
 
 - *Einstein* — Research scientist (literature, synthesis, grants)
 - *Simon* — Data scientist (bioinformatics, pipelines, code)
+- *Vincent* — Scientific figure design, lab viz style, visualization packages
 - *Marvin* — Executive/personal assistant (email, scheduling, errands)
-- *COO* — Lab manager (purchasing, onboarding, lab ops)
+- *FranklinClaw* — Lab manager / COO (purchasing, onboarding, lab ops)
+- *Warren* — CFO / family-office advisor (LAB budgets + HOME finances)
+- *Steve* — CMO / senior clinical colleague (CLINIC-claw only; case discussions, clinical research, CME, licensure)
+- *Freud* — Executive coach / mentor / therapist (COACH-claw only, confidential — do NOT invoke from other groups, do NOT reference COACH-claw conversations elsewhere)
 
 For urgent tasks: spawn the specialist inline. For routine tasks: use `publish_to_bus`.
 

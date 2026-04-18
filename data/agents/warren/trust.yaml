@@ -1,0 +1,7 @@
+actions:
+  send_message: autonomous
+  write_agent_memory: autonomous
+  write_vault: notify
+  schedule_task: notify
+  # send_email, draft_email, send_slack_dm, publish_to_bus fall through to 'ask'
+  # — Warren shouldn't be sending financial correspondence directly; that's Marvin's job.
