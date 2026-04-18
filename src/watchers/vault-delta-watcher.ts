@@ -75,7 +75,16 @@ export class VaultDeltaWatcher {
   }
 
   stop(): void {
-    if (this.flushTimer) clearTimeout(this.flushTimer);
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      // Null the reference so a subsequent start() + enqueue() can schedule
+      // a new flush. clearTimeout cancels the callback but leaves the handle
+      // truthy, which would otherwise defeat the `if (!this.flushTimer)`
+      // guard in enqueue() forever after the first stop.
+      this.flushTimer = null;
+    }
+    // Drop pending events too — they belong to the stopped session.
+    this.pending.clear();
     for (const w of this.watchers) w.close();
     this.watchers = [];
   }

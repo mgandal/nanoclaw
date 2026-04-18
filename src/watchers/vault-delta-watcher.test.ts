@@ -72,6 +72,31 @@ describe('VaultDeltaWatcher', () => {
     w.stop();
   });
 
+  it('can be restarted after stop(): new enqueues schedule a new flush', async () => {
+    // Regression test: before the fix, stop() called clearTimeout but
+    // didn't null flushTimer, so the next enqueue's `if (!this.flushTimer)`
+    // guard stayed falsy and no new flush was scheduled.
+    const emit = vi.fn();
+    const w = new VaultDeltaWatcher({
+      roots: [tmp],
+      onEvent: emit,
+      coalesceMs: 50,
+    });
+    w.enqueueForTest(path.join(tmp, '10-daily/a.md'));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(emit).toHaveBeenCalledTimes(1);
+
+    w.stop();
+    emit.mockReset();
+
+    // After stop, a fresh enqueue should still produce a flush (the watcher
+    // is willing to restart; only fs.watch registrations are torn down).
+    w.enqueueForTest(path.join(tmp, '10-daily/b.md'));
+    await new Promise((r) => setTimeout(r, 120));
+    expect(emit).toHaveBeenCalledTimes(1);
+    w.stop();
+  });
+
   it('skips missing roots without crashing', () => {
     const emit = vi.fn();
     const w = new VaultDeltaWatcher({
