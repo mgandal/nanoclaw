@@ -76,13 +76,20 @@ This separation is the most important property of the design. Without it, proact
 
 **Purpose:** Emit `silent_thread` events when an email thread has gone ≥48h with the user not having replied to the latest inbound message.
 
-**Behavior:**
+**Data gap — must be resolved before implementation.** The current email-ingest pipeline (`scripts/sync/email-ingest.py`) ingests incoming mail into QMD but does not track *sent* mail from the user. Without knowing what the user sent, we cannot determine whether they replied. Two options; pick one in implementation:
+
+- **Option A (recommended):** extend `email-ingest.py` to also fetch the user's Sent folder via Gmail API (`in:sent`) and tag each record with `direction: inbound|outbound`. Thread reply detection becomes a straight query: "thread has inbound as latest, no outbound in the thread after the inbound timestamp."
+- **Option B:** query Gmail API live in the watcher via the existing OAuth credentials, per thread, to check for user replies. Higher API cost; no new ingest work.
+
+Option A is cleaner and gives QMD a complete thread view as a side benefit. The implementation plan must start by making this change.
+
+**Behavior (assuming Option A):**
 - Scheduled every 4h (or after every sync-all run).
-- Query QMD `email` collection (or read `~/.cache/email-ingest/gmail-sync-state.json`) for threads where:
-  - Last message is inbound (from external sender).
+- Query QMD `email` collection for threads where:
+  - Most recent message in thread has `direction='inbound'`.
   - That message is ≥48h old.
-  - User has not sent any reply in the thread since.
-- Dedup against `proactive_log` — if a `silent_thread` event was already emitted for this `thread_id` in the last 7d, skip.
+  - No `direction='outbound'` message exists in the thread after that inbound timestamp.
+- Dedup against `proactive_log` — if a `silent_thread` event with the same `correlation_id` (`"silent_thread:" + thread_id`) was emitted in the last 7d, skip.
 - Emit one `RawEvent { type: 'silent_thread', payload: { thread_id, sender, subject, last_received_at, days_silent } }` per qualifying thread.
 
 **Why a watcher, not a correlator:** silence-since-last-message is a single-source pattern. It's just an overdue-reply check. No cross-surface correlation needed.
@@ -91,16 +98,19 @@ This separation is the most important property of the design. Without it, proact
 
 **File:** `src/watchers/task-outcome-watcher.ts`
 
-**Purpose:** Emit `task_outcome` events when scheduled tasks produce surface-worthy output or fail repeatedly.
+**Purpose:** Emit `task_outcome` events when scheduled tasks produce surface-worthy *output*. Failure alerts are **not** this watcher's job — `task-scheduler.ts:checkAlerts()` already emits on consecutive failures and routes to `OPS_ALERT_FOLDER`. Duplicating that here would cause double-alerts. This watcher only handles positive outcomes.
 
 **Behavior:**
-- Polls `task_runs` table (existing) every 60s for rows with `status IN ('completed','failed')` and `outcome_emitted=0` (new column).
-- For completed runs: if `output` is non-empty and task is marked `surface_outputs=1` (new task column, default 0), emit.
-- For failed runs: if consecutive-failure count crosses threshold (configurable per task, default 3), emit.
-- Set `outcome_emitted=1` after emitting.
-- Emit `RawEvent { type: 'task_outcome', payload: { task_id, task_name, status, output_preview, failure_count } }`.
+- Polls `task_run_logs` table (existing) every 60s for rows with `status = 'success'` and `outcome_emitted = 0` (new column).
+- Joins against `tasks` table: emit only if the task has `surface_outputs = 1` (new column on `tasks`, default 0).
+- If task output is non-empty, emit `RawEvent { type: 'task_outcome', payload: { task_id, task_name, output_preview } }`.
+- Set `outcome_emitted = 1` on the log row after emitting (idempotent).
 
-**Migration:** adds `surface_outputs INTEGER DEFAULT 0` and `outcome_emitted INTEGER DEFAULT 0` columns to `task_runs`/tasks tables.
+**Note on existing status values:** `task_run_logs.status` uses `'success'` / `'error'` / `'skipped'` (see `db.ts:805-820`), not `'completed'` / `'failed'`. Watcher code must use the real values.
+
+**Migration:** adds `surface_outputs INTEGER DEFAULT 0` to `tasks` table and `outcome_emitted INTEGER DEFAULT 0` to `task_run_logs` table.
+
+**Coordination with `checkAlerts()`:** both systems read `task_run_logs`. This watcher only touches `status='success'` rows; `checkAlerts()` only touches `status='error'` rows. No overlap.
 
 ### 4. Outbound Governor
 
@@ -134,10 +144,14 @@ function decide(send: ProactiveSend): GovernorDecision;
 
 1. `PROACTIVE_ENABLED=false` → `drop: kill_switch`
 2. Manual pause active (`pause proactive for Nh` command, stored in `data/proactive/pause.json`) → `drop: paused`
-3. Dedup: `proactive_log` has a row with same `correlationId` and `delivered_at IS NOT NULL` in the last `DEDUP_WINDOW_HOURS` (default 24) → `drop: duplicate_recent`. Pending defers do NOT suppress new candidates; if a fresher version of the same correlation is submitted while the first is deferred, both live in the log and whichever delivers first wins dedup against the other.
+3. Dedup: `proactive_log` has a row with same `correlationId` and either `delivered_at IS NOT NULL` OR `dispatched_at IS NOT NULL` in the last `DEDUP_WINDOW_HOURS` (default 24) → `drop: duplicate_recent`. See "In-flight race" note below. Pending defers (no `dispatched_at` yet) do NOT suppress new candidates; if a fresher version of the same correlation is submitted while the first is deferred, both live in the log and whichever dispatches first wins dedup against the other.
 4. Agent cooldown: `proactive_log` has a `send` from `fromAgent` within `AGENT_COOLDOWN_MINUTES` (default 20) → `defer` to `now + cooldown_remaining`
-5. Quiet hours: current time outside 08:00–20:00 local Mon–Fri **and** `urgency < QUIET_OVERRIDE_THRESHOLD` (default 0.8) → `defer` to next 08:00 weekday
+5. Quiet hours: current time (in `TIMEZONE`) outside `QUIET_HOURS_START`–`QUIET_HOURS_END` local on weekdays, **or** current day is in `QUIET_DAYS_OFF`, **and** `urgency < QUIET_OVERRIDE_THRESHOLD` (default 0.8) → `defer` to next weekday's `QUIET_HOURS_START`
 6. Otherwise → `send`
+
+**All times stored and compared in UTC.** `deliver_at` is always written as a UTC ISO string. The "next weekday 08:00" computation converts to local tz (`TIMEZONE` from config) for reasoning, then back to UTC for storage. The deferred-send processor compares UTC-to-UTC. No local-tz comparisons anywhere in governor code.
+
+**In-flight race.** `deliverSendMessage` must set `dispatched_at = now()` on the `proactive_log` row *before* the network call to the channel. `delivered_at` is set after the send succeeds. Dedup checks both, so a second call arriving while the first is mid-flight sees `dispatched_at` and drops as duplicate. On send failure, `dispatched_at` is cleared so a retry can proceed.
 
 **Correlation ID composition:**
 - Escalation path: `"escalate:" + classification.topic + ":" + primary_entity_hash`
@@ -163,15 +177,18 @@ CREATE TABLE proactive_log (
   decision TEXT NOT NULL,                -- 'send' | 'defer' | 'drop'
   reason TEXT NOT NULL,                  -- 'approved' | 'kill_switch' | 'paused' |
                                          -- 'duplicate_recent' | 'agent_cooldown' |
-                                         -- 'quiet_hours' | 'missing_correlation_id'
+                                         -- 'quiet_hours' | 'missing_correlation_id' |
+                                         -- 'governor_error'
   urgency REAL,
   rule_id TEXT,
   correlation_id TEXT NOT NULL,
   message_preview TEXT,                  -- first 200 chars of message
   contributing_events TEXT,              -- JSON array
-  deliver_at TEXT,                       -- when deferred send should fire
-  delivered_at TEXT,                     -- when actually sent (null if not)
-  user_reaction TEXT                     -- '👍' | '👎' | 'reply_within_10min' | null
+  deliver_at TEXT,                       -- UTC ISO, when deferred send should fire
+  dispatched_at TEXT,                    -- UTC ISO, when send was started (pre-network-call)
+  delivered_at TEXT,                     -- UTC ISO, when send succeeded (null if pending/failed)
+  reaction_kind TEXT,                    -- 'emoji' | 'reply' | null
+  reaction_value TEXT                    -- emoji char OR first 500 chars of reply text
 );
 CREATE INDEX idx_proactive_log_time ON proactive_log(timestamp DESC);
 CREATE INDEX idx_proactive_log_dedup ON proactive_log(correlation_id, timestamp DESC);
@@ -200,15 +217,17 @@ CREATE INDEX idx_proactive_log_pending ON proactive_log(decision, delivered_at)
 
 ### 7. Kill Switch and Pause Command
 
-**Kill switch:** `PROACTIVE_ENABLED` env var. Absent or `false` → governor drops everything with reason `kill_switch`. Watchers still emit; EventRouter still classifies; the only change is no proactive speech leaves.
+**Kill switch:** `PROACTIVE_ENABLED` env var. Absent or `false` → governor drops everything with reason `kill_switch`. Watchers still emit; EventRouter still classifies; the only change is no proactive speech leaves. Already-deferred rows in `proactive_log` are *not* cleared on kill — when they next come due, the deferred-send processor re-runs the governor, which drops them with `kill_switch`. Flipping `PROACTIVE_ENABLED` back to true is instant and requires no state surgery; pending defers resume normal processing.
 
-**Pause command:** Claire recognizes messages like `@claire pause proactive for 4h` or `pause proactive` (indefinite). Writes `data/proactive/pause.json`:
+**Pause command:** Claire recognizes messages like `@claire pause proactive for 4h` or `pause proactive` (indefinite) and calls a new IPC action `set_proactive_pause` (from within her container) which writes `data/proactive/pause.json` on the host:
 
 ```json
 { "paused_until": "2026-04-18T23:00:00Z", "set_by": "user", "set_at": "..." }
 ```
 
-Governor checks this file (cached 5s) before other rules. `paused_until: null` means indefinite. `@claire resume proactive` clears the file.
+`paused_until: null` means indefinite. `@claire resume proactive` calls `set_proactive_pause` with null. Governor reads the file (cached 5s) before other rules. Corrupt/unreadable file → fail closed (treat as paused indefinitely) + log error.
+
+**IPC addition:** `src/ipc.ts` grows a new action `set_proactive_pause` with payload `{ pausedUntil: string | null }`. Host-side implementation writes the JSON atomically (write to tmp + rename) to avoid partial reads.
 
 ### 8. Daily Review Task
 
@@ -224,9 +243,15 @@ Recent proactive activity (since <last_review_at>):
 Anything feel wrong?
 ```
 
-The digest itself is a proactive send with `correlationId = "task:proactive-daily-review:YYYY-MM-DD"` and `urgency = 1.0`. Governor dedup ensures the digest fires exactly once per day; the high urgency makes it immune to quiet-hours deferral if the task ever slips past 20:00.
+The digest itself is a proactive send with `correlationId = "task:proactive-daily-review:YYYY-MM-DD"` (where `YYYY-MM-DD` is today's date in `TIMEZONE`) and `urgency = 1.0`. Governor dedup ensures the digest fires exactly once per day; the high urgency makes it immune to quiet-hours deferral if the task ever slips past `QUIET_HOURS_END`.
 
-**User reply capture:** when the user replies to the digest message in the main group within 60 minutes, the reply text is written to `proactive_log.user_reaction` on the digest's row (as `reply:<first 500 chars>`). Claire also appends a bullet to `groups/global/memory.md` under a `## Proactive tuning notes` section. **No automatic rule/threshold changes** — all calibration is manual in v1.
+**Correlation ID threading.** The task's agent runs inside a container via `runContainerAgent` and doesn't otherwise know what `correlationId` to stamp on its IPC send. Two implementation options:
+- **Preferred:** the task-scheduler injects a `PROACTIVE_CORRELATION_ID` env var into the container when launching a task whose definition has `proactive=true`. The container-side IPC helper automatically attaches it to any `send_message` call made with `proactive: true`.
+- **Fallback:** the task prompt template embeds the correlation ID as a literal string and instructs the agent to pass it. Error-prone but doesn't require container-runner changes.
+
+The preferred option adds a small (~30 LOC) change to `container-runner.ts` to pipe the env var and to the in-container IPC wrapper to attach it.
+
+**User reply capture:** when the user replies to the digest message in the main group within 60 minutes, the inbound-message handler in `src/index.ts` looks up the most recent `send`-decision `proactive_log` row with `correlation_id LIKE 'task:proactive-daily-review:%'` to the same `to_group`, and writes `reaction_kind='reply'` + `reaction_value=<first 500 chars>`. Claire also appends a bullet to `groups/global/memory.md` under a `## Proactive tuning notes` section. **No automatic rule/threshold changes** — all calibration is manual in v1.
 
 ### 9. Configuration
 
@@ -237,9 +262,9 @@ New env vars (defaults in `src/config.ts`):
 | `PROACTIVE_ENABLED` | `false` in v1 rollout, flip to `true` after governor stable | Master kill switch |
 | `PROACTIVE_GOVERNOR` | `false` in first week | When false, all existing send paths bypass governor |
 | `PROACTIVE_GOVERNOR_STRICT` | `true` | When true and governor crashes, sends fail closed |
-| `QUIET_HOURS_START` | `"20:00"` | Local time, HH:MM |
-| `QUIET_HOURS_END` | `"08:00"` | Local time, HH:MM |
-| `QUIET_DAYS_OFF` | `"Sat,Sun"` | Days entirely in quiet hours |
+| `QUIET_HOURS_START` | `"20:00"` | Local time (in `TIMEZONE`), HH:MM. Quiet starts at this time on weekdays. |
+| `QUIET_HOURS_END` | `"08:00"` | Local time, HH:MM. Quiet ends at this time on weekdays. Between end and start on weekdays, sends are allowed. |
+| `QUIET_DAYS_OFF` | `"Sat,Sun"` | Days treated as entirely quiet (24h). `QUIET_HOURS_START`/`END` ignored on these days. |
 | `QUIET_OVERRIDE_THRESHOLD` | `0.8` | Urgency ≥ this bypasses quiet hours |
 | `AGENT_COOLDOWN_MINUTES` | `20` | Min gap between unprompted sends from same agent |
 | `DEDUP_WINDOW_HOURS` | `24` | Window for duplicate correlation_id suppression |
@@ -270,12 +295,13 @@ Scenario: Friday 2026-04-17 at 22:14 local.
 
 Exposes: the governor is the chokepoint for *proactive speech*, not for all events. Most events never reach it. `proactive_log` reflects speech decisions only.
 
-### Trace C: Daily review at 21:00
+### Trace C: Daily review at 19:30
 
-1. `task-scheduler` fires `proactive-daily-review`.
-2. Task prompt reads `proactive_log WHERE timestamp > now()-24h`.
-3. Claire composes a digest and sends it to the main group (via governor — it's itself a proactive send, but rule is `"task:proactive-daily-review:YYYY-MM-DD"` so dedup prevents double-fire on retry).
-4. User's reply (if any) is captured in the normal message loop. Claire appends calibration notes to `groups/global/memory.md` manually (no automatic rule changes).
+1. `task-scheduler` fires `proactive-daily-review`. Launch includes `PROACTIVE_CORRELATION_ID=task:proactive-daily-review:2026-04-17` env var.
+2. Claire's container reads `proactive_log` entries since the last successful digest via a host-side IPC action (`read_proactive_log` — new, simple passthrough).
+3. Claire composes a digest and calls `send_message` with `proactive: true`. The container IPC wrapper automatically attaches the correlation ID from env.
+4. Governor: kill-switch off, not paused, no dedup hit, cooldown OK, in-window (19:30 is inside 08:00–20:00), urgency 1.0 — `send`. Row written.
+5. User's reply (if any) is captured in the normal message loop. The inbound handler backfills the digest's `reaction_kind` / `reaction_value`. Claire appends calibration notes to `groups/global/memory.md` manually (no automatic rule changes).
 
 ## Error Handling
 
@@ -288,6 +314,9 @@ Exposes: the governor is the chokepoint for *proactive speech*, not for all even
 | Watcher floods events (e.g. fs churn) | Watchers coalesce at source (30s window for vault). EventRouter also has its own classification rate limits. |
 | `proactive_log` grows unbounded | Daily archiver job moves >90d rows to JSONL. Table stays bounded. |
 | Pause file corrupt / unreadable | Governor treats as `paused indefinitely` — fail closed. Logs error. |
+| SQLite partial-index not supported on target Bun | Fall back to full index on `(decision, delivered_at)`; query remains correct, slightly less efficient. Verify in Bun smoke test during v1 rollout. |
+| Daily-review task misses a day (scheduler off during 19:30) | Next run reads `proactive_log` since last successful digest (not strict 24h), so missed days roll forward into the next digest. |
+| New proactive producer forgets `proactive: true` flag | Governor never called, send goes out silently. Mitigation: each new producer has an integration test asserting a `proactive_log` row is created. |
 
 ## Testing Strategy
 
@@ -299,9 +328,15 @@ Exposes: the governor is the chokepoint for *proactive speech*, not for all even
 
 ## Migration / Rollout
 
-1. Ship code with `PROACTIVE_ENABLED=false` and `PROACTIVE_GOVERNOR=false`. Pure dead code on send paths.
-2. Enable `PROACTIVE_GOVERNOR=true` in a staging branch; run for 48h with `PROACTIVE_ENABLED=false`. Governor is called but kill-switch drops every send. Verify `proactive_log` fills with realistic decisions. This is the shadow-mode check.
-3. Flip `PROACTIVE_ENABLED=true` in main config. Real proactive sends begin.
+The two flags have distinct roles:
+- `PROACTIVE_GOVERNOR` gates whether producers *call* `governor.decide()`. When false, `deliverSendMessage` ignores the `proactive: true` flag on payloads — they behave exactly like reactive sends. No governor call, no `proactive_log` row.
+- `PROACTIVE_ENABLED` gates the governor's decision. When false, governor still runs (logging to `proactive_log`) but always returns `drop: kill_switch`.
+
+This means shadow mode (observe what *would* fire) is `PROACTIVE_GOVERNOR=true` + `PROACTIVE_ENABLED=false`: governor runs, logs populate, nothing sends.
+
+1. Ship code with both flags false. New producers set `proactive: true` on their payloads but `deliverSendMessage` strips/ignores it. Functionally identical to today.
+2. In a staging config, flip `PROACTIVE_GOVERNOR=true` with `PROACTIVE_ENABLED=false`. Shadow mode: `proactive_log` fills with `drop: kill_switch` rows carrying the would-be decisions. Inspect for 48h.
+3. Flip `PROACTIVE_ENABLED=true`. Real proactive sends begin.
 4. Run for 2–4 weeks. Use daily reviews and manual log inspection to identify patterns worth correlating.
 5. Open v2 spec for the correlator, grounded in observed patterns.
 
@@ -328,13 +363,18 @@ Exposes: the governor is the chokepoint for *proactive speech*, not for all even
 - `docs/superpowers/specs/2026-04-18-proactive-claire-design.md` (this file)
 
 **Modified:**
-- `src/db.ts` — add `proactive_log` table and CRUD; add `surface_outputs`, `outcome_emitted` columns
+- `src/db.ts` — add `proactive_log` table and CRUD; add `surface_outputs` column on `tasks`, `outcome_emitted` column on `task_run_logs`
 - `src/config.ts` — new env vars listed above
 - `src/classification-prompts.ts` — add `getVaultChangeClassificationPrompt`, `getSilentThreadPrompt`, `getTaskOutcomePrompt`
-- `src/event-router.ts` — extend `RawEvent.type` union
+- `src/event-router.ts` — extend `RawEvent.type` union AND extend `buildPrompt()` dispatch (hard if/else currently falls through to calendar for unknown types; silent miscategorization risk)
+- `src/ipc.ts` — inject governor at `deliverSendMessage` call site (line ~338) gated by `payload.proactive === true`; reactive IPC sends carry no `proactive` flag and skip governor entirely
 - `src/index.ts` — wire new watchers at startup under flag
-- Every existing unprompted-send path — route through `governor.decide()` (grep audit required during implementation)
+- `scripts/sync/email-ingest.py` — add Sent-folder ingestion with `direction` tag (prerequisite for thread-silence-watcher)
+- `src/task-scheduler.ts` — thread `correlationId` into the proactive-daily-review task's agent prompt/env so the container agent can set it on its IPC send
+- `src/router.ts` / channel adapters — no changes needed; they sit below the governor
 - Scheduled task definitions — add `proactive-daily-review` and `proactive-log-archiver`
+
+**Why this intercept point.** `ipc.ts:deliverSendMessage` already sits below the trust-decision layer at line 338, which is where unprompted agent sends land. Reactive replies use the same path but are initiated synchronously from a user message. We discriminate with an explicit `proactive: boolean` field in the `send_message` IPC payload — reactive callers omit it (defaults false), proactive callers (escalation handler, scheduled tasks, future correlator) set it true. Governor is only invoked when the flag is true. This keeps reactive latency untouched.
 
 ## Risk Register
 
@@ -356,4 +396,9 @@ Exposes: the governor is the chokepoint for *proactive speech*, not for all even
   - Dedup suppresses a repeat correlation ID within 24h.
   - Agent cooldown defers a rapid-fire second send.
   - Daily review fires at 21:00 and produces a digest in main.
-- No proactive send in the codebase bypasses `governor.decide()`. Enforced two ways: (a) an ESLint custom rule flags any call to `router.send*` or channel `sendMessage` outside `src/outbound-governor.ts` or explicit allowlisted reactive-reply paths; (b) at runtime, proactive send call sites require a `GovernorToken` argument that only `governor.decide()` can produce — a token-less call throws.
+- No proactive send bypasses `governor.decide()`. Enforced by discriminator, not by token:
+  - The `send_message` IPC payload's `proactive: boolean` flag is the single discriminator. Any caller that sets it true triggers the governor.
+  - All existing and new proactive producers (EventRouter escalation callback, task-outcome-watcher bus dispatch, scheduled-task agent prompts that know they are proactive) must set `proactive: true`.
+  - An integration test asserts: for each proactive producer path (escalation, daily review, task outcome), a synthetic event end-to-end results in a `proactive_log` row.
+  - A unit test of `deliverSendMessage` asserts that when `proactive: true` and no governor decision is attached, the call throws — preventing a producer from setting the flag but forgetting to run the governor.
+  - Runtime `GovernorToken` class was considered and rejected: nothing in TS/JS prevents forging tokens cheaply, so it adds complexity without real enforcement. The tests above are the actual guardrail.
