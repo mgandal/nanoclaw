@@ -149,6 +149,28 @@ function createSchema(database: Database): void {
       ON pending_actions(status, created_at);
     CREATE INDEX IF NOT EXISTS idx_pending_actions_group
       ON pending_actions(group_folder, status);
+
+    CREATE TABLE IF NOT EXISTS proactive_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp TEXT NOT NULL,
+      from_agent TEXT NOT NULL,
+      to_group TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      urgency REAL,
+      rule_id TEXT,
+      correlation_id TEXT NOT NULL,
+      message_preview TEXT,
+      contributing_events TEXT,
+      deliver_at TEXT,
+      dispatched_at TEXT,
+      delivered_at TEXT,
+      reaction_kind TEXT,
+      reaction_value TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_proactive_log_time ON proactive_log(timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_proactive_log_dedup ON proactive_log(correlation_id, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_proactive_log_pending ON proactive_log(decision, delivered_at);
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
@@ -244,6 +266,24 @@ function createSchema(database: Database): void {
   } catch {
     /* already migrated or table doesn't exist yet */
   }
+
+  addProactiveColumns(database);
+}
+
+function addProactiveColumns(database: Database): void {
+  // SECURITY: table, col, and defn are interpolated directly into SQL; callers
+  // must pass only trusted hardcoded literals (never user/DB-derived strings).
+  const addCol = (table: string, col: string, defn: string) => {
+    const cols = database.prepare(`PRAGMA table_info('${table}')`).all() as {
+      name: string;
+    }[];
+    if (!cols.some((c) => c.name === col)) {
+      database.prepare(`ALTER TABLE ${table} ADD COLUMN ${col} ${defn}`).run();
+    }
+  };
+  addCol('scheduled_tasks', 'surface_outputs', 'INTEGER DEFAULT 0');
+  addCol('scheduled_tasks', 'proactive', 'INTEGER DEFAULT 0');
+  addCol('task_run_logs', 'outcome_emitted', 'INTEGER DEFAULT 0');
 }
 
 export function initDatabase(): void {
