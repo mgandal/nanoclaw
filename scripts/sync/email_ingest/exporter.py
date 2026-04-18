@@ -33,15 +33,31 @@ def _extract_yyyy_mm(date_str: str) -> str:
         return "unknown"
 
 
+def _infer_direction(email: NormalizedEmail) -> str:
+    """Infer message direction from Gmail labels.
+
+    Gmail tags outbound mail with SENT. If label present → 'outbound'.
+    Otherwise → 'inbound'. Exchange messages default to 'inbound' since
+    we don't ingest the Sent Items folder for Exchange in v1.
+    """
+    if "SENT" in (email.labels or []):
+        return "outbound"
+    return "inbound"
+
+
 def build_markdown(email: NormalizedEmail, result: ClassificationResult) -> str:
     """Build enriched markdown document from email + classification."""
     entities_yaml = "[" + ", ".join(f'"{e}"' for e in result.entities) + "]"
     to_yaml = "[" + ", ".join(f'"{t}"' for t in email.to) + "]"
     cc_yaml = "[" + ", ".join(f'"{c}"' for c in email.cc) + "]" if email.cc else "[]"
+    direction = _infer_direction(email)
+    thread_id = (email.metadata or {}).get("threadId", "")
 
     lines = [
         "---",
         f"source: {email.source}",
+        f"direction: {direction}",
+        f'thread_id: "{thread_id}"',
         f'from: "{email.from_addr}"',
         f"to: {to_yaml}",
         f"cc: {cc_yaml}",

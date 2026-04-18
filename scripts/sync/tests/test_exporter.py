@@ -64,6 +64,29 @@ def test_build_markdown_has_original_body():
     assert "The grant is on track." in md
 
 
+def test_build_markdown_has_direction_inbound_when_no_sent_label():
+    md = build_markdown(_make_email(labels=["INBOX", "IMPORTANT"]), _make_result())
+    assert "direction: inbound" in md
+
+
+def test_build_markdown_has_direction_outbound_when_sent_label_present():
+    md = build_markdown(_make_email(labels=["SENT"]), _make_result())
+    assert "direction: outbound" in md
+
+
+def test_build_markdown_includes_thread_id_from_metadata():
+    md = build_markdown(
+        _make_email(metadata={"threadId": "thread-abc-123"}),
+        _make_result(),
+    )
+    assert 'thread_id: "thread-abc-123"' in md
+
+
+def test_build_markdown_thread_id_empty_when_metadata_missing():
+    md = build_markdown(_make_email(metadata={}), _make_result())
+    assert 'thread_id: ""' in md
+
+
 def test_export_email_creates_file(tmp_path):
     with patch("email_ingest.exporter.EXPORT_DIR", tmp_path):
         path = export_email(_make_email(), _make_result())
