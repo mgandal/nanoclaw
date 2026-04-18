@@ -8,6 +8,12 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IPC_POLL_INTERVAL,
+  PROACTIVE_ENABLED,
+  PROACTIVE_GOVERNOR,
+  PROACTIVE_PAUSE_PATH,
+  QUIET_DAYS_OFF,
+  QUIET_HOURS_END,
+  QUIET_HOURS_START,
   TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from './config.js';
@@ -32,6 +38,14 @@ import { handleDashboardIpc } from './dashboard-ipc.js';
 import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { handleKgIpc } from './kg-ipc.js';
+import { decide as governorDecide } from './outbound-governor.js';
+import {
+  clearDispatch,
+  markDelivered,
+  markDispatched,
+} from './proactive-log.js';
+import { isPaused } from './proactive-pause.js';
+import { isInQuietHours, nextQuietEnd } from './quiet-hours.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -98,10 +112,68 @@ export async function deliverSendMessage(
     text: string;
     sender?: string;
     webAppUrl?: string;
+    proactive?: boolean;
+    correlationId?: string;
+    urgency?: number;
+    ruleId?: string;
+    contributingEvents?: string[];
+    fromAgent?: string;
   },
   deps: Pick<IpcDeps, 'sendMessage' | 'sendWebAppButton'>,
   sourceGroup: string,
 ): Promise<void> {
+  if (data.proactive && PROACTIVE_GOVERNOR) {
+    if (!data.correlationId) {
+      throw new Error('proactive=true requires correlationId');
+    }
+    const pauseFile =
+      process.env.PROACTIVE_PAUSE_PATH_OVERRIDE || PROACTIVE_PAUSE_PATH;
+    const decision = governorDecide(
+      {
+        fromAgent: data.fromAgent || sourceGroup,
+        toGroup: data.chatJid,
+        message: data.text,
+        urgency: data.urgency ?? 0.5,
+        correlationId: data.correlationId,
+        ruleId: data.ruleId,
+        contributingEvents: data.contributingEvents || [],
+      },
+      {
+        enabled: PROACTIVE_ENABLED,
+        governorOn: true,
+        isPaused,
+        isInQuiet: (now) =>
+          isInQuietHours(now, {
+            start: QUIET_HOURS_START,
+            end: QUIET_HOURS_END,
+            daysOff: QUIET_DAYS_OFF,
+            timezone: TIMEZONE,
+          }),
+        nextQuietEnd: (now) =>
+          nextQuietEnd(now, {
+            start: QUIET_HOURS_START,
+            end: QUIET_HOURS_END,
+            daysOff: QUIET_DAYS_OFF,
+            timezone: TIMEZONE,
+          }),
+        now: () => new Date(),
+        pauseFile,
+      },
+    );
+
+    if (decision.decision !== 'send') return; // drop or defer; already logged
+
+    markDispatched(decision.logId, new Date().toISOString());
+    try {
+      await deps.sendMessage(data.chatJid, data.text);
+      markDelivered(decision.logId, new Date().toISOString());
+    } catch (err) {
+      clearDispatch(decision.logId);
+      throw err;
+    }
+    return;
+  }
+
   if (
     data.webAppUrl &&
     typeof data.webAppUrl === 'string' &&
