@@ -2101,3 +2101,83 @@ describe('deliverSendMessage', () => {
     expect(sendMessage).toHaveBeenCalledWith('tg:main123', 'hello');
   });
 });
+
+// --- End-to-end dispatch: kg_query flows from processTaskIpc to
+//     handleKgIpc and writes a result file under DATA_DIR/ipc/.../kg_results/.
+//     Reads against the real store/knowledge-graph.db (populated by
+//     scripts/kg/ingest_phase1.py). Skipped if the DB isn't present yet
+//     so CI without a seeded graph stays green.
+describe('processTaskIpc dispatches kg_query', () => {
+  const kgDb = path.join(process.cwd(), 'store', 'knowledge-graph.db');
+  const dbExists = fs.existsSync(kgDb);
+  const test = dbExists ? it : it.skip;
+
+  test('writes a success result when the DB is seeded', async () => {
+    const requestId = `kgtest-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    await processTaskIpc(
+      {
+        type: 'kg_query',
+        requestId,
+        query: 'flash',
+        hops: 1,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    const resultFile = path.join(
+      DATA_DIR,
+      'ipc',
+      'telegram_main',
+      'kg_results',
+      `${requestId}.json`,
+    );
+    try {
+      expect(fs.existsSync(resultFile)).toBe(true);
+      const payload = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+      expect(payload.success).toBe(true);
+      // `flash` is a known tool in the seeded graph with a tool->tool
+      // related_to edge and a cites edge. Exact counts are data-dependent
+      // so assert only that at least one neighbor exists.
+      expect(Array.isArray(payload.matched)).toBe(true);
+      expect(payload.matched.length).toBeGreaterThan(0);
+      expect(payload.matched[0].canonical_name).toBe('flash');
+      expect(Array.isArray(payload.neighbors)).toBe(true);
+      expect(payload.neighbors.length).toBeGreaterThan(0);
+    } finally {
+      if (fs.existsSync(resultFile)) fs.unlinkSync(resultFile);
+    }
+  });
+
+  test('writes an error result for missing query field', async () => {
+    const requestId = `kgtest-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+    await processTaskIpc(
+      {
+        type: 'kg_query',
+        requestId,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    const resultFile = path.join(
+      DATA_DIR,
+      'ipc',
+      'telegram_main',
+      'kg_results',
+      `${requestId}.json`,
+    );
+    try {
+      expect(fs.existsSync(resultFile)).toBe(true);
+      const payload = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+      expect(payload.success).toBe(false);
+      expect(payload.error).toMatch(/Missing required field/);
+    } finally {
+      if (fs.existsSync(resultFile)) fs.unlinkSync(resultFile);
+    }
+  });
+});
