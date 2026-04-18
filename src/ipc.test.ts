@@ -1108,6 +1108,85 @@ describe('schedule_task target validation', () => {
   });
 });
 
+// --- B5: agent_name validation ---
+
+describe('schedule_task agent_name validation', () => {
+  it('rejects agent_name containing path traversal', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'traversal attempt',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:main123',
+        agent_name: '../../etc/passwd',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('rejects agent_name with a slash', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'slash attempt',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:main123',
+        agent_name: 'foo/bar',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('accepts a valid agent_name (task created)', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'valid agent',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:main123',
+        agent_name: 'simon',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // B5 covers the IPC boundary. createTask's storage of agent_name is
+    // out of scope for this finding (pre-existing gap in createTask's
+    // INSERT statement). Here we assert only that validation let the
+    // task through.
+    expect(getAllTasks()).toHaveLength(1);
+  });
+
+  it('accepts missing agent_name (task created)', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'no agent',
+        schedule_type: 'once',
+        schedule_value: '2025-12-01T00:00:00',
+        targetJid: 'tg:main123',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(1);
+  });
+});
+
 // --- 17. register_group with invalid folder ---
 
 describe('register_group folder validation', () => {

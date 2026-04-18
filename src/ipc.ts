@@ -96,6 +96,24 @@ export function clearIpcSend(chatJid: string): void {
 }
 
 /**
+ * Validate an agent name from untrusted IPC input.
+ *
+ * Per B5 of the 2026-04-18 hardening audit: `schedule_task` used to accept
+ * `agent_name` unchecked, then `container-runner.ts` joined it to AGENTS_DIR
+ * and mounted the result as `/workspace/agent`. A name containing `..` could
+ * resolve outside AGENTS_DIR, exposing data from other groups.
+ *
+ * Valid: alphanumeric + underscore + hyphen, 1-64 chars, no leading special.
+ * Must resolve to a direct child of AGENTS_DIR.
+ */
+function isValidAgentName(name: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) return false;
+  const resolved = path.resolve(AGENTS_DIR, name);
+  const parent = path.resolve(AGENTS_DIR);
+  return path.dirname(resolved) === parent;
+}
+
+/**
  * Deliver a send_message payload through the appropriate channel path:
  * WebApp button → pool bot with sender prefix → plain main-bot send.
  *
@@ -761,13 +779,28 @@ export async function processTaskIpc(
           data.context_mode === 'group' || data.context_mode === 'isolated'
             ? data.context_mode
             : 'isolated';
+
+        // B5: validate agent_name before it flows into path construction.
+        const rawAgentName = (data as any).agent_name;
+        let agentName: string | null = null;
+        if (rawAgentName) {
+          if (typeof rawAgentName !== 'string' || !isValidAgentName(rawAgentName)) {
+            logger.warn(
+              { sourceGroup, agent_name: rawAgentName },
+              'schedule_task rejected: invalid agent_name',
+            );
+            break;
+          }
+          agentName = rawAgentName;
+        }
+
         createTask({
           id: taskId,
           group_folder: targetFolder,
           chat_jid: targetJid,
           prompt: data.prompt,
           script: data.script || null,
-          agent_name: (data as any).agent_name || null,
+          agent_name: agentName,
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
