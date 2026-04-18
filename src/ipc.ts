@@ -96,6 +96,24 @@ export function clearIpcSend(chatJid: string): void {
 }
 
 /**
+ * Validate an agent name from untrusted IPC input.
+ *
+ * Per B5 of the 2026-04-18 hardening audit: `schedule_task` used to accept
+ * `agent_name` unchecked, then `container-runner.ts` joined it to AGENTS_DIR
+ * and mounted the result as `/workspace/agent`. A name containing `..` could
+ * resolve outside AGENTS_DIR, exposing data from other groups.
+ *
+ * Valid: alphanumeric + underscore + hyphen, 1-64 chars, no leading special.
+ * Must resolve to a direct child of AGENTS_DIR.
+ */
+function isValidAgentName(name: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) return false;
+  const resolved = path.resolve(AGENTS_DIR, name);
+  const parent = path.resolve(AGENTS_DIR);
+  return path.dirname(resolved) === parent;
+}
+
+/**
  * Deliver a send_message payload through the appropriate channel path:
  * WebApp button → pool bot with sender prefix → plain main-bot send.
  *
@@ -716,6 +734,17 @@ export async function processTaskIpc(
           break;
         }
 
+        // A1: Block script-bearing tasks from non-main groups. task.script is
+        // executed by runGuardScript as /bin/bash -c on the host, so accepting
+        // it from non-main would be a direct container escape.
+        if (data.script && !isMain) {
+          logger.warn(
+            { sourceGroup, targetFolder },
+            'schedule_task rejected: script field is main-only',
+          );
+          break;
+        }
+
         const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
 
         let nextRun: string | null = null;
@@ -761,13 +790,31 @@ export async function processTaskIpc(
           data.context_mode === 'group' || data.context_mode === 'isolated'
             ? data.context_mode
             : 'isolated';
+
+        // B5: validate agent_name before it flows into path construction.
+        const rawAgentName = (data as any).agent_name;
+        let agentName: string | null = null;
+        if (rawAgentName) {
+          if (
+            typeof rawAgentName !== 'string' ||
+            !isValidAgentName(rawAgentName)
+          ) {
+            logger.warn(
+              { sourceGroup, agent_name: rawAgentName },
+              'schedule_task rejected: invalid agent_name',
+            );
+            break;
+          }
+          agentName = rawAgentName;
+        }
+
         createTask({
           id: taskId,
           group_folder: targetFolder,
           chat_jid: targetJid,
           prompt: data.prompt,
           script: data.script || null,
-          agent_name: (data as any).agent_name || null,
+          agent_name: agentName,
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
@@ -878,6 +925,18 @@ export async function processTaskIpc(
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task update attempt',
+          );
+          break;
+        }
+
+        // A1: same gate as schedule_task — non-main groups cannot add/modify
+        // the script field via update_task, which would otherwise be a
+        // trivial bypass (create a scriptless task, then update to add the
+        // script).
+        if (data.script !== undefined && !isMain) {
+          logger.warn(
+            { taskId: data.taskId, sourceGroup },
+            'update_task rejected: script field is main-only',
           );
           break;
         }
@@ -1037,20 +1096,33 @@ export async function processTaskIpc(
       }
 
       if (deps.messageBus) {
+        // B3: cap agent-controlled fields at publish time. The bus dispatcher
+        // re-escapes + re-caps (defense in depth), but capping at publish
+        // reduces stored payload and is cheap.
+        const safeSummary =
+          typeof d.summary === 'string' ? d.summary.slice(0, 500) : '';
+        const safeTopic = typeof topic === 'string' ? topic.slice(0, 100) : '';
+        if (safeTopic !== topic) {
+          logger.warn(
+            { topicLen: topic.length },
+            'publish_to_bus: topic truncated to 100 chars',
+          );
+        }
+
         const targetFsKey = `${targetGroup}--${toAgent}`;
         deps.messageBus.writeAgentMessage(targetFsKey, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           from: sourceAgent || sourceGroup,
-          topic,
+          topic: safeTopic,
           priority: d.priority as 'low' | 'medium' | 'high' | undefined,
-          summary: d.summary as string,
+          summary: safeSummary,
           to_agent: toAgent,
           to_group: targetGroup,
           payload: d.payload,
           timestamp: new Date().toISOString(),
         });
         logger.info(
-          { from: sourceAgent, to: toAgent, topic },
+          { from: sourceAgent, to: toAgent, topic: safeTopic },
           'Bus message published via IPC',
         );
       }

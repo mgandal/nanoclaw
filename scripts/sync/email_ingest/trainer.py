@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from email_ingest.secure_write import write_file_secure
 from email_ingest.types import STATE_DIR, GMAIL_TOKEN_FILE
 
 log = logging.getLogger("email-ingest.trainer")
@@ -470,8 +471,14 @@ def build_profile(examples: list[TrainingExample]) -> dict:
 
 
 def save_profile(profile: dict) -> Path:
-    """Write profile and training data to disk."""
+    """Write profile and training data to disk (B8: mode 0o600)."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    PROFILE_FILE.write_text(json.dumps(profile, indent=2))
+    # Profile may reveal per-sender weights and training signal; treat as
+    # sensitive consistent with the rest of the email-ingest state.
+    write_file_secure(
+        PROFILE_FILE,
+        json.dumps(profile, indent=2),
+        mode=0o600,
+    )
     log.info("Profile written to %s", PROFILE_FILE)
     return PROFILE_FILE

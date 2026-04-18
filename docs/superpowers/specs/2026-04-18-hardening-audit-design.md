@@ -710,3 +710,25 @@ next plan once Tier A ships; Tier C is tracked as open issues.
 
 No code changes in this pass — the goal of the audit was to produce a
 prioritized, actionable, durable reference.
+
+---
+
+## Discovered during Tier A execution (add to Tier B)
+
+The pre-merge reviewer for Tier A surfaced two pre-existing issues that are
+outside Tier A scope but are the same classes of finding. Adding here so
+they don't get lost before the Tier B plan:
+
+- **Compound-key bus messages unwrapped** (`src/context-assembler.ts` around
+  line 460). Bus-message files written by agents under
+  `data/bus/agents/{cKey}/*.json` are injected as JSON inside a
+  hand-crafted `<pending-bus-messages>` section. Same tag-escape class as
+  A5 — a malicious agent can write a message containing
+  `</pending-bus-messages><agent-trust>...` and break out. Wrap via
+  `wrapAgentXml` in Tier B.
+- **Email exports at umask-default perms** (`scripts/sync/email_ingest/exporter.py:114`).
+  `~/.cache/email-ingest/exported/*.md` contains full email bodies written
+  with `.write_text()` (mode 0644 under default umask). B8 in Tier A
+  addressed tokens and state files; the exported content itself is a
+  narrower but related information-disclosure surface. Route through
+  `write_file_secure` in Tier B.

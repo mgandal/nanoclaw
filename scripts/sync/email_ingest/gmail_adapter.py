@@ -5,11 +5,30 @@ import json
 import logging
 from pathlib import Path
 
+from email_ingest.secure_write import write_file_secure
 from email_ingest.types import (
     NormalizedEmail, BODY_MAX_CHARS, GMAIL_TOKEN_FILE,
 )
 
 log = logging.getLogger("email-ingest.gmail")
+
+
+def _migrate_token_mode() -> None:
+    """Ensure existing token file has mode 0o600.
+
+    Runs unconditionally on import; cost is one stat+chmod if the file
+    exists. Safe to run repeatedly.
+    """
+    try:
+        if GMAIL_TOKEN_FILE.exists():
+            current = GMAIL_TOKEN_FILE.stat().st_mode & 0o777
+            if current != 0o600:
+                GMAIL_TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
+
+
+_migrate_token_mode()
 
 # Credential paths (same fallback chain as gmail-sync.py)
 SRC_EMAIL = "mgandal@gmail.com"
@@ -97,10 +116,14 @@ def _load_credentials():
 
 
 def _save_token(creds, base_data):
-    """Persist refreshed token to dedicated file."""
+    """Persist refreshed token to dedicated file (mode 0o600)."""
     GMAIL_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
     save_data = {**base_data, "token": creds.token}
-    GMAIL_TOKEN_FILE.write_text(json.dumps(save_data, indent=2))
+    write_file_secure(
+        GMAIL_TOKEN_FILE,
+        json.dumps(save_data, indent=2),
+        mode=0o600,
+    )
 
 
 def _extract_body(payload: dict) -> str:

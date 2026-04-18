@@ -20,7 +20,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# Import sibling email_ingest package (scripts/sync is the parent dir)
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from email_ingest.secure_write import write_file_secure  # noqa: E402
 STATE_FILE = SCRIPT_DIR / "gmail-sync-state.json"
 
 SRC_EMAIL = "mgandal@gmail.com"
@@ -124,10 +127,12 @@ def load_state():
 
 
 def save_state(state):
-    tmp = STATE_FILE.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
-    tmp.replace(STATE_FILE)
+    # mode 0o600 — state contains synced_ids which reveal email activity (B8)
+    write_file_secure(
+        STATE_FILE,
+        json.dumps(state, indent=2),
+        mode=0o600,
+    )
 
 
 def list_new_messages(src_service, after_epoch):
@@ -348,10 +353,14 @@ def main():
             except Exception:
                 pass
 
-        # Write summaries for SimpleMem ingest
+        # Write summaries for SimpleMem ingest — mode 0o600 because
+        # subjects + snippets are sensitive (B8).
         summaries_file = SCRIPT_DIR / "gmail-sync-latest.json"
-        with open(summaries_file, "w") as f:
-            json.dump(summaries, f, indent=2)
+        write_file_secure(
+            summaries_file,
+            json.dumps(summaries, indent=2),
+            mode=0o600,
+        )
         log.info("Wrote %d message summaries to %s", len(summaries), summaries_file)
 
 
