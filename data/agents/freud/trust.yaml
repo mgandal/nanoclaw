@@ -1,0 +1,8 @@
+actions:
+  send_message: autonomous
+  write_agent_memory: autonomous
+  search_literature: autonomous
+  # All other actions (send_email, draft_email, schedule_task, write_vault,
+  # send_slack_dm, publish_to_bus, etc.) fall through to the default 'ask'
+  # — Freud should never be doing those, so requiring explicit approval
+  # is the right guardrail if the model tries.
