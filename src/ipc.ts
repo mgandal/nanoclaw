@@ -929,6 +929,18 @@ export async function processTaskIpc(
           break;
         }
 
+        // A1: same gate as schedule_task — non-main groups cannot add/modify
+        // the script field via update_task, which would otherwise be a
+        // trivial bypass (create a scriptless task, then update to add the
+        // script).
+        if (data.script !== undefined && !isMain) {
+          logger.warn(
+            { taskId: data.taskId, sourceGroup },
+            'update_task rejected: script field is main-only',
+          );
+          break;
+        }
+
         const updates: Parameters<typeof updateTask>[1] = {};
         if (data.prompt !== undefined) updates.prompt = data.prompt;
         if (data.script !== undefined) updates.script = data.script || null;
