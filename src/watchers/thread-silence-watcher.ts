@@ -16,7 +16,13 @@ export interface QmdEmailClient {
 export interface ThreadSilenceConfig {
   qmd: QmdEmailClient;
   onEvent: (event: RawEvent) => void;
+  /** Dedup query: has a silent_thread event been recorded for this threadId
+   * within the emission window (typically 7 days)? */
   hasRecentEmission: (threadId: string) => boolean;
+  /** Dedup marker: called after each emit so subsequent polls see the thread
+   * as recently-emitted. Must write durable state that hasRecentEmission
+   * reads, otherwise dedup is non-functional. */
+  recordEmission: (threadId: string) => void;
   silentThresholdHours?: number;
 }
 
@@ -48,6 +54,7 @@ export class ThreadSilenceWatcher {
           daysSilent: Math.floor(age / 86400_000),
         },
       });
+      this.cfg.recordEmission(t.threadId);
     }
   }
 }

@@ -12,6 +12,11 @@ export interface ProactiveWiringDeps {
   vaultRoots: string[];
   emailExportDir: string;
   hasRecentEmission: (threadId: string) => boolean;
+  /** Called after thread-silence emits an event so subsequent polls
+   * skip the same thread until the dedup window expires. Must be
+   * durable (persists across restarts) — a bare in-memory Set leaks
+   * on restart and the watcher will spam the router again. */
+  recordEmission: (threadId: string) => void;
   sendDeferred: (s: {
     toGroup: string;
     text: string;
@@ -71,6 +76,7 @@ export function wireProactiveWatchers(deps: ProactiveWiringDeps): {
       void deps.eventRouter.route(e);
     },
     hasRecentEmission: deps.hasRecentEmission,
+    recordEmission: deps.recordEmission,
   });
   const deferred = new DeferredSendProcessor({
     send: deps.sendDeferred,

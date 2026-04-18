@@ -23,6 +23,7 @@ describe('ThreadSilenceWatcher', () => {
       qmd: qmd as any,
       onEvent: emit,
       hasRecentEmission: () => false,
+      recordEmission: vi.fn(),
     });
     await w.poll();
     expect(emit).toHaveBeenCalled();
@@ -57,6 +58,7 @@ describe('ThreadSilenceWatcher', () => {
       qmd: qmd as any,
       onEvent: emit,
       hasRecentEmission: () => false,
+      recordEmission: vi.fn(),
     });
     await w.poll();
     expect(emit).not.toHaveBeenCalled();
@@ -83,9 +85,66 @@ describe('ThreadSilenceWatcher', () => {
       qmd: qmd as any,
       onEvent: emit,
       hasRecentEmission: () => false,
+      recordEmission: vi.fn(),
     });
     await w.poll();
     expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('calls recordEmission with threadId after emitting', async () => {
+    const qmd = {
+      queryThreads: vi.fn().mockResolvedValue([
+        {
+          threadId: 't-dedup',
+          messages: [
+            {
+              direction: 'inbound',
+              from: 'x',
+              subject: 's',
+              timestamp: new Date(Date.now() - 3 * 86400_000).toISOString(),
+            },
+          ],
+        },
+      ]),
+    };
+    const emit = vi.fn();
+    const recordEmission = vi.fn();
+    const w = new ThreadSilenceWatcher({
+      qmd: qmd as any,
+      onEvent: emit,
+      hasRecentEmission: () => false,
+      recordEmission,
+    });
+    await w.poll();
+    expect(emit).toHaveBeenCalled();
+    expect(recordEmission).toHaveBeenCalledWith('t-dedup');
+  });
+
+  it('does not call recordEmission when thread does not qualify', async () => {
+    const qmd = {
+      queryThreads: vi.fn().mockResolvedValue([
+        {
+          threadId: 't-fresh',
+          messages: [
+            {
+              direction: 'inbound',
+              from: 'x',
+              subject: 's',
+              timestamp: new Date(Date.now() - 1 * 3600_000).toISOString(),
+            },
+          ],
+        },
+      ]),
+    };
+    const recordEmission = vi.fn();
+    const w = new ThreadSilenceWatcher({
+      qmd: qmd as any,
+      onEvent: vi.fn(),
+      hasRecentEmission: () => false,
+      recordEmission,
+    });
+    await w.poll();
+    expect(recordEmission).not.toHaveBeenCalled();
   });
 
   it('dedup: skips when recent emission exists', async () => {
@@ -109,6 +168,7 @@ describe('ThreadSilenceWatcher', () => {
       qmd: qmd as any,
       onEvent: emit,
       hasRecentEmission: () => true,
+      recordEmission: vi.fn(),
     });
     await w.poll();
     expect(emit).not.toHaveBeenCalled();

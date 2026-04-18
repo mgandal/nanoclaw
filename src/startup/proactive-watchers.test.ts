@@ -16,6 +16,7 @@ describe('wireProactiveWatchers', () => {
       vaultRoots: [],
       emailExportDir: '/nonexistent',
       hasRecentEmission: () => false,
+      recordEmission: () => {},
       sendDeferred: async () => {},
     });
     expect(typeof handle.stop).toBe('function');
@@ -31,6 +32,7 @@ describe('wireProactiveWatchers', () => {
       vaultRoots: [],
       emailExportDir: '/nonexistent',
       hasRecentEmission: () => false,
+      recordEmission: () => {},
       sendDeferred: async () => {},
     });
     expect(typeof handle.stop).toBe('function');

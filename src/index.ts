@@ -1534,13 +1534,20 @@ async function main(): Promise<void> {
 
   restoreRemoteControl();
 
+  // Proactive-watchers stop handle. Declared early so the shutdown closure
+  // below can capture it without a TDZ hazard: the handlers are registered
+  // synchronously in this tick, but SIGTERM arriving before the actual
+  // assignment at wireProactiveWatchers() time would otherwise crash.
+  // `stop` is called via optional chaining, so the null initializer is safe.
+  let proactiveHandle: { stop: () => void } | null = null;
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
     // 1. Stop bus watcher
     busWatcher?.stop();
     // 1a. Stop proactive watchers (cheap, synchronous)
-    proactiveHandle.stop();
+    proactiveHandle?.stop();
     // 2. Stop accepting new work (signals containers to wind down)
     await queue.shutdown(15000);
     // 3. Now close proxy and channels (containers are done)
@@ -1820,8 +1827,10 @@ async function main(): Promise<void> {
 
   // Proactive watchers (vault delta, task outcome, thread silence, deferred
   // send processor). No-op when PROACTIVE_WATCHERS_ENABLED=false (default) or
-  // when the event router is disabled.
-  const proactiveHandle = eventRouter
+  // when the event router is disabled. `proactiveHandle` is declared earlier
+  // (above the shutdown handler) as null; we assign here once the dependencies
+  // are ready. The shutdown closure calls stop via ?. so early SIGTERM is safe.
+  proactiveHandle = eventRouter
     ? wireProactiveWatchers({
         eventRouter,
         vaultRoots: deriveVaultRoots(),
@@ -1833,6 +1842,33 @@ async function main(): Promise<void> {
               `SELECT 1 FROM proactive_log WHERE correlation_id = ? AND timestamp >= ? LIMIT 1`,
             )
             .get(`silent_thread:${threadId}`, cutoff);
+        },
+        recordEmission: (threadId) => {
+          // Write a sentinel row so hasRecentEmission matches on subsequent
+          // polls for the next 7 days. Uses a 'drop' decision with a
+          // watcher-specific reason so it never interacts with governor
+          // dedup (which only matches rows with dispatched_at or
+          // delivered_at set — these remain NULL for sentinels).
+          try {
+            getDb()
+              .prepare(
+                `INSERT INTO proactive_log
+                  (timestamp, from_agent, to_group, decision, reason,
+                   correlation_id, message_preview, contributing_events)
+                  VALUES (?, ?, ?, 'drop', 'watcher_dedup_marker', ?, NULL, '[]')`,
+              )
+              .run(
+                new Date().toISOString(),
+                'thread-silence-watcher',
+                '',
+                `silent_thread:${threadId}`,
+              );
+          } catch (err) {
+            logger.warn(
+              { err, threadId },
+              'failed to record silent-thread emission marker',
+            );
+          }
         },
         sendDeferred: async (s) => {
           await deliverSendMessage(
