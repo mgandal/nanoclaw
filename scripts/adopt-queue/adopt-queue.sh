@@ -70,10 +70,39 @@ cmd_list() {
   fi
 }
 
+cmd_show() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: $(basename "$0") show <id>"
+  local file="$PENDING_DIR/$id.md"
+  if [[ ! -f "$file" ]]; then
+    echo "No pending item: $id. Try: $(basename "$0") list" >&2
+    exit 1
+  fi
+  local url verdict queued_at
+  url=$(get_field "$file" "url")
+  verdict=$(get_field "$file" "verdict")
+  queued_at=$(get_field "$file" "queued_at")
+
+  echo "=== $id ==="
+  printf "  URL:     %s\n" "$url"
+  printf "  Verdict: %s\n" "$verdict"
+  printf "  Queued:  %s\n" "$queued_at"
+  echo
+  awk '
+    BEGIN { fm_seen=0; in_fm=0 }
+    /^---$/ {
+      if (!fm_seen) { in_fm=1; fm_seen=1; next }
+      else if (in_fm) { in_fm=0; next }
+    }
+    !in_fm && fm_seen { print }
+  ' "$file"
+}
+
 cmd="${1:-}"
 shift || true
 case "$cmd" in
   list)   cmd_list ;;
+  show)   cmd_show "$@" ;;
   "")     die "usage: $(basename "$0") {list|show|clone|done} [args]" ;;
   *)      die "unknown subcommand: $cmd" ;;
 esac

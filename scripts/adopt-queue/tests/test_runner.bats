@@ -33,3 +33,22 @@ teardown() { teardown_queue; }
   older_line=$(echo "$output" | grep -n "older" | head -1 | cut -d: -f1)
   [ "$newer_line" -lt "$older_line" ]
 }
+
+@test "show: prints header + full body for given id" {
+  seed_pending "datasette" "ADOPT" "simonw/datasette" "2026-04-17"
+  run "$RUNNER" show datasette
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"=== datasette ==="* ]]
+  [[ "$output" == *"URL:"* ]]
+  [[ "$output" == *"https://github.com/simonw/datasette"* ]]
+  [[ "$output" == *"Verdict:"* ]]
+  [[ "$output" == *"ADOPT"* ]]
+  [[ "$output" == *"Test fixture."* ]]
+}
+
+@test "show: exits nonzero with helpful message when id not found" {
+  run "$RUNNER" show nonexistent
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No pending item: nonexistent"* ]]
+  [[ "$output" == *"list"* ]]
+}
