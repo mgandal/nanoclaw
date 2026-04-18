@@ -77,3 +77,64 @@ teardown() { teardown_queue; }
   [ "$status" -ne 0 ]
   [[ "$output" == *"No pending item: nonexistent"* ]]
 }
+
+@test "clone: invokes git clone with url and target path" {
+  seed_pending "datasette" "ADOPT" "simonw/datasette" "2026-04-17"
+
+  git_log="$ADOPT_QUEUE_ROOT/git.log"
+  git_stub="$ADOPT_QUEUE_ROOT/git-stub.sh"
+  cat > "$git_stub" <<STUB
+#!/bin/bash
+echo "\$@" > "$git_log"
+mkdir -p "\${@: -1}"
+STUB
+  chmod +x "$git_stub"
+
+  export GIT_BIN="$git_stub"
+  export ADOPT_CLONE_ROOT="$ADOPT_QUEUE_ROOT/src-adopt"
+
+  run "$RUNNER" clone datasette
+  [ "$status" -eq 0 ]
+  [ -f "$git_log" ]
+  logged=$(cat "$git_log")
+  [[ "$logged" == *"clone"* ]]
+  [[ "$logged" == *"https://github.com/simonw/datasette"* ]]
+  [[ "$logged" == *"datasette"* ]]
+}
+
+@test "clone: prints install commands from frontmatter after cloning" {
+  cat > "$ADOPT_QUEUE_ROOT/pending/mylib.md" <<EOF
+---
+id: mylib
+url: https://github.com/ex/mylib
+verdict: ADOPT
+repo_name: mylib
+queued_at: 2026-04-18T12:00:00Z
+status: pending
+install_commands:
+  - pip install -e .
+  - pytest tests/
+---
+
+body
+EOF
+
+  git_stub="$ADOPT_QUEUE_ROOT/git-stub.sh"
+  cat > "$git_stub" <<STUB
+#!/bin/bash
+mkdir -p "\${@: -1}"
+STUB
+  chmod +x "$git_stub"
+  export GIT_BIN="$git_stub"
+  export ADOPT_CLONE_ROOT="$ADOPT_QUEUE_ROOT/src-adopt"
+
+  run "$RUNNER" clone mylib
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"pip install -e ."* ]]
+  [[ "$output" == *"pytest tests/"* ]]
+}
+
+@test "clone: exits nonzero when id not found" {
+  run "$RUNNER" clone nonexistent
+  [ "$status" -ne 0 ]
+}

@@ -131,11 +131,59 @@ cmd_done() {
   echo "Archived $id."
 }
 
+get_install_commands() {
+  local file="$1"
+  awk '
+    BEGIN { in_fm=0; in_list=0 }
+    /^---$/ { in_fm = !in_fm; in_list=0; next }
+    !in_fm { exit }
+    /^install_commands:/ { in_list=1; next }
+    in_list && /^  - / { sub("^  - ", ""); print; next }
+    in_list && /^[^ ]/ { in_list=0 }
+  ' "$file"
+}
+
+cmd_clone() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: $(basename "$0") clone <id>"
+  local file="$PENDING_DIR/$id.md"
+  if [[ ! -f "$file" ]]; then
+    echo "No pending item: $id. Try: $(basename "$0") list" >&2
+    exit 1
+  fi
+
+  local url repo_name
+  url=$(get_field "$file" "url")
+  repo_name=$(get_field "$file" "repo_name")
+  [[ -n "$repo_name" ]] || repo_name="$id"
+
+  local clone_root="${ADOPT_CLONE_ROOT:-$HOME/src/adopt}"
+  local target="$clone_root/$repo_name"
+  mkdir -p "$clone_root"
+
+  local git_bin="${GIT_BIN:-git}"
+  echo "Cloning $url → $target"
+  "$git_bin" clone "$url" "$target"
+
+  local cmds
+  cmds=$(get_install_commands "$file")
+  if [[ -n "$cmds" ]]; then
+    echo
+    echo "Next steps (from the queue item):"
+    while IFS= read -r cmd; do
+      echo "  $cmd"
+    done <<< "$cmds"
+  fi
+  echo
+  echo "Repo: $target"
+}
+
 cmd="${1:-}"
 shift || true
 case "$cmd" in
   list)   cmd_list ;;
   show)   cmd_show "$@" ;;
+  clone)  cmd_clone "$@" ;;
   done)   cmd_done "$@" ;;
   "")     die "usage: $(basename "$0") {list|show|clone|done} [args]" ;;
   *)      die "unknown subcommand: $cmd" ;;
