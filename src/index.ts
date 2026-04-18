@@ -80,6 +80,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher, hasRecentIpcSend, clearIpcSend } from './ipc.js';
+import { backfillReaction } from './proactive-log.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
@@ -1601,6 +1602,30 @@ async function main(): Promise<void> {
         storeMessage(msg);
       } catch (err) {
         logger.error({ err, chatJid }, 'Failed to store message');
+      }
+
+      // Proactive reaction backfill: if this is a user reply in the main
+      // group and a recent daily-review digest was delivered here, tag
+      // that log row with the reply text for calibration tracking.
+      if (
+        msg.is_from_me === true &&
+        !msg.is_bot_message &&
+        msg.content &&
+        registeredGroups[chatJid]?.isMain
+      ) {
+        try {
+          backfillReaction(
+            chatJid,
+            /^task:proactive-daily-review:/,
+            'reply',
+            msg.content,
+          );
+        } catch (err) {
+          logger.debug(
+            { err, chatJid },
+            'proactive reaction backfill failed (non-fatal)',
+          );
+        }
       }
     },
     onChatMetadata: (
