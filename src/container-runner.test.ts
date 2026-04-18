@@ -52,6 +52,7 @@ vi.mock('fs', async () => {
       cpSync: vi.fn(),
       renameSync: vi.fn(),
       unlinkSync: vi.fn(),
+      rmSync: vi.fn(),
     },
   };
 });

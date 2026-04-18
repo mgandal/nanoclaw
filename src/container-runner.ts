@@ -83,6 +83,78 @@ function redactContainerArgs(args: string[]): string[] {
   });
 }
 
+/**
+ * Inspect a skill directory's SKILL.md frontmatter. Return false if it
+ * declares Bash in `allowed-tools`. Conservative parse: any frontmatter
+ * line matching /allowed-tools.*Bash/i rejects the skill.
+ *
+ * Per A2 of the 2026-04-18 hardening audit.
+ */
+function isGroupSkillAllowed(skillDir: string): boolean {
+  const skillMd = path.join(skillDir, 'SKILL.md');
+  if (!fs.existsSync(skillMd)) return true;
+  const content = fs.readFileSync(skillMd, 'utf-8');
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return true;
+  const frontmatter = fmMatch[1];
+  if (/allowed-tools[^\n]*\bBash\b/i.test(frontmatter)) return false;
+  return true;
+}
+
+/**
+ * Sync skills from container/skills/ and groups/{folder}/skills/ into the
+ * group's session dir. Hardened per A2 of the 2026-04-18 audit:
+ *   1. Destination is wiped before sync so agent-written skills from prior
+ *      spawns do not persist across container restarts.
+ *   2. Group skills are synced FIRST, container skills LAST — so a group
+ *      cannot shadow a built-in by name.
+ *   3. Group skills whose frontmatter declares `allowed-tools` containing
+ *      Bash are rejected (operator must vet Bash-capable skills out-of-band).
+ */
+export function syncSkillsForGroup(
+  groupDir: string,
+  sessionsDir: string,
+): void {
+  const skillsDst = path.join(sessionsDir, 'skills');
+
+  // (1) Wipe destination to purge stale agent-written skills.
+  if (fs.existsSync(skillsDst)) {
+    fs.rmSync(skillsDst, { recursive: true, force: true });
+  }
+  fs.mkdirSync(skillsDst, { recursive: true });
+
+  // (2a) Group skills FIRST, with the Bash-frontmatter filter.
+  const groupSkillsSrc = path.join(groupDir, 'skills');
+  if (fs.existsSync(groupSkillsSrc)) {
+    for (const skillDir of fs.readdirSync(groupSkillsSrc)) {
+      const srcDir = path.join(groupSkillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      if (!isGroupSkillAllowed(srcDir)) {
+        logger.warn(
+          { skill: skillDir, groupDir },
+          'Group skill rejected: allowed-tools frontmatter contains Bash',
+        );
+        continue;
+      }
+      fs.cpSync(srcDir, path.join(skillsDst, skillDir), { recursive: true });
+    }
+  }
+
+  // (2b) Container skills LAST — overwrite any group skill with the same name.
+  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  if (fs.existsSync(skillsSrc)) {
+    for (const skillDir of fs.readdirSync(skillsSrc)) {
+      const srcDir = path.join(skillsSrc, skillDir);
+      if (!fs.statSync(srcDir).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, skillDir);
+      if (fs.existsSync(dstDir)) {
+        fs.rmSync(dstDir, { recursive: true, force: true });
+      }
+      fs.cpSync(srcDir, dstDir, { recursive: true });
+    }
+  }
+}
+
 export interface ContainerInput {
   prompt: string;
   sessionId?: string;
@@ -206,29 +278,9 @@ export function buildVolumeMounts(
     );
   }
 
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
-
-  // Sync group-level skills (from groups/{folder}/skills/) into the session dir.
-  // Runs AFTER container skills so group-specific skills override global ones.
-  const groupSkillsSrc = path.join(groupDir, 'skills');
-  if (fs.existsSync(groupSkillsSrc)) {
-    for (const skillDir of fs.readdirSync(groupSkillsSrc)) {
-      const srcDir = path.join(groupSkillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
+  // A2: hardened skills sync — wipe dst, group first, container last, and
+  // reject group skills that declare Bash. See syncSkillsForGroup below.
+  syncSkillsForGroup(groupDir, groupSessionsDir);
 
   mounts.push({
     hostPath: groupSessionsDir,
