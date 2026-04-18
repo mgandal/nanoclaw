@@ -52,3 +52,28 @@ teardown() { teardown_queue; }
   [[ "$output" == *"No pending item: nonexistent"* ]]
   [[ "$output" == *"list"* ]]
 }
+
+@test "done: moves pending file to archive with date suffix" {
+  seed_pending "old-tool" "STEAL" "ex/old-tool" "2026-04-18"
+  run "$RUNNER" done old-tool
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Archived old-tool"* ]]
+  [ ! -f "$ADOPT_QUEUE_ROOT/pending/old-tool.md" ]
+  archived=$(ls "$ADOPT_QUEUE_ROOT/archive/" | grep "^old-tool-" | head -1)
+  [ -n "$archived" ]
+}
+
+@test "done: archived file has status done and done_at set" {
+  seed_pending "old-tool" "ADOPT" "ex/old-tool" "2026-04-18"
+  run "$RUNNER" done old-tool
+  archived=$(ls "$ADOPT_QUEUE_ROOT/archive/" | grep "^old-tool-" | head -1)
+  content=$(cat "$ADOPT_QUEUE_ROOT/archive/$archived")
+  [[ "$content" == *"status: done"* ]]
+  [[ "$content" == *"done_at:"* ]]
+}
+
+@test "done: exits nonzero when id not in pending" {
+  run "$RUNNER" done nonexistent
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"No pending item: nonexistent"* ]]
+}

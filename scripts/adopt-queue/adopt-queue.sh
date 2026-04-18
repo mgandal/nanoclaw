@@ -98,11 +98,45 @@ cmd_show() {
   ' "$file"
 }
 
+cmd_done() {
+  local id="${1:-}"
+  [[ -n "$id" ]] || die "usage: $(basename "$0") done <id>"
+  local file="$PENDING_DIR/$id.md"
+  if [[ ! -f "$file" ]]; then
+    echo "No pending item: $id. Try: $(basename "$0") list" >&2
+    exit 1
+  fi
+
+  local today; today=$(date +%Y%m%d)
+  local done_at; done_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local dest="$ARCHIVE_DIR/$id-$today.md"
+
+  mkdir -p "$ARCHIVE_DIR"
+  local tmp; tmp=$(mktemp)
+  awk -v done_at="$done_at" '
+    BEGIN { in_fm=0; added=0 }
+    /^---$/ {
+      if (!in_fm) { in_fm=1; print; next }
+      else {
+        if (!added) { print "done_at: " done_at; added=1 }
+        in_fm=0; print; next
+      }
+    }
+    in_fm && $1 == "status:" { print "status: done"; next }
+    { print }
+  ' "$file" > "$tmp"
+
+  mv "$tmp" "$dest"
+  rm "$file"
+  echo "Archived $id."
+}
+
 cmd="${1:-}"
 shift || true
 case "$cmd" in
   list)   cmd_list ;;
   show)   cmd_show "$@" ;;
+  done)   cmd_done "$@" ;;
   "")     die "usage: $(basename "$0") {list|show|clone|done} [args]" ;;
   *)      die "unknown subcommand: $cmd" ;;
 esac
