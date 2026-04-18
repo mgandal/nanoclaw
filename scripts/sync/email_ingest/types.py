@@ -67,7 +67,14 @@ class IngestState:
         self.processed_gmail_ids = self.processed_gmail_ids[-MAX_PROCESSED_IDS:]
         self.processed_exchange_ids = self.processed_exchange_ids[-MAX_PROCESSED_IDS:]
         self.last_run = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        STATE_FILE.write_text(json.dumps(self.__dict__, indent=2))
+        # B8: mode 0o600 — state includes processed message IDs revealing
+        # email activity. Import here to avoid circular import.
+        from email_ingest.secure_write import write_file_secure
+        write_file_secure(
+            STATE_FILE,
+            json.dumps(self.__dict__, indent=2),
+            mode=0o600,
+        )
 
     def default_epoch(self, days_back: int = 14) -> int:
         """Return epoch for N days ago, used for first run."""

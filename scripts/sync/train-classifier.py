@@ -18,6 +18,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from email_ingest.secure_write import write_file_secure
 from email_ingest.types import STATE_DIR
 from email_ingest.trainer import (
     collect_exchange_data,
@@ -106,9 +107,14 @@ def main():
         log.warning("Dataset too small (%d < %d). Need more email history.", len(combined), MIN_DATASET_SIZE)
         sys.exit(1)
 
-    # Save raw training data for debugging
+    # Save raw training data for debugging (B8: mode 0o600 — contains
+    # labeled email subjects/senders, sensitive).
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    TRAINING_DATA_FILE.write_text(json.dumps([asdict(e) for e in combined], indent=2))
+    write_file_secure(
+        TRAINING_DATA_FILE,
+        json.dumps([asdict(e) for e in combined], indent=2),
+        mode=0o600,
+    )
     log.info("Training data saved to %s", TRAINING_DATA_FILE)
 
     profile = build_profile(combined)
