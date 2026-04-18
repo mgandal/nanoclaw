@@ -61,8 +61,35 @@ Messages and task operations are verified against group identity:
 | Send message to other chats | ✓ | ✗ |
 | Schedule task for self | ✓ | ✓ |
 | Schedule task for others | ✓ | ✗ |
+| Schedule task with host `script` | ✓ | ✗ (A1) |
 | View all tasks | ✓ | Own only |
 | Manage other groups | ✓ | ✗ |
+
+### Actions with trust-enforcement gates
+
+The `checkTrust` + `pending_actions` pipeline (trust.yaml per-agent) gates:
+
+- `send_message` (since 2026-03-21 audit)
+- `send_slack_dm` (since multi-agent work)
+
+Tier B of the 2026-04-18 audit will extend coverage to
+`knowledge_publish`, `publish_to_bus`, `save_skill`, `deploy_mini_app`,
+`kg_query`, `dashboard_query`, `write_agent_memory`, and
+`write_agent_state`. Until then, these actions rely on main-only gates
+and/or payload validation. Notable payload hardening from 2026-04-18:
+
+- `schedule_task.agent_name` is regex-validated and must resolve to a
+  direct child of `data/agents/` (B5).
+- `publish_to_bus.summary` capped at 500 chars, `topic` at 100; the bus
+  dispatcher XML-escapes and wraps every field in `<bus-message>` (B3).
+- Group `skills/` syncs *after* the destination is wiped, *before*
+  container skills, and rejects any skill whose frontmatter declares
+  `allowed-tools: Bash` (A2).
+- Inbound email body and classification snippets are wrapped in
+  `<untrusted_email_body>` fences at both ingest and retrieval (A3).
+- Agent `memory.md` Session Continuity and `hot.md` are wrapped in
+  `<agent-memory-continuity>` / `<agent-memory-hot>` tags to prevent
+  self-memory tag forgery (A5).
 
 ### 5. Credential Isolation (OneCLI Agent Vault)
 
@@ -82,6 +109,26 @@ Each NanoClaw group gets its own OneCLI agent identity. This allows different cr
 - Mount allowlist — external, never mounted
 - Any credentials matching blocked patterns
 - `.env` is shadowed with `/dev/null` in the project root mount
+
+### Known credential exceptions
+
+The following credentials DO enter containers today. Each is a deliberate
+trade-off, logged here so the threat model stays honest:
+
+| Credential | Scope | Rationale |
+|------------|-------|-----------|
+| `~/.gmail-mcp/*` | Main: rw; non-main: ro | Gmail MCP inside container needs refresh rotation. Tier B will route through a host bridge. |
+| `~/.paperclip/credentials.json` | All groups: rw | Paperclip CLI rotates `id_token` per call but `refresh_token` is long-lived. Tier B will either move refresh to host or add a `send_file` blocklist. |
+| Secondary env tokens (`GITHUB_TOKEN`, `SUPADATA_API_KEY`, `READWISE_ACCESS_TOKEN`) | Main, or non-main groups listed in `containerConfig.allowedSecrets` | Opt-in per group; main group gets all. |
+
+### Scheduled-task guard scripts (A1, 2026-04-18)
+
+`schedule_task` accepts an optional `script` field that runs on the host as
+`/bin/bash -c <script>` before spawning the agent container. As of the
+2026-04-18 audit, this path is **gated to the main group only** — non-main
+`schedule_task` calls with a `script` field are rejected at the IPC boundary.
+Every guard-script execution emits an audit log entry (`"Guard script
+executed"`) with a 500-char preview of the script content.
 
 ## Privilege Comparison
 
