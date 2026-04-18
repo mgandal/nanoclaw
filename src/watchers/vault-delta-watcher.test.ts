@@ -22,9 +22,10 @@ describe('VaultDeltaWatcher', () => {
       coalesceMs: 30,
     });
     w.start();
+    await new Promise((r) => setTimeout(r, 50));
     fs.mkdirSync(path.join(tmp, '99-wiki/papers'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '99-wiki/papers/foo.md'), 'x');
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 400));
     expect(emit).toHaveBeenCalled();
     const ev = emit.mock.calls.at(-1)![0];
     expect(ev.type).toBe('vault_change');
@@ -42,12 +43,14 @@ describe('VaultDeltaWatcher', () => {
       coalesceMs: 100,
     });
     w.start();
+    await new Promise((r) => setTimeout(r, 50));
     fs.mkdirSync(path.join(tmp, '10-daily'), { recursive: true });
     for (let i = 0; i < 5; i++) {
       fs.writeFileSync(path.join(tmp, '10-daily/a.md'), String(i));
       await new Promise((r) => setTimeout(r, 5));
     }
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(emit).toHaveBeenCalled();
     expect(emit.mock.calls.length).toBeLessThanOrEqual(2);
     const last = emit.mock.calls.at(-1)![0];
     expect(last.payload.coalescedCount).toBeGreaterThan(1);
@@ -62,9 +65,12 @@ describe('VaultDeltaWatcher', () => {
       coalesceMs: 30,
     });
     w.start();
+    // fs.watch on macOS needs a tick to settle before picking up events.
+    await new Promise((r) => setTimeout(r, 50));
     fs.mkdirSync(path.join(tmp, 'agents/output'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'agents/output/x.md'), 'x');
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(emit).toHaveBeenCalled();
     const ev = emit.mock.calls.at(-1)![0];
     expect(ev.payload.author).toBe('agent');
     w.stop();
