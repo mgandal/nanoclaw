@@ -278,3 +278,69 @@ describe('parseSignalStyles — offset tracking with mixed content', () => {
     expect(textStyle[2]).toEqual({ style: 'ITALIC', start: 25, length: 4 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 14. GFM markdown tables → monospace code block (telegram/whatsapp/slack)
+// ---------------------------------------------------------------------------
+describe('parseTextStyles — GFM tables', () => {
+  const table = [
+    '| Category | Default | Override condition |',
+    '|---|---|---|',
+    '| Peer review | No | Journal is Nature |',
+    '| Speaking invite | No | Directly relevant |',
+  ].join('\n');
+
+  it('wraps a GFM table in a fenced code block on telegram', () => {
+    const result = parseTextStyles(table, 'telegram');
+    expect(result.startsWith('```')).toBe(true);
+    expect(result.endsWith('```')).toBe(true);
+    // No raw pipe-separator rows should survive in the output
+    expect(result).not.toMatch(/^\|---/m);
+  });
+
+  it('pads columns so rows align in monospace on telegram', () => {
+    const result = parseTextStyles(table, 'telegram');
+    const lines = result.split('\n').filter((l) => !l.startsWith('```'));
+    // All rendered rows should be the same visual width
+    const widths = new Set(lines.map((l) => l.length));
+    expect(widths.size).toBe(1);
+  });
+
+  it('preserves header text in the rendered table', () => {
+    const result = parseTextStyles(table, 'telegram');
+    expect(result).toContain('Category');
+    expect(result).toContain('Peer review');
+    expect(result).toContain('Journal is Nature');
+  });
+
+  it('works the same for whatsapp and slack', () => {
+    const wa = parseTextStyles(table, 'whatsapp');
+    const sl = parseTextStyles(table, 'slack');
+    expect(wa.startsWith('```')).toBe(true);
+    expect(sl.startsWith('```')).toBe(true);
+  });
+
+  it('leaves surrounding prose alone and still converts markdown', () => {
+    const input = `**Before**\n\n${table}\n\n**After**`;
+    const result = parseTextStyles(input, 'telegram');
+    expect(result).toContain('*Before*');
+    expect(result).toContain('*After*');
+    expect(result).toContain('```');
+  });
+
+  it('does not touch tables inside existing fenced code blocks', () => {
+    const input = '```\n| a | b |\n|---|---|\n| 1 | 2 |\n```';
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+
+  it('ignores single-pipe lines that are not real tables', () => {
+    const input = 'run `a | b` in the shell';
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+
+  it('requires the separator row to treat pipes as a table', () => {
+    const input = '| one | two |\n| three | four |';
+    // No |---| separator → not a table, leave as-is
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+});

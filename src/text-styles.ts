@@ -26,8 +26,13 @@ export function parseTextStyles(text: string, channel: ChannelType): string {
   // Discord is already Markdown; Signal uses parseSignalStyles() for rich text.
   if (channel === 'discord' || channel === 'signal') return text;
 
+  // Tables render as raw pipes on WhatsApp/Telegram/Slack, so fold them into
+  // monospace code blocks FIRST — outside any existing fenced code block, which
+  // is already a code region and may legitimately contain pipe-looking lines.
+  const detabled = foldTablesOutsideCode(text);
+
   // Split into protected (code) and unprotected regions, transform only the latter.
-  const segments = splitProtectedRegions(text);
+  const segments = splitProtectedRegions(detabled);
   return segments
     .map(({ content, protected: isProtected }) =>
       isProtected ? content : transformSegment(content, channel),
@@ -334,4 +339,82 @@ function transformSegment(text: string, channel: ChannelType): string {
   t = t.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
 
   return t;
+}
+
+// ---------------------------------------------------------------------------
+// GFM table folding (WhatsApp / Telegram / Slack have no native table rendering)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan text outside fenced code blocks and replace GFM tables with a fenced
+ * monospace block whose columns are space-padded so rows align on a fixed-width
+ * font — the best visual approximation Telegram/WhatsApp/Slack can render.
+ */
+function foldTablesOutsideCode(text: string): string {
+  const FENCE = /```[\s\S]*?```/g;
+  const out: string[] = [];
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = FENCE.exec(text)) !== null) {
+    out.push(foldTables(text.slice(cursor, m.index)));
+    out.push(m[0]);
+    cursor = m.index + m[0].length;
+  }
+  out.push(foldTables(text.slice(cursor)));
+  return out.join('');
+}
+
+const SEPARATOR_ROW = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+function foldTables(chunk: string): string {
+  if (!chunk.includes('|')) return chunk;
+  const lines = chunk.split('\n');
+  const result: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const header = lines[i];
+    const sep = lines[i + 1];
+    if (isTableRow(header) && sep !== undefined && SEPARATOR_ROW.test(sep)) {
+      let last = i + 2;
+      while (last < lines.length && isTableRow(lines[last])) last++;
+      const rows = [header, ...lines.slice(i + 2, last)].map(splitRow);
+      result.push(renderTable(rows));
+      i = last - 1;
+    } else {
+      result.push(header);
+    }
+  }
+  return result.join('\n');
+}
+
+function isTableRow(line: string | undefined): boolean {
+  if (line === undefined) return false;
+  const trimmed = line.trim();
+  if (!trimmed.includes('|')) return false;
+  const cells = splitRow(trimmed);
+  return cells.length >= 2;
+}
+
+function splitRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.trim());
+}
+
+function renderTable(rows: string[][]): string {
+  const cols = Math.max(...rows.map((r) => r.length));
+  const widths = Array.from({ length: cols }, (_, c) =>
+    Math.max(...rows.map((r) => (r[c] ?? '').length)),
+  );
+  const body = rows.map((r) =>
+    widths
+      .map((w, c) => (r[c] ?? '').padEnd(w))
+      .join('  ')
+      .trimEnd(),
+  );
+  const maxLen = Math.max(...body.map((l) => l.length));
+  const padded = body.map((l) => l.padEnd(maxLen));
+  return ['```', ...padded, '```'].join('\n');
 }
