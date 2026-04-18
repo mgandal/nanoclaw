@@ -29,35 +29,35 @@ echo ""
 
 # --- Step 1: Exchange email sync (DISABLED — migration complete) ---
 echo ""
-echo "[1/9] Exchange email sync... SKIPPED (migration complete, requires Full Disk Access)"
+echo "[1/10] Exchange email sync... SKIPPED (migration complete, requires Full Disk Access)"
 
 # --- Step 2: Gmail sync (mgandal → mikejg1838) ---
 echo ""
-echo "[2/9] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
+echo "[2/10] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
 $PYTHON3 "$SCRIPT_DIR/gmail-sync.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[2/9] WARNING: Gmail sync had errors (exit $EC)"
+    echo "[2/10] WARNING: Gmail sync had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- Step 3: Email knowledge ingestion ---
 echo ""
-echo "[3/9] Email knowledge ingestion..."
+echo "[3/10] Email knowledge ingestion..."
 $PYTHON3 "$SCRIPT_DIR/email-ingest.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[3/9] WARNING: Email ingest had errors (exit $EC)"
+    echo "[3/10] WARNING: Email ingest had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
 # --- Step 4: Calendar sync (DISABLED — causes repeated email notifications) ---
 echo ""
-echo "[4/9] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
+echo "[4/10] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
 
 # --- Step 5: Apple Notes re-export to markdown ---
 echo ""
-echo "[5/9] Apple Notes re-export..."
+echo "[5/10] Apple Notes re-export..."
 EXPORT_SCRIPT="$HOME/.cache/apple-notes-mcp/export-notes.js"
 if [ -f "$EXPORT_SCRIPT" ]; then
     osascript -e 'tell application "Notes" to activate' 2>/dev/null
@@ -66,20 +66,20 @@ if [ -f "$EXPORT_SCRIPT" ]; then
     EC=$?
     osascript -e 'tell application "Notes" to quit' 2>/dev/null
     if [ $EC -ne 0 ]; then
-        echo "[5/9] WARNING: Apple Notes export had errors (exit $EC)"
+        echo "[5/10] WARNING: Apple Notes export had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[5/9] SKIP: export-notes.js not found"
+    echo "[5/10] SKIP: export-notes.js not found"
 fi
 
 # ─── Step 6: Skill catalog refresh ───
 echo ""
-echo "=== [6/9] Skill catalog refresh ==="
+echo "=== [6/10] Skill catalog refresh ==="
 bash "$SCRIPT_DIR/skill-catalog-sync.sh"
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[6/9] WARNING: Skill catalog sync had errors (exit $EC)"
+    echo "[6/10] WARNING: Skill catalog sync had errors (exit $EC)"
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -87,45 +87,59 @@ fi
 echo ""
 # BUN_INSTALL in ~/.bash_profile causes qmd's shim to use bun instead of node,
 # which crashes on sqlite-vec extension loading. Force node runtime.
-echo "[7/9] QMD update..."
+echo "[7/10] QMD update..."
 if command -v qmd &>/dev/null; then
     BUN_INSTALL= qmd update 2>&1
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[7/9] WARNING: QMD update had errors (exit $EC)"
+        echo "[7/10] WARNING: QMD update had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[7/9] SKIP: qmd not found in PATH"
+    echo "[7/10] SKIP: qmd not found in PATH"
 fi
 
 # --- Step 8: QMD embed (vectorize pending docs) ---
 echo ""
-echo "[8/9] QMD embed..."
+echo "[8/10] QMD embed..."
 if command -v qmd &>/dev/null; then
     BUN_INSTALL= qmd embed 2>&1
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[8/9] WARNING: QMD embed had errors (exit $EC)"
+        echo "[8/10] WARNING: QMD embed had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[8/9] SKIP: qmd not found in PATH"
+    echo "[8/10] SKIP: qmd not found in PATH"
 fi
 
 # --- Step 9: Trust promotion analyzer (dry-run; logs candidates) ---
 echo ""
-echo "[9/9] Trust promotion analysis..."
+echo "[9/10] Trust promotion analysis..."
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 if command -v bun &>/dev/null && [ -f "$PROJECT_ROOT/scripts/trust/run-analyzer.ts" ]; then
     (cd "$PROJECT_ROOT" && bun scripts/trust/run-analyzer.ts 2>&1)
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[9/9] WARNING: Trust analyzer had errors (exit $EC)"
+        echo "[9/10] WARNING: Trust analyzer had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
     fi
 else
-    echo "[9/9] SKIP: bun or run-analyzer.ts not found"
+    echo "[9/10] SKIP: bun or run-analyzer.ts not found"
+fi
+
+# --- Step 10: Knowledge Graph Phase 1 re-seed ---
+echo ""
+echo "[10/10] Knowledge Graph Phase 1 seed..."
+if [ -f "$PROJECT_ROOT/scripts/kg/ingest_phase1.py" ]; then
+    (cd "$PROJECT_ROOT" && $PYTHON3 scripts/kg/ingest_phase1.py 2>&1)
+    EC=$?
+    if [ $EC -ne 0 ]; then
+        echo "[10/10] WARNING: KG ingest had errors (exit $EC)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "[10/10] SKIP: ingest_phase1.py not found"
 fi
 
 echo ""
