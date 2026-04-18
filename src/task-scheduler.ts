@@ -295,6 +295,20 @@ async function runTask(
     }, TASK_CLOSE_DELAY_MS);
   };
 
+  // For tasks flagged as proactive, inject a stable correlation ID so the
+  // agent's `proactive: true` IPC sends all share it and the governor can
+  // dedup across retries and runs. Uses local-tz YYYY-MM-DD for daily
+  // uniqueness.
+  const extraEnv: Record<string, string> | undefined =
+    task.proactive === 1
+      ? {
+          PROACTIVE_CORRELATION_ID: `task:${task.id}:${new Intl.DateTimeFormat(
+            'en-CA',
+            { timeZone: TIMEZONE },
+          ).format(new Date())}`,
+        }
+      : undefined;
+
   try {
     const output = await runContainerAgent(
       group,
@@ -308,6 +322,7 @@ async function runTask(
         assistantName: ASSISTANT_NAME,
         agentName: task.agent_name || undefined,
         script: task.script || undefined,
+        extraEnv,
       },
       (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

@@ -94,6 +94,9 @@ export interface ContainerInput {
   script?: string;
   images?: Array<{ base64: string; mediaType: string }>;
   agentName?: string;
+  /** Additional env vars to pass to the container. Used for
+   * PROACTIVE_CORRELATION_ID and similar task-specific overrides. */
+  extraEnv?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -364,6 +367,7 @@ function buildContainerArgs(
   containerName: string,
   isMain: boolean,
   group: RegisteredGroup,
+  extraEnv?: Record<string, string>,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -618,6 +622,16 @@ function buildContainerArgs(
     }
   }
 
+  // Task-level extra env vars (e.g. PROACTIVE_CORRELATION_ID).
+  // Push after all other -e flags but before the image name.
+  if (extraEnv) {
+    for (const [k, v] of Object.entries(extraEnv)) {
+      if (typeof v === 'string' && v.length > 0) {
+        args.push('-e', `${k}=${v}`);
+      }
+    }
+  }
+
   args.push(CONTAINER_IMAGE);
 
   return args;
@@ -642,6 +656,7 @@ export async function runContainerAgent(
     containerName,
     input.isMain,
     group,
+    input.extraEnv,
   );
 
   logger.debug(
