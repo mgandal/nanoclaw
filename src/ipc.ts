@@ -44,7 +44,7 @@ import {
   markDelivered,
   markDispatched,
 } from './proactive-log.js';
-import { isPaused } from './proactive-pause.js';
+import { isPaused, writePause } from './proactive-pause.js';
 import { isInQuietHours, nextQuietEnd } from './quiet-hours.js';
 import { RegisteredGroup } from './types.js';
 
@@ -325,6 +325,7 @@ export async function processIpcMessage(
     webAppUrl?: string;
     filePath?: string;
     caption?: string;
+    pausedUntil?: string | null;
   },
   sourceGroup: string,
   isMain: boolean,
@@ -504,6 +505,20 @@ export async function processIpcMessage(
         'Unauthorized IPC send_file attempt blocked',
       );
     }
+  } else if (data.type === 'set_proactive_pause') {
+    if (!isMain) {
+      logger.warn(
+        { sourceGroup },
+        'IPC set_proactive_pause rejected: not main',
+      );
+      return;
+    }
+    const pauseFile =
+      process.env.PROACTIVE_PAUSE_PATH_OVERRIDE || PROACTIVE_PAUSE_PATH;
+    const pausedUntil =
+      typeof data.pausedUntil === 'string' ? data.pausedUntil : null;
+    writePause(pauseFile, pausedUntil);
+    logger.info({ pausedUntil }, 'proactive pause updated');
   }
 }
 

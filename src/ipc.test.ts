@@ -2374,3 +2374,90 @@ describe('processTaskIpc dispatches kg_query', () => {
     }
   });
 });
+
+// --- IPC set_proactive_pause action ---
+
+describe('IPC set_proactive_pause action', () => {
+  let tmpPauseFile: string;
+
+  beforeEach(async () => {
+    tmpPauseFile = path.join(
+      os.tmpdir(),
+      `pause-ipc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+    );
+    process.env.PROACTIVE_PAUSE_PATH_OVERRIDE = tmpPauseFile;
+    try {
+      fs.unlinkSync(tmpPauseFile);
+    } catch {
+      /* not present */
+    }
+    const { clearPauseCache } = await import('./proactive-pause.js');
+    clearPauseCache();
+  });
+
+  afterEach(() => {
+    try {
+      fs.unlinkSync(tmpPauseFile);
+    } catch {
+      /* not present */
+    }
+    delete process.env.PROACTIVE_PAUSE_PATH_OVERRIDE;
+  });
+
+  it('writes pause file when action received from main group', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: '2026-04-18T23:00:00Z',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe('2026-04-18T23:00:00Z');
+  });
+
+  it('accepts null pausedUntil for indefinite pause', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: null,
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe(null);
+  });
+
+  it('coerces missing pausedUntil to null (indefinite)', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe(null);
+  });
+
+  it('rejects when not main group', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: '2026-04-18T23:00:00Z',
+      },
+      'telegram_other',
+      false,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(false);
+  });
+});
