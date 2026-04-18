@@ -9,6 +9,8 @@ from kg.parsers import (
     parse_paper,
     parse_projects_file,
     parse_tool,
+    extract_paper_stubs,
+    normalize_reference,
 )
 
 
@@ -378,3 +380,189 @@ class TestParseLabRoster:
             e for e in entities if e["entity"]["canonical_name"] == "Rachel Smith"
         )
         assert "Smith, Rachel" in rachel["entity"]["aliases"]
+
+
+# ---------------------------------------------------------------------------
+# Reference normalization (for edge resolution fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeReference:
+    def test_strips_wiki_prefix(self):
+        assert normalize_reference("wiki/tools/susier") == "susier"
+        assert normalize_reference("content/wiki/tools/flash") == "flash"
+        assert normalize_reference("tools/fuma") == "fuma"
+
+    def test_strips_leading_slash_and_brackets(self):
+        assert normalize_reference("[[projects/active/apa]]") == "apa"
+        assert normalize_reference("/wiki/papers/huang-2026") == "huang-2026"
+
+    def test_lowercases(self):
+        assert normalize_reference("wiki/tools/SuSiER") == "susier"
+
+    def test_empty_or_garbage(self):
+        assert normalize_reference("") == ""
+        assert normalize_reference("   ") == ""
+
+
+# ---------------------------------------------------------------------------
+# Paper stub extraction from citations / references in other entities
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPaperStubs:
+    def test_extracts_doi_from_citation_string(self):
+        # Given a tool entity with key_papers pointing to a citation string
+        input_entities = [
+            {
+                "entity": {
+                    "canonical_name": "flash",
+                    "type": "tool",
+                    "aliases": ["flash"],
+                },
+                "edges": [
+                    {
+                        "source": "flash",
+                        "source_type": "tool",
+                        "target": (
+                            "Wang & Stephens 2021 JRSS-B doi:10.1111/rssb.12488"
+                        ),
+                        "target_type": "paper",
+                        "relation": "cites",
+                        "evidence": "key_papers[]",
+                        "source_doc": "wiki/tools/flash.md",
+                    }
+                ],
+            }
+        ]
+        stubs = extract_paper_stubs(input_entities)
+        assert len(stubs) == 1
+        stub = stubs[0]
+        assert (
+            stub["entity"]["canonical_name"]
+            == "Wang & Stephens 2021 JRSS-B doi:10.1111/rssb.12488"
+        )
+        assert stub["entity"]["type"] == "paper"
+        # DOI extracted as alias for future resolution
+        assert "doi:10.1111/rssb.12488" in stub["entity"]["aliases"]
+        # Citation-derived confidence lower than YAML-backed
+        assert stub["entity"]["confidence"] < 1.0
+
+    def test_extracts_wiki_slug_as_alias(self):
+        input_entities = [
+            {
+                "entity": {
+                    "canonical_name": "cell2fate",
+                    "type": "tool",
+                    "aliases": ["cell2fate"],
+                },
+                "edges": [
+                    {
+                        "source": "cell2fate",
+                        "source_type": "tool",
+                        "target": "wiki/papers/aivazidis-2025-cell2fate-rna-velocity",
+                        "target_type": "paper",
+                        "relation": "cites",
+                        "evidence": "",
+                        "source_doc": "wiki/tools/cell2fate.md",
+                    }
+                ],
+            }
+        ]
+        stubs = extract_paper_stubs(input_entities)
+        assert len(stubs) == 1
+        aliases = stubs[0]["entity"]["aliases"]
+        # The full wikilink is an alias so existing-paper lookup by wiki-slug works.
+        assert (
+            "wiki/papers/aivazidis-2025-cell2fate-rna-velocity" in aliases
+        )
+        # Basename is also an alias.
+        assert "aivazidis-2025-cell2fate-rna-velocity" in aliases
+
+    def test_deduplicates_identical_citations(self):
+        cite = "Wang & Stephens 2021 doi:10.1111/rssb.12488"
+        edges = [
+            {
+                "source": src,
+                "source_type": "tool",
+                "target": cite,
+                "target_type": "paper",
+                "relation": "cites",
+                "evidence": "",
+                "source_doc": f"wiki/tools/{src}.md",
+            }
+            for src in ("flash", "ebnm", "fastTopics")
+        ]
+        input_entities = [
+            {"entity": {"canonical_name": e["source"], "type": "tool", "aliases": [e["source"]]}, "edges": [e]}
+            for e in edges
+        ]
+        stubs = extract_paper_stubs(input_entities)
+        # Same citation across three tools → one paper stub
+        assert len(stubs) == 1
+
+    def test_skips_non_paper_edges(self):
+        input_entities = [
+            {
+                "entity": {
+                    "canonical_name": "flash",
+                    "type": "tool",
+                    "aliases": ["flash"],
+                },
+                "edges": [
+                    {
+                        "source": "flash",
+                        "source_type": "tool",
+                        "target": "susieR",
+                        "target_type": "tool",
+                        "relation": "related_to",
+                        "evidence": "",
+                        "source_doc": "",
+                    }
+                ],
+            }
+        ]
+        assert extract_paper_stubs(input_entities) == []
+
+    def test_does_not_create_stub_if_reference_is_only_an_alias_of_existing_paper(self):
+        # If "doi:10.1038/xyz" is already an alias of an existing paper,
+        # the stub extractor should skip (caller pre-filters by existing aliases).
+        # We model this by passing a known_aliases set to the extractor.
+        input_entities = [
+            {
+                "entity": {
+                    "canonical_name": "sometool",
+                    "type": "tool",
+                    "aliases": ["sometool"],
+                },
+                "edges": [
+                    {
+                        "source": "sometool",
+                        "source_type": "tool",
+                        "target": "doi:10.1038/xyz",
+                        "target_type": "paper",
+                        "relation": "cites",
+                        "evidence": "",
+                        "source_doc": "",
+                    }
+                ],
+            }
+        ]
+        # Pretend a paper already has this DOI as an alias
+        known = {("paper", "doi:10.1038/xyz")}
+        stubs = extract_paper_stubs(input_entities, known_paper_aliases=known)
+        assert stubs == []
+
+
+# ---------------------------------------------------------------------------
+# parse_paper — wiki-slug alias (lets other entities reference it by path)
+# ---------------------------------------------------------------------------
+
+
+class TestParsePaperWikiSlugAlias:
+    def test_wiki_slug_alias_added(self):
+        result = parse_paper(PAPER_YAML, "wiki/papers/huang-2026-longcallr.md")
+        aliases = result["entity"]["aliases"]
+        # Both the full path and the basename (sans .md) should be aliases
+        assert "wiki/papers/huang-2026-longcallr" in aliases
+        assert "huang-2026-longcallr" in aliases

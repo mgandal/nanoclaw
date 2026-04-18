@@ -29,6 +29,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kg.parsers import (  # noqa: E402
+    extract_paper_stubs,
+    normalize_reference,
     parse_contact,
     parse_dataset,
     parse_grants_file,
@@ -63,8 +65,9 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
     Entities may be returned multiple times for the same canonical name from
     different sources — the insert step deduplicates by (type, canonical_name).
     """
-    entities: list[dict] = []
-    edges: list[dict] = []
+    # Two-pass: first collect per-parser results, then derive paper stubs
+    # from any citations that target papers we don't already have.
+    all_results: list[dict] = []
 
     # Contacts → persons
     contacts_dir = vault / "20-contacts"
@@ -77,8 +80,7 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
                 continue
             result = parse_contact(text, f"20-contacts/{f.name}")
             if result:
-                entities.append(result["entity"])
-                edges.extend(result["edges"])
+                all_results.append(result)
 
     # Tools
     tools_dir = vault / "99-wiki" / "tools"
@@ -91,8 +93,7 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
                 continue
             result = parse_tool(text, f"99-wiki/tools/{f.name}")
             if result:
-                entities.append(result["entity"])
-                edges.extend(result["edges"])
+                all_results.append(result)
 
     # Datasets
     datasets_dir = vault / "99-wiki" / "datasets"
@@ -105,8 +106,7 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
                 continue
             result = parse_dataset(text, f"99-wiki/datasets/{f.name}")
             if result:
-                entities.append(result["entity"])
-                edges.extend(result["edges"])
+                all_results.append(result)
 
     # Papers
     papers_dir = vault / "99-wiki" / "papers"
@@ -119,32 +119,48 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
                 continue
             result = parse_paper(text, f"99-wiki/papers/{f.name}")
             if result:
-                entities.append(result["entity"])
-                edges.extend(result["edges"])
+                all_results.append(result)
 
     # State: grants
     grants_file = repo_root / STATE_DIR_REL / "grants.md"
     text = _read(grants_file)
     if text:
-        for item in parse_grants_file(text, "state/grants.md"):
-            entities.append(item["entity"])
-            edges.extend(item["edges"])
+        all_results.extend(parse_grants_file(text, "state/grants.md"))
 
     # State: projects
     projects_file = repo_root / STATE_DIR_REL / "projects.md"
     text = _read(projects_file)
     if text:
-        for item in parse_projects_file(text, "state/projects.md"):
-            entities.append(item["entity"])
-            edges.extend(item["edges"])
+        all_results.extend(parse_projects_file(text, "state/projects.md"))
 
     # State: lab-roster (cross-ref; contacts may already have these)
     roster_file = repo_root / STATE_DIR_REL / "lab-roster.md"
     text = _read(roster_file)
     if text:
-        for item in parse_lab_roster(text, "state/lab-roster.md"):
-            entities.append(item["entity"])
-            edges.extend(item["edges"])
+        all_results.extend(parse_lab_roster(text, "state/lab-roster.md"))
+
+    # --- Phase 1.5: derive paper stubs from citation references ---
+    # Collect already-known paper aliases so extract_paper_stubs skips
+    # references that would collide with a real YAML-backed paper.
+    known_paper_aliases: set[tuple[str, str]] = set()
+    for r in all_results:
+        ent = r.get("entity") or {}
+        if ent.get("type") == "paper":
+            known_paper_aliases.add(("paper", ent["canonical_name"]))
+            for a in ent.get("aliases") or []:
+                known_paper_aliases.add(("paper", a))
+
+    stubs = extract_paper_stubs(all_results, known_paper_aliases=known_paper_aliases)
+    all_results.extend(stubs)
+
+    # Flatten.
+    entities: list[dict] = []
+    edges: list[dict] = []
+    for r in all_results:
+        if r.get("entity"):
+            entities.append(r["entity"])
+        if r.get("edges"):
+            edges.extend(r["edges"])
 
     return entities, edges
 
@@ -295,8 +311,14 @@ def write_to_db(db_path: Path, entities: list[dict], edges: list[dict]) -> dict:
 
 
 def _resolve(conn: sqlite3.Connection, entity_type: str, name: str) -> str | None:
-    """Resolve an entity reference to an ID. Tries exact canonical name, then
-    alias match scoped to the given type."""
+    """Resolve an entity reference to an ID.
+
+    Three tiers, fail-closed per tier:
+      1. Exact canonical_name match within the given type.
+      2. Exact alias match within the given type.
+      3. Normalized-reference fallback: strip common path prefixes, lowercase,
+         and match against any alias whose normalized form is equal.
+    """
     row = conn.execute(
         "SELECT id FROM entities WHERE type = ? AND canonical_name = ?",
         (entity_type, name),
@@ -307,7 +329,28 @@ def _resolve(conn: sqlite3.Connection, entity_type: str, name: str) -> str | Non
         "SELECT entity_id FROM aliases WHERE entity_type = ? AND alias = ? LIMIT 1",
         (entity_type, name),
     ).fetchone()
-    return row[0] if row else None
+    if row:
+        return row[0]
+
+    normalized = normalize_reference(name)
+    if not normalized:
+        return None
+    # Try lowercase alias match on canonical_name and aliases within type.
+    # We compute the normalized form in Python and compare against LOWER(alias).
+    # This is O(N per type) but N is small here; indexes on (entity_type) help.
+    for table, col_id, col_text in (
+        ("entities", "id", "canonical_name"),
+        ("aliases", "entity_id", "alias"),
+    ):
+        scope_col = "type" if table == "entities" else "entity_type"
+        candidates = conn.execute(
+            f"SELECT {col_id}, {col_text} FROM {table} WHERE {scope_col} = ?",
+            (entity_type,),
+        ).fetchall()
+        for cand_id, cand_text in candidates:
+            if normalize_reference(cand_text) == normalized:
+                return cand_id
+    return None
 
 
 def main(argv: list[str] | None = None) -> int:

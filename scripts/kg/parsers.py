@@ -33,6 +33,12 @@ import yaml
 
 
 _FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+_DOI = re.compile(r"\bdoi:\s*(10\.[\w./()-]+)", re.IGNORECASE)
+_WIKI_PREFIX = re.compile(
+    r"^(?:content/|wiki/|projects?/|active/|daily/|inbox/|areas?/|resources?/|"
+    r"tools?/|papers?/|datasets?/)",
+    re.IGNORECASE,
+)
 _GRANT_HEADING = re.compile(
     r"^###\s+(?:NIH\s+)?([A-Z]+\d*-[A-Z]{2}\d+|[A-Z]+\s+[A-Za-z]+\s+#?\d+)",
     re.MULTILINE,
@@ -361,6 +367,19 @@ def parse_paper(text: str, source_doc: str) -> dict | None:
     if doi:
         aliases.append(f"doi:{doi}")
 
+    # Wiki-slug aliases: if source_doc is a path like "wiki/papers/huang-2026-longcallr.md"
+    # or "99-wiki/papers/huang-2026.md", expose both the full path (sans extension)
+    # and the basename as aliases. This lets other entities reference this paper
+    # via frontmatter fields like key_papers: ["wiki/papers/huang-2026-longcallr"].
+    if source_doc:
+        # Strip known numeric prefix (e.g. "99-wiki/" → "wiki/") for canonical alias form
+        normalized_path = re.sub(r"^\d+[-_]", "", source_doc)
+        without_ext = re.sub(r"\.md$", "", normalized_path)
+        aliases.append(without_ext)
+        basename = without_ext.split("/")[-1]
+        if basename and basename != without_ext:
+            aliases.append(basename)
+
     edges: list[dict] = []
     if isinstance(first_author, str) and first_author.strip():
         edges.append(
@@ -512,3 +531,135 @@ def _make_edge(
         "evidence": f"frontmatter {relation} in {source_doc}",
         "source_doc": source_doc,
     }
+
+
+# ---------------------------------------------------------------------------
+# Reference normalization — used by edge resolution to match path-style
+# references (e.g. "wiki/tools/susier") against existing entity aliases.
+# ---------------------------------------------------------------------------
+
+
+def normalize_reference(ref: str) -> str:
+    """Normalize an entity reference for fallback alias lookup.
+
+    Strips:
+      - [[wikilink]] brackets
+      - leading/trailing whitespace and slashes
+      - common vault path prefixes (content/, wiki/, tools/, papers/, datasets/)
+      - numeric-prefix dirs like "99-wiki/" -> "wiki/" (handled by the above)
+      - trailing .md extension
+
+    Lowercases for case-insensitive match.
+    """
+    if not ref:
+        return ""
+    s = ref.strip()
+    if not s:
+        return ""
+    # Strip wikilink brackets
+    s = s.strip("[]")
+    # Strip numeric prefix directories (e.g. "99-wiki/" → "wiki/")
+    s = re.sub(r"^\d+[-_]", "", s)
+    # Strip leading slash
+    s = s.lstrip("/")
+    # Strip trailing .md
+    if s.endswith(".md"):
+        s = s[:-3]
+    # Strip known wiki path prefixes iteratively — so "content/wiki/tools/x"
+    # collapses to "x" after two passes.
+    for _ in range(3):
+        stripped = _WIKI_PREFIX.sub("", s)
+        if stripped == s:
+            break
+        s = stripped
+    return s.lower().strip()
+
+
+# ---------------------------------------------------------------------------
+# Paper stub extraction — create paper entities from citation references
+# found in other entities' edges, so those edges can resolve.
+# ---------------------------------------------------------------------------
+
+
+def extract_paper_stubs(
+    entity_results: list[dict],
+    known_paper_aliases: set[tuple[str, str]] | None = None,
+) -> list[dict]:
+    """Scan edges targeting papers and create stub paper entities.
+
+    For each unique (target string) in edges where target_type == 'paper' and
+    the target is not already a known alias, create a paper entity with:
+      - canonical_name = the target string as-is
+      - aliases = [canonical, extracted DOI if present, wiki-slug variants]
+      - confidence = 0.6 (citation-derived, lower than YAML-backed papers)
+
+    Args:
+      entity_results: the list of {entity, edges} dicts from other parsers.
+      known_paper_aliases: set of (entity_type, alias) tuples that already
+        exist in the graph — stubs are skipped if their canonical or any
+        extracted alias is already in this set.
+
+    Returns a new list of {entity, edges} dicts for the stubs.
+    """
+    known = known_paper_aliases or set()
+    by_canonical: dict[str, dict] = {}
+
+    for result in entity_results:
+        for edge in result.get("edges", []) or []:
+            if edge.get("target_type") != "paper":
+                continue
+            target = (edge.get("target") or "").strip()
+            if not target:
+                continue
+
+            aliases: list[str] = [target]
+
+            # Extract DOI if present in the citation string
+            doi_match = _DOI.search(target)
+            if doi_match:
+                doi_alias = f"doi:{doi_match.group(1).rstrip('.,;:')}"
+                aliases.append(doi_alias)
+
+            # If the target looks like a wiki path, expose the basename too
+            if "/" in target or target.startswith("[["):
+                # Strip brackets + leading known prefixes; surface both
+                # the bracket-free form and the basename.
+                clean = target.strip().strip("[]")
+                if clean.endswith(".md"):
+                    clean = clean[:-3]
+                aliases.append(clean)
+                basename = clean.split("/")[-1]
+                if basename and basename not in aliases:
+                    aliases.append(basename)
+
+            # Skip if any of our would-be aliases already exists as a paper alias
+            if any(("paper", a) in known for a in aliases):
+                continue
+
+            # Dedupe stubs by canonical
+            if target in by_canonical:
+                continue
+
+            by_canonical[target] = {
+                "entity": {
+                    "canonical_name": target,
+                    "type": "paper",
+                    "metadata": {"source": "citation_stub"},
+                    "aliases": _dedupe_preserve_order(aliases),
+                    "source_doc": edge.get("source_doc", ""),
+                    "confidence": 0.6,
+                },
+                "edges": [],
+            }
+
+    return list(by_canonical.values())
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for x in items:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
