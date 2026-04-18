@@ -734,6 +734,17 @@ export async function processTaskIpc(
           break;
         }
 
+        // A1: Block script-bearing tasks from non-main groups. task.script is
+        // executed by runGuardScript as /bin/bash -c on the host, so accepting
+        // it from non-main would be a direct container escape.
+        if (data.script && !isMain) {
+          logger.warn(
+            { sourceGroup, targetFolder },
+            'schedule_task rejected: script field is main-only',
+          );
+          break;
+        }
+
         const scheduleType = data.schedule_type as 'cron' | 'interval' | 'once';
 
         let nextRun: string | null = null;
@@ -784,7 +795,10 @@ export async function processTaskIpc(
         const rawAgentName = (data as any).agent_name;
         let agentName: string | null = null;
         if (rawAgentName) {
-          if (typeof rawAgentName !== 'string' || !isValidAgentName(rawAgentName)) {
+          if (
+            typeof rawAgentName !== 'string' ||
+            !isValidAgentName(rawAgentName)
+          ) {
             logger.warn(
               { sourceGroup, agent_name: rawAgentName },
               'schedule_task rejected: invalid agent_name',

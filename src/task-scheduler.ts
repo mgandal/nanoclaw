@@ -132,6 +132,13 @@ export function runGuardScript(
 ): Promise<GuardResult> {
   if (!script) return Promise.resolve({ shouldRun: true });
 
+  // A1 audit trail: every guard-script execution is a host shell run. Log
+  // the (truncated) script content so an operator can inspect post-hoc.
+  logger.info(
+    { scriptPreview: script.slice(0, 500), length: script.length },
+    'Guard script executed',
+  );
+
   return new Promise((resolve) => {
     execFile(
       '/bin/bash',
