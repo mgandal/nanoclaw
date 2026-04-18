@@ -1084,20 +1084,33 @@ export async function processTaskIpc(
       }
 
       if (deps.messageBus) {
+        // B3: cap agent-controlled fields at publish time. The bus dispatcher
+        // re-escapes + re-caps (defense in depth), but capping at publish
+        // reduces stored payload and is cheap.
+        const safeSummary =
+          typeof d.summary === 'string' ? d.summary.slice(0, 500) : '';
+        const safeTopic = typeof topic === 'string' ? topic.slice(0, 100) : '';
+        if (safeTopic !== topic) {
+          logger.warn(
+            { topicLen: topic.length },
+            'publish_to_bus: topic truncated to 100 chars',
+          );
+        }
+
         const targetFsKey = `${targetGroup}--${toAgent}`;
         deps.messageBus.writeAgentMessage(targetFsKey, {
           id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           from: sourceAgent || sourceGroup,
-          topic,
+          topic: safeTopic,
           priority: d.priority as 'low' | 'medium' | 'high' | undefined,
-          summary: d.summary as string,
+          summary: safeSummary,
           to_agent: toAgent,
           to_group: targetGroup,
           payload: d.payload,
           timestamp: new Date().toISOString(),
         });
         logger.info(
-          { from: sourceAgent, to: toAgent, topic },
+          { from: sourceAgent, to: toAgent, topic: safeTopic },
           'Bus message published via IPC',
         );
       }

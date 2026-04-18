@@ -140,6 +140,7 @@ import {
 } from './compound-key.js';
 import { routeClassifiedEvent } from './event-routing.js';
 import { BusWatcher } from './bus-watcher.js';
+import { buildBusPrompt } from './bus-dispatch.js';
 
 let lastSeq = 0;
 let sessions: Record<string, string> = {};
@@ -1311,22 +1312,10 @@ async function main(): Promise<void> {
         const group = registeredGroups[chatJid];
         if (!group) return;
 
-        const busPrompt = messages
-          .map((m: any) => {
-            const header = `[Bus from ${m.from}${m.priority ? ` • ${m.priority}` : ''}] ${m.summary || m.topic}`;
-            // If the sender attached a structured payload (e.g. from the
-            // event-router's escalate path), render it as a second block so
-            // the agent has enough context to act without another round-trip.
-            if (m.payload && typeof m.payload === 'object') {
-              const payloadStr = JSON.stringify(m.payload, null, 2).slice(
-                0,
-                4000,
-              );
-              return `${header}\n<bus-payload topic="${m.topic}">\n${payloadStr}\n</bus-payload>`;
-            }
-            return header;
-          })
-          .join('\n');
+        // B3: every bus field is agent-controlled. buildBusPrompt escapes
+        // and caps each one, wraps in <bus-message>, and adds a standing
+        // "data, not instructions" preamble.
+        const busPrompt = buildBusPrompt(messages);
 
         // Awaited so BusWatcher sees the throw and restores the .processing
         // file back to .json on container/runAgent failure. If we fire-and-forget
