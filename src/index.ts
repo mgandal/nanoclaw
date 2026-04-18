@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { createServer } from 'http';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -23,6 +24,7 @@ import {
   MAX_CONTAINER_SPAWNS_PER_HOUR,
   MAX_ERRORS_PER_HOUR,
   MAX_MESSAGES_PER_PROMPT,
+  MOUNT_ALLOWLIST_PATH,
   OLLAMA_HOST,
   OPS_ALERT_FOLDER,
   ESCALATION_SLACK_JID,
@@ -62,6 +64,7 @@ import {
   getAllSessions,
   deleteSession,
   getAllTasks,
+  getDb,
   getLastBotMessageSeq,
   getMessagesSince,
   getNewMessages,
@@ -79,8 +82,15 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
-import { startIpcWatcher, hasRecentIpcSend, clearIpcSend } from './ipc.js';
+import {
+  deliverSendMessage,
+  startIpcWatcher,
+  hasRecentIpcSend,
+  clearIpcSend,
+  type IpcDeps,
+} from './ipc.js';
 import { backfillReaction } from './proactive-log.js';
+import { wireProactiveWatchers } from './startup/proactive-watchers.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { ChannelType } from './text-styles.js';
 import {
@@ -157,6 +167,30 @@ function commitPendingPipedAdvance(chatJid: string): boolean {
 }
 function discardPendingPipedAdvance(chatJid: string): boolean {
   return pendingPipedAdvance.delete(chatJid);
+}
+
+/**
+ * Derive vault roots for the VaultDeltaWatcher from the mount allowlist.
+ * Returns only paths that exist on disk. If the allowlist is missing or
+ * unreadable, returns [] so the watcher logs a warning and does nothing.
+ */
+function deriveVaultRoots(): string[] {
+  try {
+    if (!fs.existsSync(MOUNT_ALLOWLIST_PATH)) return [];
+    const json = JSON.parse(fs.readFileSync(MOUNT_ALLOWLIST_PATH, 'utf-8'));
+    const roots: string[] = [];
+    for (const root of json.allowedRoots ?? []) {
+      if (typeof root.path !== 'string') continue;
+      const expanded = root.path.startsWith('~')
+        ? path.join(os.homedir(), root.path.slice(1))
+        : root.path;
+      if (fs.existsSync(expanded)) roots.push(expanded);
+    }
+    return roots;
+  } catch (err) {
+    logger.warn({ err }, 'failed to derive vault roots from allowlist');
+    return [];
+  }
 }
 let healthMonitor: HealthMonitor;
 let loadedAgents: AgentIdentity[] = [];
@@ -1306,6 +1340,7 @@ async function main(): Promise<void> {
   }
 
   // Event router and watchers (Phase 2)
+  let eventRouter: EventRouter | null = null;
   if (EVENT_ROUTER_ENABLED) {
     // Load trust matrix
     let trustRules: TrustConfig = { default_routing: 'notify', rules: [] };
@@ -1322,7 +1357,7 @@ async function main(): Promise<void> {
       logger.info('No trust matrix found, using default routing (notify)');
     }
 
-    const eventRouter = new EventRouter({
+    eventRouter = new EventRouter({
       ollamaHost: OLLAMA_HOST,
       ollamaModel: OLLAMA_MODEL,
       trustRules: trustRules.rules,
@@ -1504,6 +1539,8 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     // 1. Stop bus watcher
     busWatcher?.stop();
+    // 1a. Stop proactive watchers (cheap, synchronous)
+    proactiveHandle.stop();
     // 2. Stop accepting new work (signals containers to wind down)
     await queue.shutdown(15000);
     // 3. Now close proxy and channels (containers are done)
@@ -1721,7 +1758,7 @@ async function main(): Promise<void> {
       if (text) await channel.sendMessage(jid, text);
     },
   });
-  startIpcWatcher({
+  const ipcDeps: IpcDeps = {
     sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
@@ -1778,7 +1815,49 @@ async function main(): Promise<void> {
       }
     },
     messageBus,
-  });
+  };
+  startIpcWatcher(ipcDeps);
+
+  // Proactive watchers (vault delta, task outcome, thread silence, deferred
+  // send processor). No-op when PROACTIVE_WATCHERS_ENABLED=false (default) or
+  // when the event router is disabled.
+  const proactiveHandle = eventRouter
+    ? wireProactiveWatchers({
+        eventRouter,
+        vaultRoots: deriveVaultRoots(),
+        emailExportDir: path.join(
+          os.homedir(),
+          '.cache/email-ingest/exported',
+        ),
+        hasRecentEmission: (threadId) => {
+          const cutoff = new Date(
+            Date.now() - 7 * 86400_000,
+          ).toISOString();
+          return !!getDb()
+            .prepare(
+              `SELECT 1 FROM proactive_log WHERE correlation_id = ? AND timestamp >= ? LIMIT 1`,
+            )
+            .get(`silent_thread:${threadId}`, cutoff);
+        },
+        sendDeferred: async (s) => {
+          await deliverSendMessage(
+            {
+              chatJid: s.toGroup,
+              text: s.text,
+              proactive: true,
+              correlationId: s.correlationId,
+              urgency: s.urgency,
+              ruleId: s.ruleId,
+              contributingEvents: s.contributingEvents,
+              fromAgent: s.fromAgent,
+            },
+            ipcDeps,
+            'main',
+          );
+        },
+      })
+    : { stop: () => {} };
+
   startSessionCleanup();
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
