@@ -75,9 +75,7 @@ function findMatched(
   if (!q) return [];
 
   const params: (string | number)[] = [];
-  const typeClause = input.entity_type
-    ? 'AND e.type = ?'
-    : '';
+  const typeClause = input.entity_type ? 'AND e.type = ?' : '';
   if (input.entity_type) params.push(input.entity_type);
 
   // Union of exact canonical match + alias match, scoped by type filter.
@@ -162,8 +160,7 @@ function traverse(
   }
 
   // Deduplicate edges by id tuple (source,target,relation).
-  const edgeKey = (e: KgEdge) =>
-    `${e.source_id}|${e.target_id}|${e.relation}`;
+  const edgeKey = (e: KgEdge) => `${e.source_id}|${e.target_id}|${e.relation}`;
   const seen = new Set<string>();
   const dedupEdges = collectedEdges.filter((e) => {
     const k = edgeKey(e);

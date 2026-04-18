@@ -100,12 +100,7 @@ describe('handleKgIpc', () => {
       dbPath,
     );
     expect(r).toBe(true);
-    const resultsDir = path.join(
-      dataDir,
-      'ipc',
-      'telegram_main',
-      'kg_results',
-    );
+    const resultsDir = path.join(dataDir, 'ipc', 'telegram_main', 'kg_results');
     const files = fs.existsSync(resultsDir) ? fs.readdirSync(resultsDir) : [];
     expect(files).toEqual([]);
   });
