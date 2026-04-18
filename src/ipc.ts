@@ -31,6 +31,7 @@ import { validateAdditionalMounts } from './mount-security.js';
 import { handleDashboardIpc } from './dashboard-ipc.js';
 import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
+import { handleKgIpc } from './kg-ipc.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -1167,6 +1168,18 @@ export async function processTaskIpc(
           isMain,
           DATA_DIR,
           mounts,
+        );
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type === 'kg_query'
+      ) {
+        handled = await handleKgIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+          DATA_DIR,
         );
       }
       if (

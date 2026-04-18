@@ -631,6 +631,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
 const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
 const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
+const KG_RESULTS_DIR = path.join(IPC_DIR, 'kg_results');
 
 async function waitForIpcResult(
   resultsDir: string,
@@ -692,6 +693,74 @@ server.tool(
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(DASHBOARD_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
+// --- Knowledge Graph query tool ---
+// Traverse the entity-relationship graph produced by scripts/kg/ingest_phase1.py.
+// Use for questions about *connections* (who is affiliated with X, what papers
+// cite Y, which projects a grant funds). For full-text / semantic search across
+// document content, use the qmd tool instead — the KG indexes relationships,
+// not prose.
+server.tool(
+  'kg_query',
+  [
+    'Query the knowledge graph for entities and their relationships.',
+    'Returns matched entities (by canonical name or alias), their neighbors out to `hops`, and the edges connecting them.',
+    'Entity types: person, paper, dataset, tool, grant, project, method, institution, disorder.',
+    'Common relations: authored, collaborates_with, member_of, funds_project, cites, uses_method, related_to.',
+  ].join('\n'),
+  {
+    query: z
+      .string()
+      .describe(
+        'Text to search against entity canonical names and aliases. E.g. "Rachel Smith", "R01-MH137578", "BrainGO".',
+      ),
+    entity_type: z
+      .string()
+      .optional()
+      .describe('Restrict matches to this type (person/paper/dataset/tool/grant/project).'),
+    relation_type: z
+      .string()
+      .optional()
+      .describe(
+        'Only traverse edges with this relation (e.g. "authored", "funds_project").',
+      ),
+    hops: z
+      .number()
+      .int()
+      .min(0)
+      .max(3)
+      .optional()
+      .describe(
+        'Traversal depth. 0 = matched entities only, 1 = direct neighbors (default), 2-3 = further hops.',
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe('Max matched entities before expanding neighbors (default 20).'),
+  },
+  async (args) => {
+    const requestId = `kg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'kg_query',
+      requestId,
+      query: args.query,
+      entity_type: args.entity_type,
+      relation_type: args.relation_type,
+      hops: args.hops,
+      limit: args.limit,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(KG_RESULTS_DIR, requestId, 30000);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       isError: !(result as { success?: boolean }).success,
