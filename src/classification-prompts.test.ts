@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   getEmailClassificationPrompt,
   getCalendarClassificationPrompt,
+  getVaultChangeClassificationPrompt,
+  getSilentThreadPrompt,
+  getTaskOutcomePrompt,
   EMAIL_SYSTEM_PROMPT,
   CALENDAR_SYSTEM_PROMPT,
   type EmailPayload,
@@ -130,5 +133,37 @@ describe('getCalendarClassificationPrompt', () => {
   it('uses CALENDAR_SYSTEM_PROMPT constant', () => {
     const result = getCalendarClassificationPrompt(newEvent);
     expect(result.system).toBe(CALENDAR_SYSTEM_PROMPT);
+  });
+});
+
+describe('new event classification prompts', () => {
+  it('vault change includes path and tag', () => {
+    const p = getVaultChangeClassificationPrompt({
+      path: '99-wiki/papers/foo.md',
+      tag: 'papers',
+      author: 'user',
+    });
+    expect(p.system).toContain('vault');
+    expect(p.prompt).toContain('99-wiki/papers/foo.md');
+    expect(p.prompt).toContain('papers');
+  });
+  it('silent thread includes sender and days silent', () => {
+    const p = getSilentThreadPrompt({
+      threadId: 't1',
+      sender: 'pi@penn.edu',
+      subject: 'grant',
+      lastReceivedAt: '2026-04-16T00:00:00Z',
+      daysSilent: 2,
+    });
+    expect(p.prompt).toContain('pi@penn.edu');
+    expect(p.prompt).toContain('2');
+  });
+  it('task outcome includes task name', () => {
+    const p = getTaskOutcomePrompt({
+      taskId: 't1',
+      taskName: 'morning-brief',
+      outputPreview: 'hi',
+    });
+    expect(p.prompt).toContain('morning-brief');
   });
 });

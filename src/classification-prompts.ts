@@ -131,3 +131,73 @@ export function getCalendarClassificationPrompt(
     prompt: lines.join('\n'),
   };
 }
+
+export interface VaultChangePayload {
+  path: string;
+  tag: string;
+  author: 'user' | 'agent' | 'unknown';
+  coalescedCount?: number;
+}
+
+export function getVaultChangeClassificationPrompt(p: VaultChangePayload): {
+  system: string;
+  prompt: string;
+} {
+  return {
+    system:
+      'You classify vault file changes. Output JSON {importance,urgency,topic,summary,suggestedRouting,requiresClaude,confidence}. User-authored changes low-importance unless papers/grants/deadlines.',
+    prompt: `vault change:
+path: ${p.path}
+tag: ${p.tag}
+author: ${p.author}
+coalesced: ${p.coalescedCount ?? 1}
+
+Classify and respond with JSON only.`,
+  };
+}
+
+export interface SilentThreadPayload {
+  threadId: string;
+  sender: string;
+  subject: string;
+  lastReceivedAt: string;
+  daysSilent: number;
+}
+
+export function getSilentThreadPrompt(p: SilentThreadPayload): {
+  system: string;
+  prompt: string;
+} {
+  return {
+    system:
+      'You classify overdue email threads. Output same JSON shape as email classification. Urgency scales with daysSilent and sender domain importance.',
+    prompt: `silent thread:
+from: ${p.sender}
+subject: ${p.subject}
+last received: ${p.lastReceivedAt}
+days silent: ${p.daysSilent}
+
+JSON only.`,
+  };
+}
+
+export interface TaskOutcomePayload {
+  taskId: string;
+  taskName: string;
+  outputPreview: string;
+}
+
+export function getTaskOutcomePrompt(p: TaskOutcomePayload): {
+  system: string;
+  prompt: string;
+} {
+  return {
+    system:
+      'You classify scheduled-task outputs to decide if they should surface to the user. Same JSON shape.',
+    prompt: `task outcome:
+task: ${p.taskName}
+output preview: ${p.outputPreview.slice(0, 300)}
+
+JSON only.`,
+  };
+}
