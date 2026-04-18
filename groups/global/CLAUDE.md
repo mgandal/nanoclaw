@@ -118,6 +118,19 @@ Indexes 3,600+ markdown files across vault, Apple Notes, group memory, sessions.
 
 For simple lookups where you know the file, Read/Grep directly is faster.
 
+### Knowledge Graph (entity relationships)
+
+A typed entity-relationship graph built from vault frontmatter and state files. Indexes ~460 entities (persons, papers, datasets, tools, grants, projects) and the edges connecting them. **Use for questions about connections; use QMD for questions about document content.**
+
+- `kg_query({query, hops?, entity_type?, relation_type?})` -- find entities and traverse to neighbors (hops 0-3, default 1).
+
+Example calls:
+- "Who is on the BrainGO project?" -> `kg_query({query: "BrainGO"})`
+- "What does R01-MH137578 fund, and who works on it?" -> `kg_query({query: "R01-MH137578", hops: 2})`
+- "Which tools are related to flash?" -> `kg_query({query: "flash", entity_type: "tool"})`
+
+The graph is thin today (Phase 1, deterministic seed only) -- if kg_query returns sparse results, fall back to QMD.
+
 ### Wiki (synthesized research knowledge)
 
 For research questions, check `98-nanoKB/wiki/index.md` first -- it has synthesized, lab-contextualized knowledge that's higher quality than raw notes. Fall back to QMD/vault if the wiki doesn't cover the topic.
@@ -132,7 +145,7 @@ For research questions, check `98-nanoKB/wiki/index.md` first -- it has synthesi
 
 **NEVER ask Mike for information without first exhausting available sources.**
 
-**Tier 1 (always search first):** group memory, agent memory, Hindsight, Wiki, QMD, Honcho (auto-injected), vault, conversation logs.
+**Tier 1 (always search first):** group memory, agent memory, Hindsight, Wiki, QMD, KG, Honcho (auto-injected), vault, conversation logs.
 
 **Tier 2 (if Tier 1 is empty):** Gmail, Calendar, iMessage, Apple Notes.
 
@@ -140,6 +153,7 @@ For research questions, check `98-nanoKB/wiki/index.md` first -- it has synthesi
 - "What did Mike say about X?" -- Hindsight
 - "What do we know about gene X?" -- Wiki first, then QMD
 - "Find the note about X" -- QMD
+- "Who is connected to X?" / "What does X fund?" / "Who works on project Y?" -- `kg_query`, then QMD if sparse
 - "Was there an email about X?" -- Gmail MCP, then Hindsight
 - "What's in this file?" -- Read/Grep
 
