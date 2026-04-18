@@ -243,3 +243,53 @@ export const CALENDAR_LOOKAHEAD_DAYS = parseInt(
 
 // Trust matrix
 export const TRUST_MATRIX_PATH = path.join(DATA_DIR, 'trust.yaml');
+
+// --- Proactive Claire ---
+export const PROACTIVE_ENABLED =
+  (process.env.PROACTIVE_ENABLED || 'false').toLowerCase() === 'true';
+export const PROACTIVE_GOVERNOR =
+  (process.env.PROACTIVE_GOVERNOR || 'false').toLowerCase() === 'true';
+export const PROACTIVE_GOVERNOR_STRICT =
+  (process.env.PROACTIVE_GOVERNOR_STRICT || 'true').toLowerCase() === 'true';
+export const PROACTIVE_WATCHERS_ENABLED =
+  (process.env.PROACTIVE_WATCHERS_ENABLED || 'false').toLowerCase() === 'true';
+export const QUIET_HOURS_START = process.env.QUIET_HOURS_START || '20:00';
+export const QUIET_HOURS_END = process.env.QUIET_HOURS_END || '08:00';
+export const QUIET_DAYS_OFF = (process.env.QUIET_DAYS_OFF || 'Sat,Sun')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const _quietOverrideThreshold = parseFloat(
+  process.env.QUIET_OVERRIDE_THRESHOLD || '0.8',
+);
+export const QUIET_OVERRIDE_THRESHOLD = Number.isFinite(_quietOverrideThreshold)
+  ? _quietOverrideThreshold
+  : 0.8;
+const _agentCooldownMinutes = parseInt(
+  process.env.AGENT_COOLDOWN_MINUTES || '20',
+  10,
+);
+export const AGENT_COOLDOWN_MINUTES = Number.isFinite(_agentCooldownMinutes)
+  ? _agentCooldownMinutes
+  : 20;
+const _dedupWindowHours = parseInt(
+  process.env.DEDUP_WINDOW_HOURS || '24',
+  10,
+);
+export const DEDUP_WINDOW_HOURS = Number.isFinite(_dedupWindowHours)
+  ? _dedupWindowHours
+  : 24;
+const _proactiveLogRetentionDays = parseInt(
+  process.env.PROACTIVE_LOG_RETENTION_DAYS || '90',
+  10,
+);
+export const PROACTIVE_LOG_RETENTION_DAYS = Number.isFinite(
+  _proactiveLogRetentionDays,
+)
+  ? _proactiveLogRetentionDays
+  : 90;
+export const PROACTIVE_PAUSE_PATH = path.join(
+  DATA_DIR,
+  'proactive',
+  'pause.json',
+);

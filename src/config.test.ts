@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'path';
 
 import {
@@ -315,5 +315,111 @@ describe('Ollama config', () => {
   it('OLLAMA_MODEL is a non-empty string', () => {
     expect(typeof OLLAMA_MODEL).toBe('string');
     expect(OLLAMA_MODEL.length).toBeGreaterThan(0);
+  });
+});
+
+// --- Proactive Claire env vars ---
+
+describe('proactive env vars', () => {
+  const PROACTIVE_ENV_KEYS = [
+    'PROACTIVE_ENABLED',
+    'PROACTIVE_GOVERNOR',
+    'PROACTIVE_GOVERNOR_STRICT',
+    'PROACTIVE_WATCHERS_ENABLED',
+    'QUIET_HOURS_START',
+    'QUIET_HOURS_END',
+    'QUIET_DAYS_OFF',
+    'QUIET_OVERRIDE_THRESHOLD',
+    'AGENT_COOLDOWN_MINUTES',
+    'DEDUP_WINDOW_HOURS',
+    'PROACTIVE_LOG_RETENTION_DAYS',
+  ] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of PROACTIVE_ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    for (const key of PROACTIVE_ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    vi.resetModules();
+  });
+
+  it('defaults PROACTIVE_ENABLED to false', async () => {
+    delete process.env.PROACTIVE_ENABLED;
+    const c = await import('./config.js');
+    expect(c.PROACTIVE_ENABLED).toBe(false);
+  });
+
+  it('defaults PROACTIVE_GOVERNOR to false', async () => {
+    delete process.env.PROACTIVE_GOVERNOR;
+    const c = await import('./config.js');
+    expect(c.PROACTIVE_GOVERNOR).toBe(false);
+  });
+
+  it('defaults PROACTIVE_GOVERNOR_STRICT to true', async () => {
+    delete process.env.PROACTIVE_GOVERNOR_STRICT;
+    vi.resetModules();
+    const c = await import('./config.js');
+    expect(c.PROACTIVE_GOVERNOR_STRICT).toBe(true);
+  });
+
+  it('defaults PROACTIVE_WATCHERS_ENABLED to false', async () => {
+    delete process.env.PROACTIVE_WATCHERS_ENABLED;
+    vi.resetModules();
+    const c = await import('./config.js');
+    expect(c.PROACTIVE_WATCHERS_ENABLED).toBe(false);
+  });
+
+  it('parses quiet hours and days off', async () => {
+    process.env.QUIET_HOURS_START = '21:00';
+    process.env.QUIET_HOURS_END = '07:30';
+    process.env.QUIET_DAYS_OFF = 'Sat,Sun';
+    const c = await import('./config.js');
+    expect(c.QUIET_HOURS_START).toBe('21:00');
+    expect(c.QUIET_HOURS_END).toBe('07:30');
+    expect(c.QUIET_DAYS_OFF).toEqual(['Sat', 'Sun']);
+  });
+
+  it('defaults QUIET_OVERRIDE_THRESHOLD to 0.8', async () => {
+    delete process.env.QUIET_OVERRIDE_THRESHOLD;
+    const c = await import('./config.js');
+    expect(c.QUIET_OVERRIDE_THRESHOLD).toBe(0.8);
+  });
+
+  it('defaults AGENT_COOLDOWN_MINUTES to 20 and DEDUP_WINDOW_HOURS to 24', async () => {
+    delete process.env.AGENT_COOLDOWN_MINUTES;
+    delete process.env.DEDUP_WINDOW_HOURS;
+    const c = await import('./config.js');
+    expect(c.AGENT_COOLDOWN_MINUTES).toBe(20);
+    expect(c.DEDUP_WINDOW_HOURS).toBe(24);
+  });
+
+  it('falls back to default 20 when AGENT_COOLDOWN_MINUTES is non-numeric', async () => {
+    process.env.AGENT_COOLDOWN_MINUTES = 'notanumber';
+    vi.resetModules();
+    const c = await import('./config.js');
+    expect(c.AGENT_COOLDOWN_MINUTES).toBe(20);
+  });
+
+  it('falls back to default 24 when DEDUP_WINDOW_HOURS is non-numeric', async () => {
+    process.env.DEDUP_WINDOW_HOURS = 'xyz';
+    vi.resetModules();
+    const c = await import('./config.js');
+    expect(c.DEDUP_WINDOW_HOURS).toBe(24);
+  });
+
+  it('falls back to default 0.8 when QUIET_OVERRIDE_THRESHOLD is non-numeric', async () => {
+    process.env.QUIET_OVERRIDE_THRESHOLD = 'abc';
+    vi.resetModules();
+    const c = await import('./config.js');
+    expect(c.QUIET_OVERRIDE_THRESHOLD).toBe(0.8);
   });
 });
