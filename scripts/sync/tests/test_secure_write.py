@@ -28,3 +28,21 @@ def test_accepts_bytes(tmp_path: Path) -> None:
     target = tmp_path / "out.bin"
     write_file_secure(target, b"\x00\x01\x02", mode=0o600)
     assert target.read_bytes() == b"\x00\x01\x02"
+
+
+def test_gmail_save_token_uses_secure_write(tmp_path: Path, monkeypatch) -> None:
+    """Regression test for B8: gmail_adapter._save_token must chmod 0o600."""
+    from email_ingest import gmail_adapter
+
+    token_file = tmp_path / "gmail-token.json"
+    monkeypatch.setattr(gmail_adapter, "GMAIL_TOKEN_FILE", token_file)
+
+    class StubCreds:
+        token = "stub-access-token"
+
+    gmail_adapter._save_token(
+        StubCreds(),
+        {"refresh_token": "r", "client_id": "c", "client_secret": "s"},
+    )
+    assert token_file.exists()
+    assert (token_file.stat().st_mode & 0o777) == 0o600
