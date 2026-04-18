@@ -35,25 +35,21 @@ describe('VaultDeltaWatcher', () => {
     w.stop();
   });
 
-  it('coalesces rapid repeat writes on same path', async () => {
+  it('coalesces rapid repeat enqueues on same path into one emit', async () => {
+    // Direct unit test of the enqueue→flush path, bypassing fs.watch
+    // which is racy under test-suite load on macOS.
     const emit = vi.fn();
     const w = new VaultDeltaWatcher({
       roots: [tmp],
       onEvent: emit,
-      coalesceMs: 100,
+      coalesceMs: 50,
     });
-    w.start();
-    await new Promise((r) => setTimeout(r, 50));
-    fs.mkdirSync(path.join(tmp, '10-daily'), { recursive: true });
     for (let i = 0; i < 5; i++) {
-      fs.writeFileSync(path.join(tmp, '10-daily/a.md'), String(i));
-      await new Promise((r) => setTimeout(r, 5));
+      w.enqueueForTest(path.join(tmp, '10-daily/a.md'));
     }
-    await new Promise((r) => setTimeout(r, 400));
-    expect(emit).toHaveBeenCalled();
-    expect(emit.mock.calls.length).toBeLessThanOrEqual(2);
-    const last = emit.mock.calls.at(-1)![0];
-    expect(last.payload.coalescedCount).toBeGreaterThan(1);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0].payload.coalescedCount).toBe(5);
     w.stop();
   });
 

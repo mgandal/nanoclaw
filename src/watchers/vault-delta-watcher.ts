@@ -38,6 +38,12 @@ export class VaultDeltaWatcher {
     }
   }
 
+  /** @internal Enqueue a path for coalesced emission. Public for tests only;
+   * production code uses fs.watch to call this. */
+  enqueueForTest(abs: string): void {
+    this.enqueue(abs);
+  }
+
   private enqueue(abs: string): void {
     const existing = this.pending.get(abs);
     if (existing) existing.count += 1;
