@@ -1825,14 +1825,9 @@ async function main(): Promise<void> {
     ? wireProactiveWatchers({
         eventRouter,
         vaultRoots: deriveVaultRoots(),
-        emailExportDir: path.join(
-          os.homedir(),
-          '.cache/email-ingest/exported',
-        ),
+        emailExportDir: path.join(os.homedir(), '.cache/email-ingest/exported'),
         hasRecentEmission: (threadId) => {
-          const cutoff = new Date(
-            Date.now() - 7 * 86400_000,
-          ).toISOString();
+          const cutoff = new Date(Date.now() - 7 * 86400_000).toISOString();
           return !!getDb()
             .prepare(
               `SELECT 1 FROM proactive_log WHERE correlation_id = ? AND timestamp >= ? LIMIT 1`,

@@ -80,12 +80,9 @@ export function wireProactiveWatchers(deps: ProactiveWiringDeps): {
   outcome.start();
   deferred.start();
   // Poll thread silence every 4 hours (idempotent via hasRecentEmission).
-  const silenceTimer = setInterval(
-    () => {
-      void silence.poll();
-    },
-    4 * 3600_000,
-  );
+  const silenceTimer = setInterval(() => {
+    void silence.poll();
+  }, 4 * 3600_000);
 
   return {
     stop: () => {
