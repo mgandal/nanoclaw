@@ -11,6 +11,10 @@ export interface ProactiveLogRow {
   rule_id: string | null;
   correlation_id: string;
   message_preview: string | null;
+  /** Full message body. Preview is the 200-char digest slice; body is the
+   * full text to re-dispatch on defer. May be null for drop decisions where
+   * the body is not needed. */
+  message_body: string | null;
   contributing_events: string | null;
   deliver_at: string | null;
   dispatched_at: string | null;
@@ -29,6 +33,7 @@ export interface InsertLog {
   ruleId?: string;
   correlationId: string;
   messagePreview?: string;
+  messageBody?: string;
   contributingEvents: string[];
   deliverAt?: string;
 }
@@ -38,8 +43,8 @@ export function insertLog(row: InsertLog): number {
     .prepare(
       `INSERT INTO proactive_log
         (timestamp, from_agent, to_group, decision, reason, urgency, rule_id,
-         correlation_id, message_preview, contributing_events, deliver_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         correlation_id, message_preview, message_body, contributing_events, deliver_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       row.timestamp,
@@ -51,6 +56,7 @@ export function insertLog(row: InsertLog): number {
       row.ruleId ?? null,
       row.correlationId,
       row.messagePreview ?? null,
+      row.messageBody ?? null,
       JSON.stringify(row.contributingEvents),
       row.deliverAt ?? null,
     );
@@ -128,7 +134,9 @@ export function backfillReaction(
        ORDER BY delivered_at DESC LIMIT 20`,
     )
     .all(toGroup, since) as ProactiveLogRow[];
-  const match = candidates.find((r) => correlationPattern.test(r.correlation_id));
+  const match = candidates.find((r) =>
+    correlationPattern.test(r.correlation_id),
+  );
   if (!match) return false;
   getDb()
     .prepare(

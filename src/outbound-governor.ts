@@ -58,6 +58,9 @@ export function decide(
       ruleId: send.ruleId,
       correlationId: send.correlationId || '(missing)',
       messagePreview: send.message.slice(0, 200),
+      // Persist the full body only when the send may still fire (send/defer).
+      // Drop decisions are terminal, so keep only the preview for audit.
+      messageBody: decision === 'drop' ? undefined : send.message,
       contributingEvents: send.contributingEvents,
       deliverAt,
     });

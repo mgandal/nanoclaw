@@ -161,6 +161,7 @@ function createSchema(database: Database): void {
       rule_id TEXT,
       correlation_id TEXT NOT NULL,
       message_preview TEXT,
+      message_body TEXT,
       contributing_events TEXT,
       deliver_at TEXT,
       dispatched_at TEXT,
@@ -284,6 +285,7 @@ function addProactiveColumns(database: Database): void {
   addCol('scheduled_tasks', 'surface_outputs', 'INTEGER DEFAULT 0');
   addCol('scheduled_tasks', 'proactive', 'INTEGER DEFAULT 0');
   addCol('task_run_logs', 'outcome_emitted', 'INTEGER DEFAULT 0');
+  addCol('proactive_log', 'message_body', 'TEXT');
 }
 
 export function initDatabase(): void {

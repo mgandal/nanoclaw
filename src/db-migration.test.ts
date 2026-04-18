@@ -75,9 +75,9 @@ describe('proactive_log schema', () => {
 
   it('creates proactive_log with required columns', () => {
     const db = getDb();
-    const cols = db
-      .prepare("PRAGMA table_info('proactive_log')")
-      .all() as { name: string }[];
+    const cols = db.prepare("PRAGMA table_info('proactive_log')").all() as {
+      name: string;
+    }[];
     expect(cols.map((c) => c.name)).toEqual(
       expect.arrayContaining([
         'id',
@@ -90,6 +90,7 @@ describe('proactive_log schema', () => {
         'rule_id',
         'correlation_id',
         'message_preview',
+        'message_body',
         'contributing_events',
         'deliver_at',
         'dispatched_at',
@@ -155,8 +156,11 @@ describe('proactive_log schema', () => {
       legacyDb.close();
 
       vi.resetModules();
-      const { initDatabase, getDb: getDbFresh, _closeDatabase } =
-        await import('./db.js');
+      const {
+        initDatabase,
+        getDb: getDbFresh,
+        _closeDatabase,
+      } = await import('./db.js');
 
       initDatabase();
 

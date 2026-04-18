@@ -96,4 +96,51 @@ describe('DeferredSendProcessor', () => {
       .get(id) as any;
     expect(row.delivered_at).toBeNull();
   });
+
+  it('delivers full message_body, not the truncated preview', async () => {
+    const longBody = 'x'.repeat(500);
+    insertLog({
+      timestamp: '2026-04-18T01:00:00Z',
+      fromAgent: 'a',
+      toGroup: 'jid:1',
+      decision: 'defer',
+      reason: 'quiet_hours',
+      correlationId: 'd5',
+      deliverAt: '2026-04-18T12:00:00Z',
+      contributingEvents: [],
+      messagePreview: longBody.slice(0, 200),
+      messageBody: longBody,
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const p = new DeferredSendProcessor({
+      send,
+      now: () => new Date('2026-04-18T12:30:00Z'),
+    });
+    await p.poll();
+    expect(send).toHaveBeenCalled();
+    expect(send.mock.calls[0][0].text).toBe(longBody);
+    expect(send.mock.calls[0][0].text.length).toBe(500);
+  });
+
+  it('falls back to message_preview for legacy rows without message_body', async () => {
+    insertLog({
+      timestamp: '2026-04-18T01:00:00Z',
+      fromAgent: 'a',
+      toGroup: 'jid:1',
+      decision: 'defer',
+      reason: 'quiet_hours',
+      correlationId: 'd6',
+      deliverAt: '2026-04-18T12:00:00Z',
+      contributingEvents: [],
+      messagePreview: 'legacy row',
+      // no messageBody
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const p = new DeferredSendProcessor({
+      send,
+      now: () => new Date('2026-04-18T12:30:00Z'),
+    });
+    await p.poll();
+    expect(send.mock.calls[0][0].text).toBe('legacy row');
+  });
 });

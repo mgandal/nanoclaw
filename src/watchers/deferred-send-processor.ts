@@ -23,9 +23,12 @@ export class DeferredSendProcessor {
     const due = getDueDefers(now.toISOString());
     for (const r of due) {
       try {
+        // Prefer the full body; fall back to the 200-char preview only for
+        // legacy rows written before the message_body column was added.
+        const text = r.message_body ?? r.message_preview ?? '';
         await this.cfg.send({
           toGroup: r.to_group,
-          text: r.message_preview ?? '',
+          text,
           correlationId: r.correlation_id,
           fromAgent: r.from_agent,
           urgency: r.urgency ?? 0.5,
