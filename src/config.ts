@@ -13,6 +13,7 @@ const envConfig = readEnvFile([
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_DEFAULT_MODEL',
   'TELEGRAM_BOT_POOL',
+  'TELEGRAM_POOL_PIN',
   'ONECLI_URL',
   'ONECLI_API_KEY',
   'TZ',
@@ -139,6 +140,29 @@ export const TELEGRAM_BOT_POOL = (
   .split(',')
   .map((t) => t.trim())
   .filter(Boolean);
+
+/**
+ * Pin specific pool bots to specific agent senders so their Telegram display
+ * name is stable across sessions (instead of being renamed on first use).
+ * Format: comma-separated `bot_username:SenderName` pairs.
+ * Example: `nanoclaw_1838_swarm_1_bot:Freud,nanoclaw_1838_swarm_2_bot:Einstein`
+ */
+export const TELEGRAM_POOL_PIN: Record<string, string> = (
+  process.env.TELEGRAM_POOL_PIN ||
+  envConfig.TELEGRAM_POOL_PIN ||
+  ''
+)
+  .split(',')
+  .map((entry) => entry.trim())
+  .filter(Boolean)
+  .reduce<Record<string, string>>((acc, entry) => {
+    const colon = entry.indexOf(':');
+    if (colon <= 0) return acc;
+    const username = entry.slice(0, colon).trim();
+    const sender = entry.slice(colon + 1).trim();
+    if (username && sender) acc[username] = sender;
+    return acc;
+  }, {});
 
 // Context assembler configuration
 export const CONTEXT_PACKET_MAX_SIZE = parseInt(

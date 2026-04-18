@@ -32,6 +32,7 @@ import {
   SESSION_IDLE_MS,
   SESSION_MAX_AGE_MS,
   TELEGRAM_BOT_POOL,
+  TELEGRAM_POOL_PIN,
   TIMEZONE,
   TRUST_MATRIX_PATH,
 } from './config.js';
@@ -1675,7 +1676,7 @@ async function main(): Promise<void> {
 
   // Initialize Telegram bot pool for agent swarm (send-only bots)
   if (TELEGRAM_BOT_POOL.length > 0) {
-    await initBotPool(TELEGRAM_BOT_POOL);
+    await initBotPool(TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN);
   }
 
   // Start subsystems (independently of connection handler)

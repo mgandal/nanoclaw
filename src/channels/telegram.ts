@@ -85,9 +85,21 @@ async function extractDocumentText(
 
 // Bot pool for agent teams: send-only Api instances (no polling)
 const poolApis: Api[] = [];
-// Maps "{groupFolder}:{senderName}" → pool Api index for stable assignment
+// Maps "{groupFolder}:{senderName}" → pool Api index for dynamic (unpinned) senders
 const senderBotMap = new Map<string, number>();
+// Maps sender name → pool Api index for pinned senders (global — a pinned bot's
+// Telegram display name is global, so one pin covers every group that bot is in).
+const pinnedSenderIdx = new Map<string, number>();
 let nextPoolIndex = 0;
+
+/** Reset module-level pool state — test-only hook. */
+export function _resetPoolStateForTests(): void {
+  poolApis.length = 0;
+  senderBotMap.clear();
+  pinnedSenderIdx.clear();
+  nextPoolIndex = 0;
+  poolOpts = null;
+}
 
 const migratingJids = new Set<string>();
 let poolOpts: TelegramChannelOpts | null = null;
@@ -127,24 +139,51 @@ async function handleMigration(
 
 /**
  * Initialize send-only Api instances for the bot pool.
- * Each pool bot can send messages but doesn't poll for updates.
+ *
+ * `pins` maps Telegram bot username → agent sender name. When provided, each
+ * pinned bot is pre-renamed at init and will always carry that sender's
+ * messages (instead of dynamic round-robin).
  */
-export async function initBotPool(tokens: string[]): Promise<void> {
+export async function initBotPool(
+  tokens: string[],
+  pins: Record<string, string> = {},
+): Promise<void> {
   for (const token of tokens) {
     try {
       const api = new Api(token);
       const me = await api.getMe();
       poolApis.push(api);
+      const idx = poolApis.length - 1;
       logger.info(
         { username: me.username, id: me.id, poolSize: poolApis.length },
         'Pool bot initialized',
       );
+
+      const pinnedSender = me.username ? pins[me.username] : undefined;
+      if (pinnedSender) {
+        pinnedSenderIdx.set(pinnedSender, idx);
+        try {
+          await api.setMyName(pinnedSender);
+          logger.info(
+            { botUsername: me.username, pinnedSender, poolIndex: idx },
+            'Pool bot pinned and pre-renamed',
+          );
+        } catch (err) {
+          logger.warn(
+            { botUsername: me.username, pinnedSender, err },
+            'Failed to pre-rename pinned pool bot (pin kept, will send anyway)',
+          );
+        }
+      }
     } catch (err) {
       logger.error({ err }, 'Failed to initialize pool bot');
     }
   }
   if (poolApis.length > 0) {
-    logger.info({ count: poolApis.length }, 'Telegram bot pool ready');
+    logger.info(
+      { count: poolApis.length, pinned: pinnedSenderIdx.size },
+      'Telegram bot pool ready',
+    );
   }
 }
 
@@ -169,25 +208,55 @@ export async function sendPoolMessage(
     return false;
   }
 
-  const key = `${groupFolder}:${sender}`;
-  let idx = senderBotMap.get(key);
-  if (idx === undefined) {
-    idx = nextPoolIndex % poolApis.length;
-    nextPoolIndex++;
-    senderBotMap.set(key, idx);
-    // Rename the bot to match the sender's role, then wait for Telegram to propagate
-    try {
-      await poolApis[idx].setMyName(sender);
-      await new Promise((r) => setTimeout(r, 2000));
-      logger.info(
-        { sender, groupFolder, poolIndex: idx },
-        'Assigned and renamed pool bot',
-      );
-    } catch (err) {
-      logger.warn(
-        { sender, err },
-        'Failed to rename pool bot (sending anyway)',
-      );
+  // Pinned senders always use their assigned bot (pre-renamed at init —
+  // no rename call needed here).
+  const pinnedIdx = pinnedSenderIdx.get(sender);
+  let idx: number;
+  if (pinnedIdx !== undefined) {
+    idx = pinnedIdx;
+  } else {
+    const key = `${groupFolder}:${sender}`;
+    const existing = senderBotMap.get(key);
+    if (existing !== undefined) {
+      idx = existing;
+    } else {
+      // Dynamic round-robin fallback. Skip any pool indices that are pinned —
+      // renaming them would clobber the pinned display name globally.
+      const pinnedIndices = new Set(pinnedSenderIdx.values());
+      const freeCount = poolApis.length - pinnedIndices.size;
+      if (freeCount <= 0) {
+        logger.warn(
+          { sender, groupFolder, poolSize: poolApis.length },
+          'All pool bots are pinned — unpinned sender will reuse a pinned bot without renaming',
+        );
+        idx = nextPoolIndex % poolApis.length;
+      } else {
+        // Advance until we hit an unpinned index.
+        let candidate = nextPoolIndex % poolApis.length;
+        for (let i = 0; i < poolApis.length; i++) {
+          if (!pinnedIndices.has(candidate)) break;
+          candidate = (candidate + 1) % poolApis.length;
+        }
+        idx = candidate;
+      }
+      nextPoolIndex = (idx + 1) % poolApis.length;
+      senderBotMap.set(key, idx);
+
+      if (!pinnedIndices.has(idx)) {
+        try {
+          await poolApis[idx].setMyName(sender);
+          await new Promise((r) => setTimeout(r, 2000));
+          logger.info(
+            { sender, groupFolder, poolIndex: idx },
+            'Assigned and renamed pool bot',
+          );
+        } catch (err) {
+          logger.warn(
+            { sender, err },
+            'Failed to rename pool bot (sending anyway)',
+          );
+        }
+      }
     }
   }
 

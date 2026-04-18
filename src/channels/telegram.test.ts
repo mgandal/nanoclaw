@@ -41,6 +41,12 @@ const botRef = vi.hoisted(() => ({
   handlers: new Map<string, Function>(),
   commandHandlers: new Map<string, Function>(),
   catchHandler: null as Function | null,
+  poolApiInstances: [] as Array<{
+    token: string;
+    sendMessage: ReturnType<typeof vi.fn>;
+    setMyName: ReturnType<typeof vi.fn>;
+    getMe: ReturnType<typeof vi.fn>;
+  }>,
   apiMock: {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     sendChatAction: vi.fn().mockResolvedValue(undefined),
@@ -74,9 +80,16 @@ vi.mock('grammy', () => ({
   },
   Api: class MockApi {
     sendMessage = vi.fn().mockResolvedValue(undefined);
-    getMe = vi.fn().mockResolvedValue({ username: 'pool_bot', id: 456 });
     setMyName = vi.fn().mockResolvedValue(undefined);
-    constructor(token: string) {}
+    token: string;
+    constructor(token: string) {
+      this.token = token;
+      botRef.poolApiInstances.push(this as any);
+    }
+    getMe = vi.fn(async () => ({
+      username: `bot_${this.token}`,
+      id: this.token.length,
+    }));
   },
   InlineKeyboard: class MockInlineKeyboard {
     url(label: string, url: string) {
@@ -897,5 +910,104 @@ describe('TelegramChannel', () => {
         'Telegram bot error',
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pool-bot pinning — fixed sender→bot assignment (Option C)
+// ---------------------------------------------------------------------------
+import {
+  initBotPool,
+  sendPoolMessage as sendPoolMessageFn,
+  _resetPoolStateForTests,
+} from './telegram.js';
+
+function getBot(token: string) {
+  const bot = botRef.poolApiInstances.find((b) => b.token === token);
+  if (!bot) throw new Error(`No mock pool Api created for token ${token}`);
+  return bot;
+}
+
+describe('pool pinning', () => {
+  beforeEach(() => {
+    botRef.poolApiInstances.length = 0;
+    _resetPoolStateForTests();
+  });
+
+  it('pre-renames pinned bots exactly once at init', async () => {
+    await initBotPool(['tokA', 'tokB', 'tokC'], {
+      bot_tokA: 'Freud',
+      bot_tokC: 'Einstein',
+    });
+    expect(getBot('tokA').setMyName).toHaveBeenCalledTimes(1);
+    expect(getBot('tokA').setMyName).toHaveBeenCalledWith('Freud');
+    expect(getBot('tokB').setMyName).toHaveBeenCalledTimes(0);
+    expect(getBot('tokC').setMyName).toHaveBeenCalledTimes(1);
+    expect(getBot('tokC').setMyName).toHaveBeenCalledWith('Einstein');
+  });
+
+  it('routes pinned senders to their pinned bot regardless of call order', async () => {
+    await initBotPool(['t1', 't2', 't3'], {
+      bot_t2: 'Freud',
+      bot_t3: 'Einstein',
+    });
+    // Call dynamic first, then pinned, then the other pinned — order shouldn't
+    // affect pinned routing.
+    await sendPoolMessageFn('tg:1', 'msg-claire', 'Claire', 'g');
+    await sendPoolMessageFn('tg:1', 'msg-freud', 'Freud', 'g');
+    await sendPoolMessageFn('tg:1', 'msg-einstein', 'Einstein', 'g');
+
+    expect(getBot('t2').sendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'msg-freud',
+      expect.anything(),
+    );
+    expect(getBot('t3').sendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'msg-einstein',
+      expect.anything(),
+    );
+    // Claire (unpinned) went to t1 (first unpinned slot)
+    expect(getBot('t1').sendMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'msg-claire',
+      expect.anything(),
+    );
+  });
+
+  it('never re-renames pinned bots on subsequent sends', async () => {
+    await initBotPool(['t1'], { bot_t1: 'Freud' });
+    getBot('t1').setMyName.mockClear();
+    await sendPoolMessageFn('tg:1', 'a', 'Freud', 'g');
+    await sendPoolMessageFn('tg:1', 'b', 'Freud', 'g');
+    await sendPoolMessageFn('tg:2', 'c', 'Freud', 'g2');
+    expect(getBot('t1').setMyName).toHaveBeenCalledTimes(0);
+  });
+
+  it('dynamic round-robin skips pinned bots', async () => {
+    await initBotPool(['t1', 't2', 't3'], { bot_t2: 'Freud' });
+    await sendPoolMessageFn('tg:1', 'm1', 'Marvin', 'g');
+    await sendPoolMessageFn('tg:1', 'm2', 'Simon', 'g');
+    // Marvin and Simon should have landed on t1 and t3 (the unpinned slots),
+    // never on t2 (which is pinned to Freud).
+    expect(getBot('t2').sendMessage).not.toHaveBeenCalled();
+    const usedUnpinned = [getBot('t1'), getBot('t3')].filter(
+      (b) => b.sendMessage.mock.calls.length > 0,
+    );
+    expect(usedUnpinned.length).toBe(2);
+  });
+
+  it('renames unpinned senders on first use (existing behavior preserved)', async () => {
+    await initBotPool(['t1', 't2'], { bot_t1: 'Freud' });
+    getBot('t2').setMyName.mockClear();
+    await sendPoolMessageFn('tg:1', 'hi', 'Marvin', 'g');
+    expect(getBot('t2').setMyName).toHaveBeenCalledWith('Marvin');
+  });
+
+  it('works with no pins (backward compatibility)', async () => {
+    await initBotPool(['t1', 't2']);
+    const ok = await sendPoolMessageFn('tg:1', 'hi', 'Claire', 'g');
+    expect(ok).toBe(true);
+    expect(getBot('t1').sendMessage).toHaveBeenCalled();
   });
 });
