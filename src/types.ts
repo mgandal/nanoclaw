@@ -95,6 +95,10 @@ export interface ScheduledTask {
   status: 'active' | 'paused' | 'completed';
   agent_name: string | null;
   created_at: string;
+  /** When 1, task-scheduler injects PROACTIVE_CORRELATION_ID env into the
+   * container so agent IPC sends with `proactive: true` have a stable
+   * correlation id for governor dedup. */
+  proactive?: 0 | 1;
 }
 
 export interface TaskRunLog {

@@ -13,14 +13,25 @@ import { logger } from './logger.js';
 import {
   getEmailClassificationPrompt,
   getCalendarClassificationPrompt,
+  getVaultChangeClassificationPrompt,
+  getSilentThreadPrompt,
+  getTaskOutcomePrompt,
   type EmailPayload,
   type CalendarPayload,
+  type VaultChangePayload,
+  type SilentThreadPayload,
+  type TaskOutcomePayload,
 } from './classification-prompts.js';
 
 // ─── Public Interfaces ────────────────────────────────────────────────────────
 
 export interface RawEvent {
-  type: 'email' | 'calendar';
+  type:
+    | 'email'
+    | 'calendar'
+    | 'vault_change'
+    | 'silent_thread'
+    | 'task_outcome';
   id: string;
   timestamp: string;
   payload: Record<string, unknown>;
@@ -238,14 +249,31 @@ export class EventRouter {
   }
 
   private buildPrompt(event: RawEvent): { system: string; prompt: string } {
-    if (event.type === 'email') {
-      return getEmailClassificationPrompt(
-        event.payload as unknown as EmailPayload,
-      );
-    } else {
-      return getCalendarClassificationPrompt(
-        event.payload as unknown as CalendarPayload,
-      );
+    switch (event.type) {
+      case 'email':
+        return getEmailClassificationPrompt(
+          event.payload as unknown as EmailPayload,
+        );
+      case 'calendar':
+        return getCalendarClassificationPrompt(
+          event.payload as unknown as CalendarPayload,
+        );
+      case 'vault_change':
+        return getVaultChangeClassificationPrompt(
+          event.payload as unknown as VaultChangePayload,
+        );
+      case 'silent_thread':
+        return getSilentThreadPrompt(
+          event.payload as unknown as SilentThreadPayload,
+        );
+      case 'task_outcome':
+        return getTaskOutcomePrompt(
+          event.payload as unknown as TaskOutcomePayload,
+        );
+      default: {
+        const _: never = event.type;
+        throw new Error(`Unknown event type: ${_}`);
+      }
     }
   }
 

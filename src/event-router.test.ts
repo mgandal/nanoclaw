@@ -207,4 +207,37 @@ describe('EventRouter', () => {
     expect(typeof stats.avgLatencyMs).toBe('number');
     expect(stats.byRouting).toBeDefined();
   });
+
+  it('buildPrompt dispatches vault_change to vault prompt builder', async () => {
+    const messageBus = { publish: vi.fn() };
+    const healthMonitor = {
+      recordOllamaLatency: vi.fn(),
+      isOllamaDegraded: () => false,
+    };
+    const router = new EventRouter({
+      ollamaHost: 'http://localhost:11434',
+      ollamaModel: 'test-model',
+      trustRules: [],
+      messageBus: messageBus as any,
+      healthMonitor: healthMonitor as any,
+    });
+    const raw = {
+      type: 'vault_change' as const,
+      id: 'v1',
+      timestamp: new Date().toISOString(),
+      payload: { path: 'x.md', tag: 'papers', author: 'user' },
+    };
+    const fetchMock = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          response:
+            '{"importance":0.3,"urgency":0.3,"topic":"papers","summary":"x","suggestedRouting":"notify","requiresClaude":false,"confidence":0.9}',
+        }),
+      ),
+    );
+    await router.route(raw as any);
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    expect(body.prompt).toContain('x.md');
+    fetchMock.mockRestore();
+  });
 });

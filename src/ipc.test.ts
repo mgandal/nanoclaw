@@ -7,6 +7,7 @@ import {
   _initTestDatabase,
   createTask,
   getAllTasks,
+  getDb,
   getTaskById,
   setRegisteredGroup,
   updateTask,
@@ -2102,6 +2103,198 @@ describe('deliverSendMessage', () => {
   });
 });
 
+describe('deliverSendMessage with proactive payload', () => {
+  const PROACTIVE_ENV_KEYS = [
+    'PROACTIVE_GOVERNOR',
+    'PROACTIVE_ENABLED',
+    'QUIET_HOURS_START',
+    'QUIET_HOURS_END',
+    'QUIET_DAYS_OFF',
+  ] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const key of PROACTIVE_ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+    }
+    // Neutralize quiet-hours config so tests don't defer based on wall clock /
+    // day-of-week. Start==End==00:00 is handled by isInQuietHours as "24h
+    // quiet", so we use a narrow 1-minute window instead that the test clock
+    // is very unlikely to hit. Days-off must be a non-empty string of values
+    // that never match a weekday; an empty string falls back to the default
+    // "Sat,Sun" in config.ts.
+    process.env.QUIET_HOURS_START = '04:00';
+    process.env.QUIET_HOURS_END = '04:01';
+    process.env.QUIET_DAYS_OFF = 'Neverday';
+  });
+
+  afterEach(() => {
+    for (const key of PROACTIVE_ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    vi.resetModules();
+  });
+
+  // After vi.resetModules(), the db.js module is re-instantiated. The top-level
+  // `getDb` import in this test file still points at the OLD module instance,
+  // so we must re-import db.js after reset to access the DB that the freshly
+  // imported ipc.js → proactive-log.js chain is actually writing to. This
+  // helper returns a freshly-initialized test DB from the current module graph.
+  async function reimportAndInit() {
+    vi.resetModules();
+    const dbMod = await import('./db.js');
+    dbMod._initTestDatabase();
+    dbMod.getDb().prepare('DELETE FROM proactive_log').run();
+    const ipcMod = await import('./ipc.js');
+    return {
+      deliverSendMessage: ipcMod.deliverSendMessage,
+      getDb: dbMod.getDb,
+    };
+  }
+
+  it('governor off → ignores proactive flag and sends', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'false';
+    const { deliverSendMessage, getDb: curGetDb } = await reimportAndInit();
+    const sendMessage = vi.fn();
+    await deliverSendMessage(
+      {
+        chatJid: 'j',
+        text: 'hi',
+        proactive: true,
+        correlationId: 'c1',
+        urgency: 0.5,
+        ruleId: 'escalate',
+        fromAgent: 'ein',
+        contributingEvents: [],
+      } as any,
+      { sendMessage } as any,
+      'main',
+    );
+    expect(sendMessage).toHaveBeenCalled();
+    const rows = curGetDb()
+      .prepare('SELECT COUNT(*) AS c FROM proactive_log')
+      .get() as any;
+    expect(rows.c).toBe(0);
+  });
+
+  it('governor on + kill switch → drops and logs', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'true';
+    process.env.PROACTIVE_ENABLED = 'false';
+    const { deliverSendMessage, getDb: curGetDb } = await reimportAndInit();
+    const sendMessage = vi.fn();
+    await deliverSendMessage(
+      {
+        chatJid: 'j',
+        text: 'hi',
+        proactive: true,
+        correlationId: 'c2',
+        urgency: 0.5,
+        ruleId: 'escalate',
+        fromAgent: 'ein',
+        contributingEvents: [],
+      } as any,
+      { sendMessage } as any,
+      'main',
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+    const rows = curGetDb()
+      .prepare("SELECT * FROM proactive_log WHERE correlation_id='c2'")
+      .all();
+    expect(rows.length).toBe(1);
+  });
+
+  it('throws when proactive=true but correlationId missing', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'true';
+    process.env.PROACTIVE_ENABLED = 'true';
+    const { deliverSendMessage } = await reimportAndInit();
+    await expect(
+      deliverSendMessage(
+        { chatJid: 'j', text: 'hi', proactive: true } as any,
+        { sendMessage: vi.fn() } as any,
+        'main',
+      ),
+    ).rejects.toThrow(/correlationId/);
+  });
+
+  it('sets dispatched_at before send and delivered_at after', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'true';
+    process.env.PROACTIVE_ENABLED = 'true';
+    const { deliverSendMessage, getDb: curGetDb } = await reimportAndInit();
+    let sawDispatched = false;
+    const sendMessage = vi.fn(async () => {
+      const row = curGetDb()
+        .prepare("SELECT * FROM proactive_log WHERE correlation_id='c3'")
+        .get() as any;
+      if (row?.dispatched_at) sawDispatched = true;
+    });
+    await deliverSendMessage(
+      {
+        chatJid: 'j',
+        text: 'hi',
+        proactive: true,
+        correlationId: 'c3',
+        urgency: 0.5,
+        ruleId: 'escalate',
+        fromAgent: 'ein',
+        contributingEvents: [],
+      } as any,
+      { sendMessage } as any,
+      'main',
+    );
+    expect(sawDispatched).toBe(true);
+    const row = curGetDb()
+      .prepare("SELECT * FROM proactive_log WHERE correlation_id='c3'")
+      .get() as any;
+    expect(row.delivered_at).not.toBeNull();
+  });
+
+  it('clears dispatched_at on send failure', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'true';
+    process.env.PROACTIVE_ENABLED = 'true';
+    const { deliverSendMessage, getDb: curGetDb } = await reimportAndInit();
+    const sendMessage = vi.fn().mockRejectedValue(new Error('network fail'));
+    await expect(
+      deliverSendMessage(
+        {
+          chatJid: 'j',
+          text: 'hi',
+          proactive: true,
+          correlationId: 'c4',
+          urgency: 0.5,
+          ruleId: 'escalate',
+          fromAgent: 'ein',
+          contributingEvents: [],
+        } as any,
+        { sendMessage } as any,
+        'main',
+      ),
+    ).rejects.toThrow(/network fail/);
+    const row = curGetDb()
+      .prepare("SELECT * FROM proactive_log WHERE correlation_id='c4'")
+      .get() as any;
+    expect(row.dispatched_at).toBeNull();
+    expect(row.delivered_at).toBeNull();
+  });
+
+  it('reactive sends (no proactive flag) go straight through', async () => {
+    process.env.PROACTIVE_GOVERNOR = 'true';
+    process.env.PROACTIVE_ENABLED = 'true';
+    const { deliverSendMessage, getDb: curGetDb } = await reimportAndInit();
+    const sendMessage = vi.fn();
+    await deliverSendMessage(
+      { chatJid: 'j', text: 'hi' } as any, // no proactive flag
+      { sendMessage } as any,
+      'main',
+    );
+    expect(sendMessage).toHaveBeenCalled();
+    const rows = curGetDb()
+      .prepare('SELECT COUNT(*) AS c FROM proactive_log')
+      .get() as any;
+    expect(rows.c).toBe(0);
+  });
+});
+
 // --- End-to-end dispatch: kg_query flows from processTaskIpc to
 //     handleKgIpc and writes a result file under DATA_DIR/ipc/.../kg_results/.
 //     Reads against the real store/knowledge-graph.db (populated by
@@ -2179,5 +2372,92 @@ describe('processTaskIpc dispatches kg_query', () => {
     } finally {
       if (fs.existsSync(resultFile)) fs.unlinkSync(resultFile);
     }
+  });
+});
+
+// --- IPC set_proactive_pause action ---
+
+describe('IPC set_proactive_pause action', () => {
+  let tmpPauseFile: string;
+
+  beforeEach(async () => {
+    tmpPauseFile = path.join(
+      os.tmpdir(),
+      `pause-ipc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+    );
+    process.env.PROACTIVE_PAUSE_PATH_OVERRIDE = tmpPauseFile;
+    try {
+      fs.unlinkSync(tmpPauseFile);
+    } catch {
+      /* not present */
+    }
+    const { clearPauseCache } = await import('./proactive-pause.js');
+    clearPauseCache();
+  });
+
+  afterEach(() => {
+    try {
+      fs.unlinkSync(tmpPauseFile);
+    } catch {
+      /* not present */
+    }
+    delete process.env.PROACTIVE_PAUSE_PATH_OVERRIDE;
+  });
+
+  it('writes pause file when action received from main group', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: '2026-04-18T23:00:00Z',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe('2026-04-18T23:00:00Z');
+  });
+
+  it('accepts null pausedUntil for indefinite pause', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: null,
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe(null);
+  });
+
+  it('coerces missing pausedUntil to null (indefinite)', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+      },
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(true);
+    const state = JSON.parse(fs.readFileSync(tmpPauseFile, 'utf-8'));
+    expect(state.pausedUntil).toBe(null);
+  });
+
+  it('rejects when not main group', async () => {
+    await processIpcMessage(
+      {
+        type: 'set_proactive_pause',
+        pausedUntil: '2026-04-18T23:00:00Z',
+      },
+      'telegram_other',
+      false,
+      deps,
+    );
+    expect(fs.existsSync(tmpPauseFile)).toBe(false);
   });
 });
