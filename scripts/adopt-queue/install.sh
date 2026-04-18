@@ -28,6 +28,32 @@ else
   echo "  skip: runner not found at $RUNNER_SRC (run after Task 3)"
 fi
 
+SKILL_SRC="$REPO_ROOT/scripts/adopt-queue/skill/SKILL.md"
+SKILL_DST_DIR="$REPO_ROOT/groups/telegram_code-claw/skills/queue-adopt"
+if [[ -f "$SKILL_SRC" ]]; then
+  mkdir -p "$SKILL_DST_DIR"
+  if [[ -f "$SKILL_DST_DIR/SKILL.md" ]] && cmp -s "$SKILL_SRC" "$SKILL_DST_DIR/SKILL.md"; then
+    echo "  ok: skill up-to-date at $SKILL_DST_DIR/SKILL.md"
+  else
+    cp "$SKILL_SRC" "$SKILL_DST_DIR/SKILL.md"
+    echo "  ok: skill installed at $SKILL_DST_DIR/SKILL.md"
+  fi
+fi
+
+EVAL_REPO_SKILL="$REPO_ROOT/groups/telegram_code-claw/skills/eval-repo/SKILL.md"
+EVAL_REPO_NUDGE='_To queue for laptop adoption: reply `/queue`_'
+if [[ -f "$EVAL_REPO_SKILL" ]]; then
+  if grep -qF "$EVAL_REPO_NUDGE" "$EVAL_REPO_SKILL"; then
+    echo "  ok: eval-repo SKILL.md already cross-references /queue"
+  else
+    echo "  WARN: eval-repo SKILL.md does not mention /queue"
+    echo "        Add this line inside the Telegram output template (Step 4):"
+    echo "        $EVAL_REPO_NUDGE"
+  fi
+else
+  echo "  skip: eval-repo SKILL.md not found at $EVAL_REPO_SKILL"
+fi
+
 ALLOWLIST="$HOME/.config/nanoclaw/mount-allowlist.json"
 if grep -q '"/Users/mgandal/claire-tools/adopt-queue"' "$ALLOWLIST" 2>/dev/null; then
   echo "  ok: mount-allowlist.json has adopt-queue entry"
