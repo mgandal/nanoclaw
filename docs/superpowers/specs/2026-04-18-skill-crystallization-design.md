@@ -102,7 +102,7 @@ Handler writes:
 - `data/agents/{agent}/skills/crystallized/{name}/SKILL.md` with the frontmatter + steps.
 - Appends to `data/agents/{agent}/skills/crystallized/log.jsonl`: `{ts, name, source_task, confidence}`.
 
-The skill file is picked up automatically on next container spawn via the existing agent-skill sync in `src/container-runner.ts` (see handoff `project_agent_architecture_redesign.md`).
+The skill file must be picked up on next container spawn. **Correction (2026-04-19):** verified that agent-skill sync does NOT yet exist. `syncSkillsForGroup` at `src/container-runner.ts:114` only merges `container/skills/` + `groups/{folder}/skills/` into `/home/node/.claude/skills/`. `data/agents/{name}/` is bind-mounted read-only at `/workspace/agent` but that path is not scanned by the Skill tool. Phase 1 must extend `syncSkillsForGroup` to accept `agentName` and sync `data/agents/{agentName}/skills/crystallized/` into `skillsDst`, sandwiched between the group layer (line 128-141) and container layer (line 144-155). Precedence: **container > agent-crystallized > group**. Call site at line 283 threads `agentName` (already in scope nearby).
 
 **3. Retrieve on next invocation.** No new code needed. Claude Code's Skill tool already matches by name + description. The crystallized skill becomes discoverable as soon as it lands in the agent's skills dir and the container is re-spawned (or the dir is remounted).
 
@@ -138,7 +138,7 @@ Not every successful task deserves a skill. A one-off "search Gmail for Mike's 2
 
 - [ ] IPC action `crystallize_skill` — validate inputs, write to disk.
 - [ ] Slash command `/crystallize` inside container — agent gathers its own trace + fires IPC.
-- [ ] Path wiring: `data/agents/{name}/skills/crystallized/` surfaces in the container's `.claude/skills/` (already handled by existing agent-skill sync; verify).
+- [ ] Path wiring: extend `syncSkillsForGroup(groupDir, sessionsDir, agentName?)` to sync `data/agents/{agentName}/skills/crystallized/` into `skillsDst` between the group and container layers. Precedence: container > agent > group. (Previously assumed existing; verified 2026-04-19 that it does not — this is net-new code, not a verification task.)
 - [ ] Tests: round-trip a known task, verify skill file exists, verify Skill tool matches it next session.
 
 ### Phase 2 — Observation (~1 week after Phase 1 lands)
@@ -172,7 +172,7 @@ GenericAgent's remote skill service (105K cards) isn't directly applicable — t
 
 ## Effort estimate
 
-- Phase 1: 4-6 hours. IPC action + slash command + prompt template + one test.
+- Phase 1: 6-8 hours (revised 2026-04-19 — +2h for agent-skill sync, previously mis-estimated as existing). Sync extension + IPC action + slash command + prompt template + two tests (round-trip + sync precedence).
 - Phase 2: +2 hours. Logging + weekly retro query.
 - Phase 3: +1 day. Detection heuristics are the hard part.
 
