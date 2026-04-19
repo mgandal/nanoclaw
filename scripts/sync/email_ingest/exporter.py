@@ -8,8 +8,30 @@ from typing import Callable, Optional
 
 import requests
 
+from email_ingest.secure_write import write_file_secure
 from email_ingest.types import NormalizedEmail, ClassificationResult, EXPORT_DIR
 from email_ingest import markitdown as md_adapter
+
+
+def _migrate_export_modes() -> None:
+    """BX2: best-effort chmod of existing exported/*.md files to 0600.
+
+    Runs on module import. Cost is one stat per file; safe to repeat.
+    Silently ignores errors (other user, read-only FS, race).
+    """
+    try:
+        for md_path in EXPORT_DIR.rglob("*.md"):
+            try:
+                current = md_path.stat().st_mode & 0o777
+                if current != 0o600:
+                    md_path.chmod(0o600)
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+_migrate_export_modes()
 
 log = logging.getLogger("email-ingest.exporter")
 
@@ -171,7 +193,8 @@ def export_email(
     if attachments_md:
         content = content + "\n\n" + attachments_md
 
-    filepath.write_text(content, encoding="utf-8")
+    # BX2: exported email content is private — owner-read-only.
+    write_file_secure(filepath, content, mode=0o600)
     log.debug("Exported %s → %s", email.id, filepath)
     return filepath
 
