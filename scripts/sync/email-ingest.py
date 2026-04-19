@@ -101,7 +101,7 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
             all_classified.append((email, result.relevance))
 
             if result.relevance >= RELEVANCE_THRESHOLD:
-                export_email(email, result)
+                export_email(email, result, downloader=gmail.download_attachment)
                 stats["exported"] += 1
                 gmail_exported += 1
                 log.info("Exported [%.2f] %s: %s", result.relevance, email.source, email.subject[:60])

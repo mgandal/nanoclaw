@@ -27,6 +27,9 @@ class NormalizedEmail:
     body: str  # truncated to BODY_MAX_CHARS
     labels: list[str]
     metadata: dict = field(default_factory=dict)
+    attachments: list[dict] = field(default_factory=list)
+    # Each attachment: {"filename": str, "mime_type": str, "size": int, "attachment_id": str}
+    # attachment_id lets the exporter download lazily via the adapter.
 
 
 @dataclass

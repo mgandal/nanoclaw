@@ -154,6 +154,32 @@ def _extract_body(payload: dict) -> str:
     return ""
 
 
+def _extract_attachments(payload: dict) -> list[dict]:
+    """Walk payload parts and return metadata for every attachment.
+
+    Gmail attachments are not delivered inline — we get an attachmentId that
+    must be fetched separately via users().messages().attachments().get().
+    """
+    out: list[dict] = []
+
+    def walk(part: dict) -> None:
+        filename = part.get("filename") or ""
+        body = part.get("body", {}) or {}
+        attachment_id = body.get("attachmentId")
+        if filename and attachment_id:
+            out.append({
+                "filename": filename,
+                "mime_type": part.get("mimeType", ""),
+                "size": int(body.get("size", 0) or 0),
+                "attachment_id": attachment_id,
+            })
+        for child in part.get("parts", []) or []:
+            walk(child)
+
+    walk(payload)
+    return out
+
+
 def _get_header(headers: list, name: str, default: str = "") -> str:
     for h in headers:
         if h.get("name", "").lower() == name.lower():
@@ -163,8 +189,10 @@ def _get_header(headers: list, name: str, default: str = "") -> str:
 
 def normalize_gmail_message(raw: dict) -> NormalizedEmail:
     """Convert Gmail API message to NormalizedEmail."""
-    headers = raw.get("payload", {}).get("headers", [])
-    body = _extract_body(raw.get("payload", {}))
+    payload = raw.get("payload", {})
+    headers = payload.get("headers", [])
+    body = _extract_body(payload)
+    attachments = _extract_attachments(payload)
 
     return NormalizedEmail(
         id=raw["id"],
@@ -180,6 +208,7 @@ def normalize_gmail_message(raw: dict) -> NormalizedEmail:
             "threadId": raw.get("threadId", ""),
             "snippet": raw.get("snippet", ""),
         },
+        attachments=attachments,
     )
 
 
@@ -278,6 +307,26 @@ class GmailAdapter:
             except Exception as e:
                 log.warning("Gmail thread normalize failed: %s", e)
         return out
+
+    def download_attachment(self, msg_id: str, attachment_id: str) -> bytes | None:
+        """Fetch raw bytes for a single Gmail attachment. Returns None on failure."""
+        if not self._service:
+            return None
+        try:
+            resp = (
+                self._service.users()
+                .messages()
+                .attachments()
+                .get(userId="me", messageId=msg_id, id=attachment_id)
+                .execute()
+            )
+            data = resp.get("data", "")
+            if not data:
+                return None
+            return base64.urlsafe_b64decode(data)
+        except Exception as e:
+            log.warning("Gmail attachment fetch failed (msg %s att %s): %s", msg_id, attachment_id, e)
+            return None
 
     def fetch_message(self, msg_id: str) -> NormalizedEmail | None:
         """Fetch a single message by id. Returns None on failure."""

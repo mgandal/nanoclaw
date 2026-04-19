@@ -4,12 +4,19 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Callable, Optional
 
 import requests
 
 from email_ingest.types import NormalizedEmail, ClassificationResult, EXPORT_DIR
+from email_ingest import markitdown as md_adapter
 
 log = logging.getLogger("email-ingest.exporter")
+
+ATTACHMENT_SECTION_CHAR_CAP = 40_000  # per-attachment markdown truncation
+
+AttachmentDownloader = Callable[[str, str], Optional[bytes]]
+# (message_id, attachment_id) -> raw bytes | None
 
 
 def sanitize_filename(s: str) -> str:
@@ -43,6 +50,46 @@ def _infer_direction(email: NormalizedEmail) -> str:
     if "SENT" in (email.labels or []):
         return "outbound"
     return "inbound"
+
+
+def _build_attachments_section(
+    email: NormalizedEmail,
+    downloader: Optional[AttachmentDownloader],
+) -> str:
+    """Convert each attachment via MarkItDown and return a markdown block.
+
+    Returns "" if no attachments, no downloader, or nothing supported.
+    Failures per-attachment are logged and noted inline — not raised.
+    """
+    attachments = email.attachments or []
+    if not attachments or downloader is None or not md_adapter.is_available():
+        return ""
+
+    lines: list[str] = []
+    for att in attachments:
+        filename = att.get("filename", "")
+        size = int(att.get("size", 0) or 0)
+        if not md_adapter.is_supported(filename, size):
+            lines.append(f"### {filename}\n\n_(skipped: unsupported type or >{md_adapter.SIZE_LIMIT_BYTES // (1024*1024)} MB)_\n")
+            continue
+
+        data = downloader(email.id, att.get("attachment_id", ""))
+        if data is None:
+            lines.append(f"### {filename}\n\n_(download failed)_\n")
+            continue
+
+        markdown = md_adapter.convert_bytes(data, filename)
+        if markdown is None:
+            lines.append(f"### {filename}\n\n_(conversion failed)_\n")
+            continue
+
+        truncated = markdown[:ATTACHMENT_SECTION_CHAR_CAP]
+        suffix = "\n\n_(truncated)_" if len(markdown) > ATTACHMENT_SECTION_CHAR_CAP else ""
+        lines.append(f"### {filename}\n\n{truncated}{suffix}\n")
+
+    if not lines:
+        return ""
+    return "## Attachments\n\n" + "\n".join(lines)
 
 
 def build_markdown(email: NormalizedEmail, result: ClassificationResult) -> str:
@@ -101,8 +148,17 @@ def build_markdown(email: NormalizedEmail, result: ClassificationResult) -> str:
     return "\n".join(lines)
 
 
-def export_email(email: NormalizedEmail, result: ClassificationResult) -> Path:
-    """Write enriched markdown file. Returns the file path."""
+def export_email(
+    email: NormalizedEmail,
+    result: ClassificationResult,
+    downloader: Optional[AttachmentDownloader] = None,
+) -> Path:
+    """Write enriched markdown file. Returns the file path.
+
+    If `downloader` is supplied and the email has attachments, each supported
+    attachment is converted to markdown (via MarkItDown) and appended under
+    an "## Attachments" section.
+    """
     yyyy_mm = _extract_yyyy_mm(email.date)
     out_dir = EXPORT_DIR / email.source / yyyy_mm
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -111,6 +167,10 @@ def export_email(email: NormalizedEmail, result: ClassificationResult) -> Path:
     filepath = out_dir / filename
 
     content = build_markdown(email, result)
+    attachments_md = _build_attachments_section(email, downloader)
+    if attachments_md:
+        content = content + "\n\n" + attachments_md
+
     filepath.write_text(content, encoding="utf-8")
     log.debug("Exported %s → %s", email.id, filepath)
     return filepath

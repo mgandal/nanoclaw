@@ -106,6 +106,49 @@ def test_export_email_creates_date_subdirectory(tmp_path):
         assert "2026-04" in str(path)
 
 
+def test_export_email_appends_attachments_section(tmp_path):
+    email = _make_email(attachments=[
+        {"filename": "report.docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+         "size": 1234, "attachment_id": "att-1"},
+    ])
+    downloader = MagicMock(return_value=b"fake-docx-bytes")
+    with patch("email_ingest.exporter.EXPORT_DIR", tmp_path), \
+         patch("email_ingest.exporter.md_adapter.is_available", return_value=True), \
+         patch("email_ingest.exporter.md_adapter.is_supported", return_value=True), \
+         patch("email_ingest.exporter.md_adapter.convert_bytes", return_value="# report\n\nbody"):
+        path = export_email(email, _make_result(), downloader=downloader)
+        content = path.read_text()
+        assert "## Attachments" in content
+        assert "### report.docx" in content
+        assert "# report" in content
+        downloader.assert_called_once_with("msg-123", "att-1")
+
+
+def test_export_email_skips_unsupported_attachments(tmp_path):
+    email = _make_email(attachments=[
+        {"filename": "movie.mov", "mime_type": "video/quicktime",
+         "size": 500, "attachment_id": "att-2"},
+    ])
+    downloader = MagicMock()
+    with patch("email_ingest.exporter.EXPORT_DIR", tmp_path), \
+         patch("email_ingest.exporter.md_adapter.is_available", return_value=True):
+        path = export_email(email, _make_result(), downloader=downloader)
+        content = path.read_text()
+        assert "### movie.mov" in content
+        assert "unsupported" in content
+        downloader.assert_not_called()
+
+
+def test_export_email_no_attachments_section_without_downloader(tmp_path):
+    email = _make_email(attachments=[
+        {"filename": "a.docx", "mime_type": "application/x", "size": 100, "attachment_id": "x"},
+    ])
+    with patch("email_ingest.exporter.EXPORT_DIR", tmp_path):
+        path = export_email(email, _make_result(), downloader=None)
+        content = path.read_text()
+        assert "## Attachments" not in content
+
+
 def test_retain_in_hindsight_fires_and_forgets():
     with patch("email_ingest.exporter.requests") as mock_req:
         mock_req.post.return_value = MagicMock(status_code=200)
