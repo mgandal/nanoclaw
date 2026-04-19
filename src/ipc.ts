@@ -1378,6 +1378,29 @@ export async function processTaskIpc(
         break;
       }
 
+      // C13: trust enforcement. The handler already rejects non-compound
+      // callers (line 1352), so every execution reaches here only for agents.
+      {
+        const { group: wasBaseGroup } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        const trust = loadAgentTrust(agentDir);
+        const trustDecision = checkTrustAndStage({
+          agentName: agent,
+          groupFolder: wasBaseGroup,
+          actionType: 'write_agent_state',
+          summary: d.append ? 'state.md append' : 'state.md replace',
+          target: agent,
+          payloadForStaging: {
+            type: 'write_agent_state',
+            content,
+            append: d.append,
+          },
+          trust,
+        });
+        if (!trustDecision.allowed) break;
+      }
+
       const statePath = path.join(AGENTS_DIR, agent, 'state.md');
       const tmpPath = `${statePath}.tmp`;
       const finalContent = d.append

@@ -2436,6 +2436,129 @@ describe('write_agent_memory section upsert', () => {
   });
 });
 
+// --- C13: write_agent_state trust enforcement for agent callers ---
+
+describe('write_agent_state trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-state-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const writeData = {
+    type: 'write_agent_state',
+    content: '# state\ncurrent_task: refactor-auth\n',
+  };
+
+  it('writes immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_state: autonomous\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'state.md'), 'utf-8');
+    expect(content).toContain('current_task: refactor-auth');
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_state: draft\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    // state.md never created
+    expect(fs.existsSync(path.join(agentDir, 'state.md'))).toBe(false);
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('write_agent_state');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.content).toContain('current_task: refactor-auth');
+    expect(payload.append).toBeFalsy();
+  });
+
+  it('stages on ask (no policy listed)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(fs.existsSync(path.join(agentDir, 'state.md'))).toBe(false);
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('preserves append semantics in staged payload', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_state: draft\n',
+    );
+
+    await processTaskIpc(
+      { ...writeData, append: true } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.append).toBe(true);
+  });
+
+  it('rejects non-compound callers before touching trust', async () => {
+    // write_agent_state requires a compound key — no trust check needed,
+    // just break. No agent_actions row should be written.
+    await processTaskIpc(
+      writeData as any,
+      'telegram_other', // plain group, no agent
+      false,
+      deps,
+    );
+
+    expect(fs.existsSync(path.join(agentDir, 'state.md'))).toBe(false);
+    const rows = getDb()
+      .prepare(
+        "SELECT COUNT(*) as n FROM agent_actions WHERE action_type = 'write_agent_state'",
+      )
+      .get() as { n: number };
+    expect(rows.n).toBe(0);
+  });
+});
+
 // --- C13: write_agent_memory trust enforcement for agent callers ---
 
 describe('write_agent_memory trust enforcement (C13)', () => {
