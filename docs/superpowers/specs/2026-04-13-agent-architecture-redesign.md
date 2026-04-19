@@ -4,6 +4,7 @@
 **Status:** Draft v2 — incorporates peer review, security review, and architecture review
 **Reviews:** Code reviewer, security reviewer, architecture reviewer (3 independent agents)
 **Scope:** Memory architecture, agent definitions, group CLAUDE.md structure, cross-group coordination
+**Background reading:** [docs/context-engineering/memory-systems.md](../../context-engineering/memory-systems.md) — five-layer memory-architecture taxonomy (working → short-term → long-term → entity → temporal KG) and LoCoMo / DMR benchmark tables for the Mem0 / Zep / Letta / Cognee tradeoffs that inform this design.
 
 ## Problem Statement
 

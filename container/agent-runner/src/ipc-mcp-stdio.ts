@@ -43,7 +43,18 @@ const server = new McpServer({
 
 server.tool(
   'send_message',
-  "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
+  `Send a plain-text message to the current user or group immediately while you are still running.
+
+Use when:
+- You want to send progress updates, partial answers, or multiple messages in one turn.
+- You need a dedicated persona (sender parameter) to appear as the speaker in Telegram.
+
+Do not use for:
+- Sending files (use send_file).
+- Sending a tappable WebApp button (use send_webapp_button).
+- Sending to an arbitrary Slack user (use slack_dm).
+
+Returns: "Message sent." on success. No failure case — messages are written to the host IPC queue and delivered asynchronously.`,
   {
     text: z.string().describe('The message text to send'),
     sender: z
@@ -71,7 +82,17 @@ server.tool(
 
 server.tool(
   'send_file',
-  'Send a file (PDF, image, document, etc.) to the user or group. The file must exist at the given path inside the container. Use this to share generated files, research papers, or any binary content.',
+  `Send a file (PDF, image, document, binary) to the current user or group.
+
+Use when:
+- Sharing a generated report, research paper, or any file the user should download.
+- The payload is too large or non-text for send_message.
+
+Inputs:
+- file_path: absolute path inside the container. Typical roots are /workspace/group/ for per-group outputs and /workspace/extra/ for vault files. Relative paths will be rejected.
+- caption: optional text sent alongside the file.
+
+Returns: "File sent: <basename>" on success; error object with "File not found: <path>" if the path does not exist at call time.`,
   {
     file_path: z.string().describe('Absolute path to the file inside the container (e.g., /workspace/group/report.pdf)'),
     caption: z.string().optional().describe('Optional caption/message to send with the file'),
@@ -96,7 +117,25 @@ server.tool(
 
 server.tool(
   'publish_to_bus',
-  'Publish a message to the agent coordination bus for async inter-agent communication.',
+  `Send a DIRECTED message to a specific named agent via the coordination bus.
+
+Use when:
+- You want one named specialist (e.g., "einstein", "marvin") to act on a task.
+- The receiving agent needs structured payload data, not just a human-readable string.
+
+Prefer bus_publish instead when:
+- You want ANY subscribed agent on a topic to see the finding (broadcast, not directed).
+- You are posting a status update rather than requesting an action.
+
+Inputs:
+- to_agent: target agent name (required). Matches a folder under data/agents/.
+- to_group: target group folder, defaults to the current group.
+- topic: string category for the receiving agent to route on.
+- priority: low | medium | high (default medium).
+- summary: short human-readable description of what is needed.
+- payload: optional structured data object for the receiving agent.
+
+Returns: "Bus message published to <agent>: <summary>" on success. Delivery is asynchronous; the caller does not get a reply.`,
   {
     to_agent: z.string().describe('Target agent name (e.g., "jennifer", "einstein")'),
     to_group: z.string().optional().describe('Target group folder (defaults to current group)'),
@@ -128,7 +167,20 @@ server.tool(
 
 server.tool(
   'write_agent_state',
-  'Update your persistent working memory (state.md). Writes are serialized through the host to prevent corruption.',
+  `Replace or append your per-group working memory file (groups/{current}/state.md).
+
+Use when:
+- You need to persist GROUP-SCOPED working state: current task progress, open questions for this group only, notes that do not apply in other groups.
+
+Prefer write_agent_memory instead when:
+- The fact is AGENT-SCOPED: identity, standing instructions, cross-group decisions, anything that should travel with you into other groups.
+- You only want to update one section; write_agent_memory patches by section header, whereas this tool rewrites or appends the whole file.
+
+Inputs:
+- content: full markdown content (full-file replace by default).
+- append: if true, append to the existing file instead of replacing.
+
+Returns: "Agent state update queued." The host serializes writes to prevent corruption; the write completes asynchronously.`,
   {
     content: z.string().describe('Full markdown content for state.md'),
     append: z.boolean().optional().describe('If true, append instead of replace (default: false)'),
@@ -332,7 +384,17 @@ WARNING: Each task run spawns a full agent container and costs tokens. Always ve
 
 server.tool(
   'list_tasks',
-  "List all scheduled tasks. From main: shows all tasks. From other groups: shows only that group's tasks.",
+  `List scheduled tasks visible to the current group.
+
+Visibility:
+- Main group: sees all tasks across all groups.
+- Non-main group: sees only its own tasks.
+
+Inputs: none.
+
+Returns: newline-separated list, one task per line:
+"- [<task_id>] <prompt first 50 chars>... (<schedule_type>: <schedule_value>) - <status>, next: <next_run>"
+Returns "No scheduled tasks found." when the registry is empty.`,
   {},
   async () => {
     const tasksFile = path.join(IPC_DIR, 'current_tasks.json');
@@ -396,8 +458,15 @@ server.tool(
 
 server.tool(
   'pause_task',
-  'Pause a scheduled task. It will not run until resumed.',
-  { task_id: z.string().describe('The task ID to pause') },
+  `Pause a scheduled task. The task remains registered but will not fire until resume_task is called.
+
+Use when: the user wants to temporarily stop a recurring task without losing its configuration.
+Prefer cancel_task when the task should be deleted permanently.
+
+Inputs: task_id (from schedule_task response or list_tasks).
+
+Returns: "Task <id> pause requested." Non-main groups can only pause their own tasks.`,
+  { task_id: z.string().describe('The task ID to pause (format: task-<timestamp>-<random>)') },
   async (args) => {
     // Authority (isMain) is determined host-side from the IPC directory,
     // NOT from the payload. Do not include isMain here — a future handler
@@ -424,8 +493,12 @@ server.tool(
 
 server.tool(
   'resume_task',
-  'Resume a paused task.',
-  { task_id: z.string().describe('The task ID to resume') },
+  `Resume a task that was previously paused with pause_task.
+
+Inputs: task_id.
+
+Returns: "Task <id> resume requested." No-op if the task was already active; error semantics are handled host-side.`,
+  { task_id: z.string().describe('The task ID to resume (format: task-<timestamp>-<random>)') },
   async (args) => {
     const data = {
       type: 'resume_task',
@@ -449,8 +522,15 @@ server.tool(
 
 server.tool(
   'cancel_task',
-  'Cancel and delete a scheduled task.',
-  { task_id: z.string().describe('The task ID to cancel') },
+  `Delete a scheduled task permanently. Task is removed from the registry and cannot be resumed.
+
+Use when the user wants to stop a task forever.
+Prefer pause_task if the user may want to re-enable it later.
+
+Inputs: task_id.
+
+Returns: "Task <id> cancellation requested."`,
+  { task_id: z.string().describe('The task ID to cancel (format: task-<timestamp>-<random>)') },
   async (args) => {
     const data = {
       type: 'cancel_task',
@@ -474,7 +554,14 @@ server.tool(
 
 server.tool(
   'update_task',
-  'Update an existing scheduled task. Only provided fields are changed; omitted fields stay the same.',
+  `Modify an existing scheduled task in place. Only the fields you provide are changed; omitted fields keep their current values.
+
+Use when: the user asks to change the prompt, schedule, or script of a task that already exists. Preserves task_id and history.
+Prefer cancel_task + schedule_task when: the change is so large (e.g. different context_mode, different target group) that tracking continuity adds no value.
+
+Schedule validation: same minimum-interval rules as schedule_task (30-minute floor for cron and interval; invalid values are rejected with an explanatory error). Pass script="" to clear an existing script.
+
+Returns: "Task <id> update requested." Validation errors are returned immediately; the update itself is asynchronous.`,
   {
     task_id: z.string().describe('The task ID to update'),
     prompt: z.string().optional().describe('New prompt for the task'),
@@ -565,9 +652,23 @@ server.tool(
 
 server.tool(
   'register_group',
-  `Register a new chat/group so the agent can respond to messages there. Main group only.
+  `Register a new chat/group so the agent will respond to messages there. Main group only — returns an error if called from a non-main group.
 
-Use available_groups.json to find the JID for a group. The folder name must be channel-prefixed: "{channel}_{group-name}" (e.g., "whatsapp_family-chat", "telegram_dev-team", "discord_general"). Use lowercase with hyphens for the group name part.`,
+Use available_groups.json (readable from the agent's workspace) to find the JID.
+
+Folder-naming rule (strict):
+- Format: "{channel}_{group-name}" — e.g. "whatsapp_family-chat", "telegram_dev-team", "discord_general", "slack_general".
+- channel prefix: lowercase, matches an installed channel skill.
+- group-name: lowercase, hyphens only (no spaces, no underscores).
+
+Inputs:
+- jid: chat JID (e.g. "120363336345536173@g.us" for WhatsApp, "tg:-1001234567890" for Telegram, "dc:1234..." for Discord).
+- name: display name for humans.
+- folder: see folder-naming rule above.
+- trigger: trigger phrase (e.g. "@Andy").
+- requiresTrigger: if true, messages must start with the trigger. Defaults to false (respond to all). Set true for busy groups.
+
+Returns: "Group <name> registered. It will start receiving messages immediately." on success; error object if called from non-main.`,
   {
     jid: z
       .string()
@@ -670,7 +771,17 @@ async function waitForBrowserResult(
 
 server.tool(
   'query_dashboard',
-  'Query NanoClaw system status. Returns task summaries, run logs, group info, skill counts, or state file freshness from the host.',
+  `Query NanoClaw host state for introspection — useful when the user asks about system health or you need to reason about recent activity.
+
+Inputs:
+- queryType: one of
+  - task_summary: counts + next fire times for all scheduled tasks.
+  - run_logs_24h / run_logs_7d: recent task execution history.
+  - group_summary: registered groups with trigger settings + folder paths.
+  - skill_inventory: installed container skills.
+  - state_freshness: last-modified timestamps of state files (current.md, goals.md, etc.).
+
+Returns: JSON string with {success, data} shape. Times out at 30s; on timeout returns {success:false, message:"Request timed out"}.`,
   {
     queryType: z
       .enum([
@@ -681,7 +792,7 @@ server.tool(
         'skill_inventory',
         'state_freshness',
       ])
-      .describe('The type of dashboard data to query'),
+      .describe('Dashboard data category — see tool description for each option.'),
   },
   async (args) => {
     const requestId = `dash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -710,7 +821,11 @@ server.tool(
   'kg_query',
   [
     'Query the knowledge graph for entities and their relationships.',
-    'Returns matched entities (by canonical name or alias), their neighbors out to `hops`, and the edges connecting them.',
+    '',
+    'Use when: the question is about CONNECTIONS — "who collaborates with X", "what papers cite Y", "which projects does grant Z fund".',
+    'Prefer qmd instead when: the question is about CONTENT — full-text or semantic search across document prose. The KG indexes structured relationships, not text.',
+    '',
+    'Returns matched entities (by canonical name or alias), their neighbors out to `hops`, and the edges connecting them. 30s timeout.',
     'Entity types: person, paper, dataset, tool, grant, project, method, institution, disorder.',
     'Common relations: authored, collaborates_with, member_of, funds_project, cites, uses_method, related_to.',
   ].join('\n'),
@@ -771,8 +886,16 @@ server.tool(
 if (isMain) {
   server.tool(
     'browser_navigate',
-    `Navigate to a URL and return the page title and readable text content. Use this to read web pages, check websites, or start a browsing session. The browser runs on the host with a real Chrome profile, so it can access sites that require login if the user has previously authenticated.`,
-    { url: z.string().describe('The URL to navigate to') },
+    `Open a URL in the host's real Chrome profile and return the page title + readable text. Main group only.
+
+Use when: you need to read a website the user has already authenticated to (Gmail, Slack, internal dashboards), or start a browsing session for browser_click / browser_fill.
+Do not use for: plain public URLs where a simple fetch would suffice — this tool spins up a full Chrome tab on the host.
+
+Inputs:
+- url: full URL including scheme (http:// or https://).
+
+Returns: "Title: <title>\\nURL: <url>\\n\\n<readable text>" on success. 2-minute timeout; on timeout returns an error.`,
+    { url: z.string().describe('Full URL including scheme — e.g. https://example.com') },
     async (args) => {
       const requestId = `nav-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       writeIpcFile(TASKS_DIR, { type: 'browser_navigate', requestId, url: args.url, groupFolder, timestamp: new Date().toISOString() });
@@ -788,7 +911,16 @@ if (isMain) {
 
   server.tool(
     'browser_click',
-    `Click an element on a web page by CSS selector. Optionally navigate to a URL first. Returns the page state after clicking.`,
+    `Click an element on a web page by CSS selector. Main group only.
+
+Use when: you need to press a button, follow a link, or activate a tab on a page the user has already authenticated to.
+Typical sequence: browser_navigate first (or pass url here), then browser_click, then browser_extract or browser_screenshot to read the result.
+
+Inputs:
+- selector: CSS selector (e.g. "button.submit", "#login-btn", "a[href*=next]").
+- url: optional — navigate here first, otherwise click on the current page.
+
+Returns: short status message describing the click outcome. 2-minute timeout.`,
     {
       selector: z.string().describe('CSS selector of the element to click (e.g., "button.submit", "#login-btn", "a[href*=next]")'),
       url: z.string().optional().describe('URL to navigate to before clicking (omit to click on current page)'),
@@ -803,7 +935,16 @@ if (isMain) {
 
   server.tool(
     'browser_fill',
-    `Fill form fields on a web page and optionally submit. Each field is specified by CSS selector and value. Useful for login forms, search boxes, contact forms, etc.`,
+    `Fill one or more form fields by CSS selector, and optionally click a submit button. Main group only.
+
+Use when: interacting with a login form, search box, survey, or any multi-field form.
+
+Inputs:
+- fields: array of {selector, value} pairs. All fields are filled before submit.
+- submit_selector: optional — CSS selector of a button to click after filling.
+- url: optional — navigate here first.
+
+Returns: status message describing the fill + optional submit outcome. 2-minute timeout.`,
     {
       fields: z.array(z.object({
         selector: z.string().describe('CSS selector of the input field'),
@@ -822,7 +963,16 @@ if (isMain) {
 
   server.tool(
     'browser_extract',
-    `Extract structured content from a web page. Can extract: text (readable content), links (all hrefs), tables (structured data), or html (raw markup). Optionally scope extraction to a CSS selector.`,
+    `Extract a specific kind of content from a web page — text, links, tables, or raw HTML. Main group only.
+
+Use when: browser_navigate gave you text but you need a different representation (just the links, just the tables, or the raw markup).
+
+Inputs:
+- extract_type: "text" (readable), "links" (all hrefs), "tables" (structured data), or "html" (raw).
+- selector: optional CSS scope (default: whole page).
+- url: optional — navigate here first.
+
+Returns: status message + extracted content. For tables the content is JSON; for the others it is a string. 2-minute timeout.`,
     {
       extract_type: z.enum(['text', 'links', 'tables', 'html']).describe('What to extract: text=readable content, links=all hrefs, tables=structured data, html=raw markup'),
       selector: z.string().optional().describe('CSS selector to scope extraction (default: entire page)'),
@@ -843,7 +993,16 @@ if (isMain) {
 
   server.tool(
     'browser_screenshot',
-    `Take a screenshot of a web page or specific element. Returns a base64-encoded PNG. Useful for visual verification or capturing dynamic content.`,
+    `Capture a PNG screenshot of the current page, a specific element, or the full scrollable page. Main group only.
+
+Use when: you need visual confirmation (the extracted text is ambiguous) or the content is canvas / image-based and can't be read as text.
+
+Inputs:
+- url: optional — navigate here first.
+- selector: optional CSS scope (default: viewport).
+- full_page: if true, capture the entire scrollable page, not just the viewport.
+
+Returns: status message + base64-encoded PNG as an image content block. 2-minute timeout.`,
     {
       url: z.string().optional().describe('URL to navigate to before taking screenshot'),
       selector: z.string().optional().describe('CSS selector to screenshot (default: full viewport)'),
@@ -895,7 +1054,10 @@ async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ su
 if (isMain) {
   server.tool(
     'x_post',
-    'Post a tweet to X (Twitter). Main group only. Content max 280 characters.',
+    `Publish a new tweet to X (Twitter) from the user's account. Main group only.
+
+Inputs: content (1-280 chars).
+Returns: host message indicating success (URL of posted tweet) or failure reason. 2-minute timeout.`,
     { content: z.string().max(280).describe('The tweet content to post') },
     async (args) => {
       const requestId = `xpost-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -907,8 +1069,11 @@ if (isMain) {
 
   server.tool(
     'x_like',
-    'Like a tweet on X (Twitter). Main group only.',
-    { tweet_url: z.string().describe('The tweet URL (e.g., https://x.com/user/status/123)') },
+    `Like an existing tweet on X. Main group only.
+
+Inputs: tweet_url (e.g. https://x.com/user/status/123).
+Returns: host message confirming the like or reporting the failure. 2-minute timeout.`,
+    { tweet_url: z.string().describe('Full tweet URL — https://x.com/<user>/status/<id>') },
     async (args) => {
       const requestId = `xlike-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       writeIpcFile(TASKS_DIR, { type: 'x_like', requestId, tweetUrl: args.tweet_url, groupFolder, timestamp: new Date().toISOString() });
@@ -919,10 +1084,15 @@ if (isMain) {
 
   server.tool(
     'x_reply',
-    'Reply to a tweet on X (Twitter). Main group only.',
+    `Reply to an existing tweet on X. Main group only.
+
+Use x_quote instead if you want your comment to appear above the original (quote tweet) rather than in the reply thread.
+
+Inputs: tweet_url, content (1-280 chars).
+Returns: host message confirming the reply (URL) or reporting failure. 2-minute timeout.`,
     {
-      tweet_url: z.string().describe('The tweet URL'),
-      content: z.string().max(280).describe('The reply content'),
+      tweet_url: z.string().describe('Full tweet URL to reply to — https://x.com/<user>/status/<id>'),
+      content: z.string().max(280).describe('Reply text (1-280 chars)'),
     },
     async (args) => {
       const requestId = `xreply-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -934,8 +1104,13 @@ if (isMain) {
 
   server.tool(
     'x_retweet',
-    'Retweet a tweet on X (Twitter). Main group only.',
-    { tweet_url: z.string().describe('The tweet URL') },
+    `Retweet an existing tweet on X (plain RT, no added comment). Main group only.
+
+Use x_quote instead when you want to add your own commentary.
+
+Inputs: tweet_url.
+Returns: host message confirming the RT or reporting failure. 2-minute timeout.`,
+    { tweet_url: z.string().describe('Full tweet URL to retweet — https://x.com/<user>/status/<id>') },
     async (args) => {
       const requestId = `xretweet-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       writeIpcFile(TASKS_DIR, { type: 'x_retweet', requestId, tweetUrl: args.tweet_url, groupFolder, timestamp: new Date().toISOString() });
@@ -946,10 +1121,16 @@ if (isMain) {
 
   server.tool(
     'x_quote',
-    'Quote tweet on X (Twitter) with your own comment. Main group only.',
+    `Quote-tweet: post your own comment WITH the original tweet embedded below. Main group only.
+
+Use x_reply instead when replying in-thread without embedding.
+Use x_retweet instead for a plain RT with no added commentary.
+
+Inputs: tweet_url, comment (1-280 chars).
+Returns: host message confirming the quote (URL) or reporting failure. 2-minute timeout.`,
     {
-      tweet_url: z.string().describe('The tweet URL'),
-      comment: z.string().max(280).describe('Your comment for the quote tweet'),
+      tweet_url: z.string().describe('Full tweet URL to quote — https://x.com/<user>/status/<id>'),
+      comment: z.string().max(280).describe('Your comment (1-280 chars) — appears above the embedded original'),
     },
     async (args) => {
       const requestId = `xquote-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -961,7 +1142,13 @@ if (isMain) {
 
   server.tool(
     'x_bookmarks',
-    'Fetch recent X/Twitter bookmarks. Returns bookmarked tweets with author, text, and URL. Main group only.',
+    `Fetch the user's recent X bookmarks. Main group only.
+
+Inputs:
+- limit: max tweets to return (default 50).
+- since_id: stop at this tweet ID (for incremental sync — pass the most recent ID seen last time).
+
+Returns: JSON array of bookmarked tweets, each with author, text, URL, and tweet ID. 3-minute timeout.`,
     {
       limit: z.number().default(50).describe('Max bookmarks to fetch (default 50)'),
       since_id: z.string().optional().describe('Stop at this tweet ID (for incremental sync)'),
@@ -1014,7 +1201,19 @@ async function waitForImessageResult(requestId: string, maxWait = 30000): Promis
 if (isMain) {
   server.tool(
     'imessage_search',
-    `Search iMessages by keyword, contact, or date range. Returns matching messages with sender info and timestamps.`,
+    `Search the user's iMessages by any combination of keyword, contact, and date range. Main group only.
+
+Use when: the user asks to find a specific message or thread by content or sender.
+Prefer imessage_read when: the user wants the recent conversation with a specific contact — it's chronological and includes both sides.
+Prefer imessage_list_contacts when: the user doesn't know the phone number or email and needs to look it up.
+
+Inputs:
+- query: substring match on message text (optional).
+- contact: partial match on phone or email (e.g. "+1703" matches any +1 703 number; "john@" matches any john@… address).
+- since_days: limit to last N days (default 30).
+- limit: max results (default 50, max 200).
+
+Returns: lines of "[<timestamp>] Me|<contact>: <text>" for matching messages. 30-second timeout.`,
     {
       query: z.string().optional().describe('Text to search for in message content'),
       contact: z.string().optional().describe('Filter by contact phone number or email (partial match, e.g. "+1703" or "john@")'),
@@ -1047,7 +1246,17 @@ if (isMain) {
 
   server.tool(
     'imessage_read',
-    `Read a conversation thread with a specific contact. Returns messages in chronological order.`,
+    `Read the recent iMessage conversation with a specific contact, in chronological order. Main group only.
+
+Use when: the user wants to catch up on a thread ("what did Alice say yesterday?").
+Prefer imessage_search when: looking for a message by keyword across multiple contacts.
+
+Inputs:
+- contact: phone number or email — partial match is supported (e.g. "+1703" or "john@").
+- since_days: how far back to look (default 7).
+- limit: max messages returned (default 50, max 200).
+
+Returns: "Conversation with <contact>:" header followed by lines "[<timestamp>] Me|<contact>: <text>". 30-second timeout.`,
     {
       contact: z.string().describe('Contact phone number or email (partial match)'),
       limit: z.number().optional().describe('Maximum messages to return (default: 50, max: 200)'),
@@ -1079,9 +1288,15 @@ if (isMain) {
 
   server.tool(
     'imessage_send',
-    `Send an iMessage to a contact. Requires a valid phone number or Apple ID email.`,
+    `Send an iMessage from the user's Mac to a contact. Main group only.
+
+Inputs:
+- to: EXACT recipient — unlike imessage_read/search, partial matches are not allowed. Use full phone with country code (e.g. "+17035551234") or a valid Apple ID email.
+- text: message body.
+
+Returns: host message confirming send or reporting failure. 30-second timeout.`,
     {
-      to: z.string().describe('Recipient phone number (e.g. "+17035551234") or Apple ID email'),
+      to: z.string().describe('Full recipient phone ("+17035551234") or Apple ID email — no partial matching'),
       text: z.string().describe('Message text to send'),
     },
     async (args) => {
@@ -1101,7 +1316,15 @@ if (isMain) {
 
   server.tool(
     'imessage_list_contacts',
-    `List recent iMessage contacts with message counts. Useful for finding phone numbers or seeing who you've been chatting with.`,
+    `List recent iMessage contacts with message counts and most-recent-message timestamps. Main group only.
+
+Use when: the user asks who they've been talking to, or you need to look up a phone number / email before calling imessage_send.
+
+Inputs:
+- since_days: look-back window (default 30).
+- limit: max contacts (default 30, max 100).
+
+Returns: lines of "<contact>: <count> messages (last: <timestamp>)". 30-second timeout.`,
     {
       since_days: z.number().optional().describe('Look back N days (default: 30)'),
       limit: z.number().optional().describe('Maximum contacts to return (default: 30, max: 100)'),
@@ -1137,10 +1360,19 @@ const SLACK_RESULTS_DIR = path.join(IPC_DIR, 'slack_results');
 // Available to all groups — trust enforcement is handled host-side in ipc.ts
 server.tool(
     'slack_dm',
-    'Send a Slack direct message to a user. Requires either a Slack user ID or email address. Trust-gated: your agent must have send_slack_dm permission in trust.yaml.',
+    `Send a Slack DM to a specific user. Trust-gated: your agent must have send_slack_dm permission in trust.yaml.
+
+Use when: the user asks you to DM a colleague on Slack.
+Prefer send_message when: the message should go to the current Telegram chat.
+
+Inputs:
+- EXACTLY ONE of user_id OR user_email (providing neither returns an error).
+- text: message body.
+
+Returns: host message from the Slack bridge — either the posted message ts on success, or a reason-for-failure string. 30-second timeout.`,
     {
-      user_id: z.string().optional().describe('Slack user ID (e.g. "U01ABC123"). Provide this or user_email.'),
-      user_email: z.string().optional().describe('User email address to look up in Slack. Provide this or user_id.'),
+      user_id: z.string().optional().describe('Slack user ID like "U01ABC123" — provide this OR user_email, not both.'),
+      user_email: z.string().optional().describe('User email for Slack lookup — provide this OR user_id, not both.'),
       text: z.string().describe('Message text to send'),
     },
     async (args) => {
@@ -1174,10 +1406,18 @@ server.tool(
 // Available to all groups — trust enforcement is handled host-side in ipc.ts
 server.tool(
     'slack_dm_read',
-    'Read recent messages from a Slack DM conversation. Requires the DM channel ID. Trust-gated: your agent must have read_slack_dm permission in trust.yaml.',
+    `Read recent messages from a Slack DM. Trust-gated: your agent must have read_slack_dm permission in trust.yaml.
+
+Note: requires the DM CHANNEL ID (starts with "D"), not a user ID. If you only have the user, you cannot look up their DM channel via this tool — ask the user for the channel ID.
+
+Inputs:
+- channel: Slack DM channel ID (format: "D" + 10 alphanumeric chars).
+- limit: number of messages to return (default 10, max 50).
+
+Returns: JSON of recent messages with author + timestamp + text. 30-second timeout.`,
     {
-      channel: z.string().describe('Slack DM channel ID (e.g. "D0AQ09RSF1B")'),
-      limit: z.number().optional().describe('Number of messages to retrieve (default 10, max 50)'),
+      channel: z.string().describe('Slack DM channel ID starting with "D" (e.g. "D0AQ09RSF1B")'),
+      limit: z.number().optional().describe('Messages to retrieve (default 10, max 50)'),
     },
     async (args) => {
       const requestId = `slack-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1200,7 +1440,22 @@ server.tool(
 // bus_publish — post a finding to the inter-agent message bus
 server.tool(
   'bus_publish',
-  'Publish a finding or status update to the inter-agent message bus. Other agents subscribed to the topic will see it on their next invocation.',
+  `Broadcast a finding or status update to a TOPIC on the inter-agent bus. Any agent subscribed to that topic receives it on its next invocation.
+
+Use when:
+- You want to share a discovery with whoever cares ("posted for awareness, no specific recipient").
+- The content is a status update or published knowledge, not an action request.
+
+Prefer publish_to_bus instead when:
+- You want a specific named agent to act. This tool is broadcast-by-topic; publish_to_bus is directed-by-name.
+
+Inputs:
+- topic: category — research, scheduling, lab-ops, personal, or a custom string.
+- finding: the content to share.
+- action_needed: optional group folder (e.g. "telegram_science-claw") that should act on this. Hint, not a hard route.
+- priority: low | medium | high (default medium).
+
+Returns: "Published to bus: [<topic>] <first 80 chars>..." — delivery is asynchronous.`,
   {
     topic: z.string().describe('Topic: research, scheduling, lab-ops, personal, or custom'),
     finding: z.string().describe('What you found or want to communicate'),
@@ -1227,9 +1482,13 @@ server.tool(
 // bus_read — read pending items from the message bus
 server.tool(
   'bus_read',
-  'Read pending messages from other agents. Items are loaded at container start from the bus queue.',
+  `Read pending bus messages queued for the current group by other agents. The queue is snapshot at container start; items added mid-session are not visible until the next invocation.
+
+Inputs: topic (optional filter).
+
+Returns: newline-separated lines "[<priority>] From <agent> (<topic>): <finding>". Returns "No pending bus messages." when empty.`,
   {
-    topic: z.string().optional().describe('Filter by topic (optional)'),
+    topic: z.string().optional().describe('Filter to this topic only (optional)'),
   },
   async (args) => {
     if (!fs.existsSync(BUS_QUEUE_PATH)) {
@@ -1262,7 +1521,17 @@ const DEPLOY_RESULTS_DIR = path.join(IPC_DIR, 'deploy_results');
 
 server.tool(
   'deploy_mini_app',
-  'Deploy a self-contained HTML page to Vercel and get back a public HTTPS URL. Use send_webapp_button to send the URL to the user as a Telegram Mini App button. The HTML must be fully self-contained (inline CSS/JS, no external build step).',
+  `Deploy a self-contained HTML page to Vercel and return a public HTTPS URL. Pair with send_webapp_button to surface the URL as a tappable button in Telegram.
+
+Constraints:
+- HTML must be fully self-contained. Inline all CSS and JS. No import statements, no external build step, no bundled dependencies.
+- External CDN <script src="..."> is fine (e.g. loading React from a CDN); a package.json or webpack config is not.
+
+Inputs:
+- appName: short slug, lowercase+digits+hyphens only, 1-50 chars. Used in the Vercel URL (e.g. "quiz" → quiz-abc123.vercel.app).
+- html: complete index.html contents.
+
+Returns: JSON {success, url?, message?} — on success, url is the HTTPS endpoint. 60-second timeout.`,
   {
     appName: z
       .string()
@@ -1297,7 +1566,15 @@ server.tool(
 
 server.tool(
   'send_webapp_button',
-  'Send a Telegram inline keyboard button that opens a Mini App (WebApp) when tapped. Use deploy_mini_app first to get the HTTPS URL.',
+  `Send a Telegram inline-keyboard button that opens a Mini App (WebApp) when tapped.
+
+Typical flow: call deploy_mini_app first to get an HTTPS URL, then pass that URL here.
+
+Inputs:
+- label: button text, 1-64 chars.
+- url: HTTPS URL of the deployed mini app (must be HTTPS; HTTP is rejected by Telegram).
+
+Returns: "WebApp button sent: <label> → <url>". Fires asynchronously; no failure path.`,
   {
     label: z
       .string()
@@ -1332,9 +1609,19 @@ server.tool(
 // knowledge_publish — publish a structured finding to the shared knowledge base
 server.tool(
   'knowledge_publish',
-  'Publish a structured finding to the shared knowledge base. ' +
-    'Use when you discover something other agents should know about. ' +
-    'Findings are searchable by all agents across all groups.',
+  `Publish a structured finding to the shared cross-group knowledge base. Indexed by QMD so other agents can discover it via semantic search.
+
+Use when: you discover a durable, reusable fact (regulation change, new paper, workflow decision) that future sessions — yours or other agents — should be able to retrieve.
+Prefer bus_publish when: the finding is time-sensitive and should trigger immediate awareness rather than live in the searchable index.
+Prefer write_agent_memory when: the fact is personal to you (an agent) rather than useful to everyone.
+
+Inputs:
+- topic: short category (e.g. "APA regulation", "lab scheduling").
+- finding: clear, specific, actionable statement.
+- evidence: source — DOI, URL, or conversation reference.
+- tags: array of tags for QMD retrieval.
+
+Returns: "Published knowledge: <topic>". Indexing happens asynchronously; retrieval via qmd or knowledge_search may lag by one ingest cycle.`,
   {
     topic: z.string().describe('Topic category (e.g., "APA regulation", "lab scheduling")'),
     finding: z.string().describe('The finding — clear, specific, actionable'),
@@ -1358,11 +1645,18 @@ server.tool(
 // knowledge_search — search the shared knowledge base
 server.tool(
   'knowledge_search',
-  'Search the shared knowledge base for findings published by any agent.',
+  `Helper that returns an instruction for how to search the shared knowledge base via qmd. Does NOT perform the search itself.
+
+Use when: you want a reminder of the correct qmd invocation for the agent-knowledge collection.
+Prefer calling qmd directly when: you already know the qmd query interface — this tool only reformats your query into a qmd call.
+
+Inputs: query (required), from_agent (optional filter), topic (optional filter).
+
+Returns: text instructing which qmd call to make next. You must then call qmd to get actual results.`,
   {
-    query: z.string().describe('Search query (semantic)'),
-    from_agent: z.string().optional().describe('Filter by publishing agent (optional)'),
-    topic: z.string().optional().describe('Filter by topic (optional)'),
+    query: z.string().describe('Semantic search query'),
+    from_agent: z.string().optional().describe('Restrict to findings published by this agent'),
+    topic: z.string().optional().describe('Restrict to findings with this topic'),
   },
   async (args) => {
     return {
@@ -1380,10 +1674,17 @@ server.tool(
 // skill_search — discover available NanoClaw capabilities
 server.tool(
   'skill_search',
-  'Search for NanoClaw capabilities and skills. Use when you need to do something ' +
-    "but don't have the right tool. Returns matching skills with install instructions.",
+  `Search the NanoClaw skill catalog for capabilities that are not currently installed. Use to discover what NEW tools the system could have, not to find something you already have.
+
+Use when: you need a capability but don't see a matching tool in your current toolset (e.g., "I need to read PDFs but send_file only sends them").
+Do not use for: finding already-installed tools — those are loaded at startup.
+
+Inputs:
+- need: natural-language description of what you want to do.
+
+Returns: matching skills from QMD's skill-catalog collection with install instructions (e.g. "run /add-pdf-reader"). If QMD is unavailable or no matches, returns a short fallback message. 10-second timeout.`,
   {
-    need: z.string().describe('What you need to do (natural language)'),
+    need: z.string().describe('Natural-language description of the capability you need'),
   },
   async (args) => {
     const requestId = `skill-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1405,14 +1706,29 @@ server.tool(
 // write_agent_memory — persist structured memory across sessions
 server.tool(
   'write_agent_memory',
-  'Write or update a section of your persistent memory file. ' +
-    'Content persists across sessions. Use for decisions, key facts, and session continuity. ' +
-    'Before writing, apply docs/memory-writeback-sop.md: write only action-verified facts ' +
-    '(No Execution, No Memory), pick exactly one layer via the decision tree, prefer minimal ' +
-    'patches over rewrites, and skip volatile state (timestamps, PIDs, session IDs).',
+  `Patch one section of your AGENT-SCOPED persistent memory file (data/agents/<you>/memory.md). Content persists across sessions and travels with you into other groups.
+
+Use when:
+- Recording decisions, key facts, or session-continuity notes about YOU as an agent.
+- Updating standing instructions that apply everywhere.
+
+Prefer write_agent_state when: the fact is group-specific and shouldn't leak into other groups.
+Prefer knowledge_publish when: the fact is useful to OTHER agents, not just to you.
+
+Before writing, apply docs/memory-writeback-sop.md:
+- No Execution, No Memory — write only action-verified facts, not planned actions.
+- Pick exactly one memory layer using that file's decision tree.
+- Prefer minimal patches over full rewrites.
+- Skip volatile state (timestamps, PIDs, session IDs).
+
+Inputs:
+- section: section header — matches an existing "## Header" line to update it, or creates a new section if not found.
+- content: markdown body for this section (bullet points recommended).
+
+Returns: "Memory section <section> updated." Write is asynchronous.`,
   {
-    section: z.string().describe('Section header (e.g., "Session Continuity", "Standing Instructions")'),
-    content: z.string().describe('Content for this section (bullet points recommended)'),
+    section: z.string().describe('Section header (e.g. "Session Continuity", "Standing Instructions") — matches or creates an ## H2 heading'),
+    content: z.string().describe('Markdown content for the section (bullets recommended)'),
   },
   async (args) => {
     writeIpcFile(TASKS_DIR, {

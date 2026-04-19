@@ -36,7 +36,9 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 | `src/db.ts` | SQLite operations and schema migrations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `container/agent-runner/src/index.ts` | Agent runner inside container (MCP servers, SDK query loop) |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | All `nanoclaw.*` MCP tools exposed to in-container agents. Before editing a tool description, read `docs/context-engineering/tool-design.md` for the four-question rubric (what / when / inputs / returns). |
 | `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
+| `docs/context-engineering/` | Vendored design-rubric docs (memory systems, multi-agent patterns, tool design, filesystem context). Consult before architecture work; refresh every 3-6 months per that folder's README. |
 | `scripts/sync/sync-all.sh` | Email + calendar sync (every 8h via launchd) |
 
 ## Secrets / Credentials / Proxy (OneCLI)
