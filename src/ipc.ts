@@ -1890,39 +1890,35 @@ async function handleImessageIpc(
   }
 }
 
-async function handleSlackDmIpc(
+export async function handleSlackDmIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
   _isMain: boolean,
 ): Promise<boolean> {
-  // Trust enforcement: extract agent name from compound key
+  // Trust enforcement: extract agent name from compound key. Uses the
+  // shared checkTrustAndStage helper so draft/ask levels stage in
+  // pending_actions (C13 task 13), matching the send_message contract.
   const baseKey = fsPathToCompoundKey(sourceGroup);
   const { group: baseGroupFolder, agent: agentName } =
     parseCompoundKey(baseKey);
   if (agentName) {
     const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
-    const decision = checkTrust(
+    const decision = checkTrustAndStage({
       agentName,
-      baseGroupFolder,
-      'send_slack_dm',
-      trust,
-    );
-    insertAgentAction({
-      agent_name: agentName,
-      group_folder: baseGroupFolder,
-      action_type: 'send_slack_dm',
-      trust_level: decision.level,
-      summary: (data.text as string)?.slice(0, 200) || '',
+      groupFolder: baseGroupFolder,
+      actionType: 'send_slack_dm',
+      summary: (data.text as string) || '',
       target: (data.user_email as string) || (data.user_id as string) || '',
-      outcome: decision.allowed ? 'allowed' : 'blocked',
+      payloadForStaging: {
+        type: 'slack_dm',
+        requestId: data.requestId,
+        text: data.text,
+        user_id: data.user_id,
+        user_email: data.user_email,
+      },
+      trust,
     });
-    if (!decision.allowed) {
-      logger.info(
-        { agentName, sourceGroup, level: decision.level },
-        'Trust: send_slack_dm blocked for agent',
-      );
-      return true;
-    }
+    if (!decision.allowed) return true;
   }
 
   const requestId = data.requestId as string | undefined;

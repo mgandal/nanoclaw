@@ -16,7 +16,8 @@ import {
   processTaskIpc,
   processIpcMessage,
   deliverSendMessage,
-  isSenderAllowed,
+  handleSlackDmIpc,
+  isSenderAllowedForPool,
   IpcDeps,
 } from './ipc.js';
 import { DATA_DIR } from './config.js';
@@ -2537,9 +2538,9 @@ describe('task-lifecycle trust enforcement (C13)', () => {
     );
 
     expect(getTaskById('c13-lifecycle-task')!.status).toBe('paused');
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('cancel_task: executes when trust.yaml says autonomous', async () => {
@@ -2573,9 +2574,9 @@ describe('task-lifecycle trust enforcement (C13)', () => {
     );
 
     expect(getTaskById('c13-lifecycle-task')).toBeDefined();
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('update_task: executes when trust.yaml says autonomous', async () => {
@@ -2886,6 +2887,108 @@ describe('deploy_mini_app trust enforcement (C13)', () => {
 
   it('bypasses trust for non-agent callers', async () => {
     await processTaskIpc(deployData as any, 'telegram_main', true, deps);
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- C13: send_slack_dm trust enforcement for agent callers ---
+
+describe('send_slack_dm trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-slack-agent';
+  let agentDir: string;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    // Bridge call happens over localhost — stub fetch so we can both observe
+    // it and avoid any real network hit during tests.
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ message: 'sent' }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
+  });
+
+  const slackData = {
+    type: 'slack_dm',
+    requestId: 'req-slack-c13-1',
+    text: 'hello',
+    user_email: 'peer@example.com',
+  };
+
+  it('delivers immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_slack_dm: autonomous\n',
+    );
+
+    await handleSlackDmIpc(
+      slackData as unknown as Record<string, unknown>,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_slack_dm: draft\n',
+    );
+
+    await handleSlackDmIpc(
+      slackData as unknown as Record<string, unknown>,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('send_slack_dm');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.text).toBe('hello');
+    expect(payload.user_email).toBe('peer@example.com');
+    expect(payload.requestId).toBe('req-slack-c13-1');
+  });
+
+  it('stages on ask (no policy listed, unknown default)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await handleSlackDmIpc(
+      slackData as unknown as Record<string, unknown>,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('send_slack_dm');
+  });
+
+  it('bypasses trust for non-agent (main-group) callers', async () => {
+    await handleSlackDmIpc(
+      slackData as unknown as Record<string, unknown>,
+      'telegram_main',
+      true,
+    );
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
@@ -3390,7 +3493,7 @@ describe('deliverSendMessage', () => {
   });
 });
 
-describe('isSenderAllowed', () => {
+describe('isSenderAllowedForPool', () => {
   it('allows any sender when permittedSenders is undefined (legacy / unset)', () => {
     const group: RegisteredGroup = {
       name: 'Legacy',
@@ -3398,8 +3501,8 @@ describe('isSenderAllowed', () => {
       trigger: '@Bot',
       added_at: '2024-01-01T00:00:00.000Z',
     };
-    expect(isSenderAllowed(group, 'Freud')).toBe(true);
-    expect(isSenderAllowed(group, 'Anybody')).toBe(true);
+    expect(isSenderAllowedForPool(group, 'Freud')).toBe(true);
+    expect(isSenderAllowedForPool(group, 'Anybody')).toBe(true);
   });
 
   it('rejects every sender when permittedSenders is an empty array (main bot only)', () => {
@@ -3410,8 +3513,8 @@ describe('isSenderAllowed', () => {
       added_at: '2024-01-01T00:00:00.000Z',
       permittedSenders: [],
     };
-    expect(isSenderAllowed(group, 'Freud')).toBe(false);
-    expect(isSenderAllowed(group, 'Marvin')).toBe(false);
+    expect(isSenderAllowedForPool(group, 'Freud')).toBe(false);
+    expect(isSenderAllowedForPool(group, 'Marvin')).toBe(false);
   });
 
   it('only allows senders in a non-empty permittedSenders list', () => {
@@ -3422,10 +3525,10 @@ describe('isSenderAllowed', () => {
       added_at: '2024-01-01T00:00:00.000Z',
       permittedSenders: ['Marvin', 'Warren'],
     };
-    expect(isSenderAllowed(group, 'Marvin')).toBe(true);
-    expect(isSenderAllowed(group, 'Warren')).toBe(true);
-    expect(isSenderAllowed(group, 'Freud')).toBe(false);
-    expect(isSenderAllowed(group, 'marvin')).toBe(false); // exact match only
+    expect(isSenderAllowedForPool(group, 'Marvin')).toBe(true);
+    expect(isSenderAllowedForPool(group, 'Warren')).toBe(true);
+    expect(isSenderAllowedForPool(group, 'Freud')).toBe(false);
+    expect(isSenderAllowedForPool(group, 'marvin')).toBe(false); // exact match only
   });
 });
 
