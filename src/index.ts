@@ -1251,10 +1251,25 @@ async function main(): Promise<void> {
     url: string | undefined;
     healthUrl?: string;
   }> = [
-    { name: 'QMD', url: 'http://localhost:8181/mcp' },
+    // B1: each HTTP-auth'd bridge proxy exposes /health unauth'd; the
+    // monitor hits that instead of /mcp so it doesn't need to forward
+    // a bearer token and doesn't spam warn logs in the proxy.
+    {
+      name: 'QMD',
+      url: 'http://localhost:8181/mcp',
+      healthUrl: 'http://localhost:8181/health',
+    },
     { name: 'Honcho', url: undefined as string | undefined },
-    { name: 'Apple Notes', url: process.env.APPLE_NOTES_URL },
-    { name: 'Todoist', url: process.env.TODOIST_URL },
+    {
+      name: 'Apple Notes',
+      url: process.env.APPLE_NOTES_URL,
+      healthUrl: 'http://localhost:8184/health',
+    },
+    {
+      name: 'Todoist',
+      url: process.env.TODOIST_URL,
+      healthUrl: 'http://localhost:8186/health',
+    },
     {
       name: 'Hindsight',
       url: process.env.HINDSIGHT_URL,
@@ -1309,8 +1324,10 @@ async function main(): Promise<void> {
     }
   }, HEALTH_MONITOR_INTERVAL);
 
-  // Initial QMD health check so first container spawn has accurate state
-  checkMcpEndpoint('http://localhost:8181/mcp').then((r) =>
+  // Initial QMD health check so first container spawn has accurate state.
+  // Hit /health (unauth) rather than /mcp (auth'd) so we don't need a
+  // bearer here — B1.
+  checkMcpEndpoint('http://localhost:8181/health').then((r) =>
     setQmdReachable(r.reachable),
   );
 
