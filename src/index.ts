@@ -89,6 +89,7 @@ import {
   clearIpcSend,
   type IpcDeps,
 } from './ipc.js';
+import { writeBridgeTokenFile } from './bridge-auth.js';
 import { backfillReaction } from './proactive-log.js';
 import { wireProactiveWatchers } from './startup/proactive-watchers.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
@@ -1088,6 +1089,11 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
+  // B1: persist bridge token so launchd-spawned bridge proxies (QMD,
+  // Apple Notes, Todoist, Calendar) can read the same token. Must
+  // happen before containers spawn and before the bridge proxies are
+  // restarted — not a hard ordering since the proxies re-read lazily.
+  writeBridgeTokenFile();
   loadState();
 
   // Load agent identities from data/agents/

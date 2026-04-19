@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 let cachedToken: string | null = null;
 
@@ -41,6 +44,32 @@ export function verifyBridgeToken(candidate: string): boolean {
   const a = Buffer.from(candidate);
   const b = Buffer.from(expected);
   return crypto.timingSafeEqual(a, b);
+}
+
+function bridgeTokenFilePath(): string {
+  // Prefer $HOME over os.homedir() — on macOS os.homedir() reads
+  // /etc/passwd and ignores $HOME overrides, which tests and operators
+  // may set. Fall back to os.homedir() only if $HOME is unset.
+  const home = process.env.HOME || os.homedir();
+  return path.join(home, '.cache', 'nanoclaw', 'bridge-token');
+}
+
+/**
+ * Write the current bridge token to ~/.cache/nanoclaw/bridge-token with
+ * mode 0600. Called at nanoclaw startup so launchd-spawned bridge
+ * proxies (QMD, Apple Notes, Todoist, Calendar) can read the same
+ * token from disk — they don't share nanoclaw's process env.
+ *
+ * Idempotent: re-running with the same cached token produces the same
+ * file. New process → new token → file overwritten.
+ */
+export function writeBridgeTokenFile(): void {
+  const filePath = bridgeTokenFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  // writeFileSync with { mode } honours the mode on create; chmod
+  // afterwards covers the umask-filtered case.
+  fs.writeFileSync(filePath, getBridgeToken(), { mode: 0o600 });
+  fs.chmodSync(filePath, 0o600);
 }
 
 /** Test-only — reset the cached token. */
