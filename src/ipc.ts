@@ -1260,6 +1260,30 @@ export async function processTaskIpc(
         break;
       }
 
+      // C13: trust enforcement. Only fires when the caller is an agent
+      // (compound key). Main-group payload_agent_name callers bypass — this
+      // is the admin escape hatch from the C4 tests at line 2305.
+      if (compoundAgent) {
+        const trust = loadAgentTrust(agentDir);
+        const section = (d.section as string) || '(full)';
+        const trustDecision = checkTrustAndStage({
+          agentName: compoundAgent,
+          groupFolder: parseCompoundKey(fsPathToCompoundKey(sourceGroup))
+            .group,
+          actionType: 'write_agent_memory',
+          summary: section,
+          target: agentName,
+          payloadForStaging: {
+            type: 'write_agent_memory',
+            section: d.section,
+            content,
+            agent_name: agentName,
+          },
+          trust,
+        });
+        if (!trustDecision.allowed) break;
+      }
+
       const memoryPath = path.join(agentDir, 'memory.md');
       const tmpPath = `${memoryPath}.tmp`;
       const section = d.section as string | undefined;

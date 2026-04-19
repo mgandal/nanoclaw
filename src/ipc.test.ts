@@ -900,9 +900,9 @@ describe('publish_to_bus trust enforcement (C13)', () => {
     );
 
     expect(writeAgentMessageSpy).not.toHaveBeenCalled();
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('bypasses trust for main-group callers', async () => {
@@ -931,9 +931,9 @@ describe('publish_to_bus trust enforcement (C13)', () => {
     expect(writeAgentMessageSpy).not.toHaveBeenCalled();
     // Cross-group check runs BEFORE trust (line 1127), so this will
     // block at the cross-group layer — nothing staged.
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(0);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      0,
+    );
   });
 });
 
@@ -1858,9 +1858,7 @@ describe('update_task with schedule_value only (no schedule_type)', () => {
 describe('publish_to_bus with optional fields', () => {
   // C13: trust gate means agent callers need a trust.yaml on disk.
   const agentNames = ['curator', 'custom_sender'];
-  const agentDirs = agentNames.map((n) =>
-    path.join(DATA_DIR, 'agents', n),
-  );
+  const agentDirs = agentNames.map((n) => path.join(DATA_DIR, 'agents', n));
 
   beforeEach(() => {
     for (const dir of agentDirs) {
@@ -2211,6 +2209,12 @@ describe('write_agent_memory section upsert', () => {
 
   beforeEach(() => {
     fs.mkdirSync(agentDir, { recursive: true });
+    // C13: write_agent_memory now gates via trust.yaml. These tests exercise
+    // the content-upsert logic, not trust — so grant autonomous here.
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_memory: autonomous\n',
+    );
   });
 
   afterEach(() => {
@@ -2320,6 +2324,120 @@ describe('write_agent_memory section upsert', () => {
 
     const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
     expect(content).toBe('# admin update\n');
+  });
+});
+
+// --- C13: write_agent_memory trust enforcement for agent callers ---
+
+describe('write_agent_memory trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-memory-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(path.join(agentDir, 'memory.md'), '# original\n');
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const writeData = {
+    type: 'write_agent_memory',
+    section: 'Session Continuity',
+    content: '- picked up task X\n- deferred task Y\n',
+  };
+
+  it('writes immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_memory: autonomous\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toContain('## Session Continuity');
+    expect(content).toContain('picked up task X');
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_memory: draft\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    // memory.md unchanged
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toBe('# original\n');
+
+    // Pending action captured
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('write_agent_memory');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.section).toBe('Session Continuity');
+    expect(payload.content).toContain('picked up task X');
+  });
+
+  it('stages on ask (no policy listed)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    // memory.md unchanged
+    const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
+    expect(content).toBe('# original\n');
+
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('uses section as audit-log summary', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  write_agent_memory: autonomous\n',
+    );
+
+    await processTaskIpc(
+      writeData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const row = getDb()
+      .prepare(
+        'SELECT summary FROM agent_actions WHERE action_type = ? ORDER BY created_at DESC LIMIT 1',
+      )
+      .get('write_agent_memory') as { summary: string };
+    expect(row.summary).toBe('Session Continuity');
   });
 });
 
