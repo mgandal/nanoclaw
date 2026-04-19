@@ -86,6 +86,8 @@ Memory hierarchy (most authoritative first):
 
 If Hindsight is available, recall for additional context. Your agent memory.md is the primary source of truth.
 
+**Writeback rules:** before writing memory (any layer), follow `docs/memory-writeback-sop.md`. Four axioms: Action-Verified Only, Sanctity of Verified Facts, No Volatile State, Minimum Sufficient Pointer. Decision tree routes each fact to exactly one layer. **No Execution, No Memory.**
+
 ### Session Start Protocol
 
 At the START of every session, before responding:

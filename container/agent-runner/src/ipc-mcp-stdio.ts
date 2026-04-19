@@ -1406,7 +1406,10 @@ server.tool(
 server.tool(
   'write_agent_memory',
   'Write or update a section of your persistent memory file. ' +
-    'Content persists across sessions. Use for decisions, key facts, and session continuity.',
+    'Content persists across sessions. Use for decisions, key facts, and session continuity. ' +
+    'Before writing, apply docs/memory-writeback-sop.md: write only action-verified facts ' +
+    '(No Execution, No Memory), pick exactly one layer via the decision tree, prefer minimal ' +
+    'patches over rewrites, and skip volatile state (timestamps, PIDs, session IDs).',
   {
     section: z.string().describe('Section header (e.g., "Session Continuity", "Standing Instructions")'),
     content: z.string().describe('Content for this section (bullet points recommended)'),
