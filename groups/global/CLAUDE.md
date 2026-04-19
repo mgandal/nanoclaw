@@ -141,6 +141,18 @@ For research questions, check `98-nanoKB/wiki/index.md` first -- it has synthesi
 - Topic-specific files (e.g., `people.md`, `projects.md`) for detailed data
 - `conversations/` -- searchable history of past conversations
 
+### Ingesting URLs into the vault
+
+Before reading or filing a fetched web page, strip the clutter. Raw HTML typically carries 70-85% nav/ads/footer weight that wastes tokens and pollutes wiki pages.
+
+```bash
+defuddle parse --md <URL>                              # clean markdown to stdout
+defuddle parse --md --output /tmp/page.md <URL>        # to file
+defuddle parse --json <URL>                            # structured metadata
+```
+
+Use this before `WebFetch` result goes into a wiki page. If `defuddle` is missing (`which defuddle` returns nothing), fall back to raw fetch — the content is still usable, just noisier.
+
 ## MANDATORY: Research Before Asking
 
 **NEVER ask Mike for information without first exhausting available sources.**
