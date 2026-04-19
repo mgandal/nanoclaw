@@ -485,8 +485,10 @@ function buildContainerArgs(
   // today that becomes a gate once the bridge servers require it.
   args.push('-e', `NANOCLAW_BRIDGE_TOKEN=${getBridgeToken()}`);
 
-  // Forward Ollama admin tools flag if enabled
-  if (OLLAMA_ADMIN_TOOLS) {
+  // C10: Ollama admin tools (pull/delete models) are main-only. Forwarding
+  // the flag unconditionally let any non-main agent wipe the local model
+  // library or exhaust bandwidth via unbounded pulls.
+  if (OLLAMA_ADMIN_TOOLS && isMain) {
     args.push('-e', 'OLLAMA_ADMIN_TOOLS=true');
   }
   if (OLLAMA_DEFAULT_MODEL) {
