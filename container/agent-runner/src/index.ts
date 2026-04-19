@@ -224,11 +224,22 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     },
   };
 
+  // B1: forward bridge bearer token (injected by host via
+  // NANOCLAW_BRIDGE_TOKEN env) on every HTTP-based MCP bridge call.
+  // If the token is missing (e.g. older nanoclaw version or direct
+  // exec in a dev container), still pass the other headers — server-
+  // side enforcement is the thing that would reject a missing bearer.
+  const bridgeToken = process.env.NANOCLAW_BRIDGE_TOKEN;
+  const bridgeHeaders = (): Record<string, string> => ({
+    Accept: 'application/json, text/event-stream',
+    ...(bridgeToken ? { Authorization: `Bearer ${bridgeToken}` } : {}),
+  });
+
   if (process.env.QMD_URL) {
     servers.qmd = {
       type: 'http',
       url: process.env.QMD_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -242,6 +253,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
         HONCHO_WORKSPACE: 'nanoclaw',
         HONCHO_USER_PEER: 'mgandal',
         HONCHO_AI_PEER: containerInput.agentName || containerInput.groupFolder.replace(/^telegram_/, ''),
+        ...(bridgeToken ? { NANOCLAW_BRIDGE_TOKEN: bridgeToken } : {}),
       },
     };
   }
@@ -250,7 +262,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.apple_notes = {
       type: 'http',
       url: process.env.APPLE_NOTES_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -258,7 +270,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.todoist = {
       type: 'http',
       url: process.env.TODOIST_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -266,7 +278,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.hindsight = {
       type: 'http',
       url: process.env.HINDSIGHT_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -274,7 +286,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.calendar = {
       type: 'http',
       url: process.env.CALENDAR_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -282,7 +294,7 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.slack = {
       type: 'http',
       url: process.env.SLACK_MCP_URL,
-      headers: { Accept: 'application/json, text/event-stream' },
+      headers: bridgeHeaders(),
     };
   }
 
@@ -290,7 +302,10 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
     servers.mail_bridge = {
       type: 'http',
       url: process.env.MAIL_BRIDGE_URL,
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/json',
+        ...(bridgeToken ? { Authorization: `Bearer ${bridgeToken}` } : {}),
+      },
     };
   }
 

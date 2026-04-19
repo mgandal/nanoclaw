@@ -40,7 +40,21 @@ async function ollamaFetch(path: string, options?: RequestInit, timeoutMs?: numb
   const timeout = timeoutMs ?? LIST_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  const fetchOpts = { ...options, signal: controller.signal };
+
+  // B1: forward bridge bearer if present. Ollama itself doesn't enforce
+  // auth today, but the same token is accepted by every other host bridge
+  // — when server-side enforcement lands, this stays correct.
+  const bridgeToken = process.env.NANOCLAW_BRIDGE_TOKEN;
+  const mergedHeaders: Record<string, string> = {
+    ...(options?.headers as Record<string, string> | undefined),
+    ...(bridgeToken ? { Authorization: `Bearer ${bridgeToken}` } : {}),
+  };
+
+  const fetchOpts: RequestInit = {
+    ...options,
+    headers: mergedHeaders,
+    signal: controller.signal,
+  };
   try {
     const res = await fetch(url, fetchOpts);
     return res;

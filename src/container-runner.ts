@@ -32,6 +32,7 @@ import {
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
+import { getBridgeToken } from './bridge-auth.js';
 import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -429,6 +430,13 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // B1: bridge bearer token. Injected so MCP stdio shims can forward
+  // Authorization: Bearer <token> on every HTTP call to host-side
+  // bridges (QMD, Apple Notes, Todoist, Calendar, Honcho, Hindsight).
+  // Server-side enforcement is a follow-up; the token is a speed bump
+  // today that becomes a gate once the bridge servers require it.
+  args.push('-e', `NANOCLAW_BRIDGE_TOKEN=${getBridgeToken()}`);
 
   // Forward Ollama admin tools flag if enabled
   if (OLLAMA_ADMIN_TOOLS) {

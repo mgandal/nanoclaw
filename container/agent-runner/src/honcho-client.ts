@@ -109,8 +109,20 @@ export interface HonchoClient {
 async function honchoFetch(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  // B1: forward bridge bearer if present.
+  const bridgeToken = process.env.NANOCLAW_BRIDGE_TOKEN;
+  const mergedHeaders: Record<string, string> = {
+    ...(options.headers as Record<string, string> | undefined),
+    ...(bridgeToken ? { Authorization: `Bearer ${bridgeToken}` } : {}),
+  };
+
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, {
+      ...options,
+      headers: mergedHeaders,
+      signal: controller.signal,
+    });
   } finally {
     clearTimeout(timer);
   }
