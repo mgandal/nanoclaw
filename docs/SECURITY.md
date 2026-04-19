@@ -106,6 +106,31 @@ still active:
 - Agent `memory.md` Session Continuity and `hot.md` are wrapped in
   `<agent-memory-continuity>` / `<agent-memory-hot>` tags to prevent
   self-memory tag forgery (A5).
+- Compound-key bus messages are wrapped in
+  `<agent-bus-pending-content>` so a malicious bus payload can't
+  forge the outer `<pending-bus-messages>` closer (BX1, 2026-04-19).
+- Bus-watcher rejects bus files whose `from` is reserved (`SYSTEM`,
+  `USER`, `MAIN`, `OWNER`, `ROOT`) or doesn't match the agent-name
+  regex — rejected files land in `data/bus/agents/_errors/` for
+  inspection (B3 iii, 2026-04-19).
+- `send_file` rejects credential-named files and
+  `refresh_token`/`client_secret`/private-key content from non-main
+  groups. Main bypasses (operator tooling) (B2/B4, 2026-04-19).
+- `/app/src` is mounted read-only so agent-written source can't
+  become host code if a future entrypoint adds a build step (B7,
+  2026-04-19).
+- MCP bridges (QMD, Apple Notes, Todoist, Calendar, Honcho,
+  Hindsight, Ollama, Slack, Mail Bridge) receive `Authorization:
+  Bearer <NANOCLAW_BRIDGE_TOKEN>` on every container-initiated HTTP
+  call. Client-side only today; server-side enforcement is a
+  follow-up (B1 client, 2026-04-19).
+- `sync-all.sh` acquires a `mkdir`-based lock at
+  `/var/tmp/nanoclaw-sync.lock.d` before running — concurrent
+  launchd-fired runs exit silently; stale locks from dead holders
+  are stolen (B9, 2026-04-19).
+- Email export markdown files at `~/.cache/email-ingest/exported/`
+  are written mode 0600 via `write_file_secure`. Existing files
+  migrated on first load (BX2, 2026-04-19).
 
 ### 5. Credential Isolation (OneCLI Agent Vault)
 
@@ -133,8 +158,8 @@ trade-off, logged here so the threat model stays honest:
 
 | Credential | Scope | Rationale |
 |------------|-------|-----------|
-| `~/.gmail-mcp/*` | Main: rw; non-main: ro | Gmail MCP inside container needs refresh rotation. Tier B will route through a host bridge. |
-| `~/.paperclip/credentials.json` | All groups: rw | Paperclip CLI rotates `id_token` per call but `refresh_token` is long-lived. Tier B will either move refresh to host or add a `send_file` blocklist. |
+| `~/.gmail-mcp/*` | Main: rw; non-main: ro | Gmail MCP inside container needs refresh rotation. `send_file` exfil path closed by the B2/B4 credential blocklist (2026-04-19); full host-bridge routing is future work. |
+| `~/.paperclip/credentials.json` | All groups: rw | Paperclip CLI rotates `id_token` per call but `refresh_token` is long-lived. Non-main exfil path closed by the B2/B4 `send_file` credential blocklist (2026-04-19). |
 | Secondary env tokens (`GITHUB_TOKEN`, `SUPADATA_API_KEY`, `READWISE_ACCESS_TOKEN`) | Main, or non-main groups listed in `containerConfig.allowedSecrets` | Opt-in per group; main group gets all. |
 
 ### Scheduled-task guard scripts (A1, 2026-04-18)

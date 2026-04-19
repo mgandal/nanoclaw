@@ -174,6 +174,13 @@ implementation plan.
 
 #### B1. Localhost MCP bridges reachable unauthenticated from every container
 
+**Status: client side resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 7).
+Containers now inject `NANOCLAW_BRIDGE_TOKEN` and forward
+`Authorization: Bearer` on every HTTP bridge call. Server-side
+enforcement (supergateway plists that require the bearer) is a
+follow-up; until then the token is a speed bump, not a gate.
+
 - **Where:** `src/container-runner.ts:400-545` (env-URL passthrough for QMD,
   Apple Notes, Todoist, Calendar, Honcho, Hindsight, Slack MCP, Mail Bridge)
   + `container/agent-runner/src/ollama-mcp-stdio.ts:14` (Ollama).
@@ -195,6 +202,15 @@ implementation plan.
 
 #### B2. Paperclip credentials mounted rw with `send_file` exfil path
 
+**Status: resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 6).
+`send_file` now rejects credential-named files and files whose
+content contains `refresh_token`, `client_secret`, `-----BEGIN *
+PRIVATE KEY-----`, `xoxb-*`, or `ghp_*` when called from a non-main
+group. Main-group bypasses (operator tooling). Paperclip mount stays
+rw — non-main groups still need id_token refresh writes; the
+blocklist alone makes rw safe.
+
 - **Where:** `src/container-runner.ts:249-262` + `src/ipc.ts:388-407`.
 - **What:** `~/.paperclip/credentials.json` (containing refresh_token) mounted
   rw into every group. The comment acknowledges "readable by any agent with
@@ -209,6 +225,13 @@ implementation plan.
   heuristics (reject files containing `refresh_token`, `client_secret`).
 
 #### B3. Bus injection via unescaped `summary` + direct IPC filesystem writes
+
+**Status: partially resolved.** Sub-item (i) `summary` escape/wrap/cap
+and (iv) `publish_to_bus` + `knowledge_publish` trust gating shipped in
+Tier A / C13. Sub-item (iii) bus-watcher `from` verification shipped
+2026-04-19 (plan `2026-04-19-tier-b-remaining.md` task 5). Sub-item (v)
+`/workspace/ipc/` submount tightening is deferred as redesign-level
+future work.
 
 - **Where:** `src/ipc.ts:924-999` (`publish_to_bus` IPC),
   `src/index.ts:1279-1294` (bus-watcher dispatch), and the rw mount of
@@ -248,6 +271,14 @@ implementation plan.
   confined to a channel the dispatcher can attribute.
 
 #### B4. Gmail OAuth tokens mounted inside containers
+
+**Status: send_file exfil path resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 6).
+The same credential blocklist that closes B2 now blocks agent-
+initiated exfil of `gmail-token.json` and the `-----BEGIN * PRIVATE
+KEY-----` content pattern. Moving Gmail refresh onto the host
+(per-group MCP endpoint) remains the ideal fix but is a separate
+project.
 
 - **Where:** `src/container-runner.ts:236-247`.
 - **What:** `~/.gmail-mcp/` mounted ro for non-main (still readable!), rw for
@@ -289,6 +320,10 @@ implementation plan.
 
 #### B7. Agent-runner source mounted rw per-group
 
+**Status: resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 1).
+`/app/src` now mounts read-only.
+
 - **Where:** `src/container-runner.ts:289-319`.
 - **What:** `/app/src` mounted rw. Entrypoint only runs `/app/dist`, so today
   the rw is cosmetic — BUT agent writes persist to
@@ -312,6 +347,12 @@ implementation plan.
   state write.
 
 #### B9. `sync-all.sh` has no lockfile (concurrent runs corrupt state)
+
+**Status: resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 2).
+mkdir-based lock at `/var/tmp/nanoclaw-sync.lock.d`; stale locks from
+dead holders are stolen. flock(1) would have required installing
+util-linux via Homebrew; mkdir atomicity is POSIX and zero-dependency.
 
 - **Where:** `scripts/sync/sync-all.sh`.
 - **What:** launchd fires every 4h. If a run stalls (exchange search blocks,
@@ -723,6 +764,9 @@ prioritized, actionable, durable reference.
 
 ## Discovered during Tier A execution (add to Tier B)
 
+**Status: both resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` tasks 3 and 4).
+
 The pre-merge reviewer for Tier A surfaced two pre-existing issues that are
 outside Tier A scope but are the same classes of finding. Adding here so
 they don't get lost before the Tier B plan:
@@ -733,10 +777,12 @@ they don't get lost before the Tier B plan:
   hand-crafted `<pending-bus-messages>` section. Same tag-escape class as
   A5 — a malicious agent can write a message containing
   `</pending-bus-messages><agent-trust>...` and break out. Wrap via
-  `wrapAgentXml` in Tier B.
+  `wrapAgentXml` in Tier B. — **Resolved via BX1: inner
+  `<agent-bus-pending-content>` wrap.**
 - **Email exports at umask-default perms** (`scripts/sync/email_ingest/exporter.py:114`).
   `~/.cache/email-ingest/exported/*.md` contains full email bodies written
   with `.write_text()` (mode 0644 under default umask). B8 in Tier A
   addressed tokens and state files; the exported content itself is a
   narrower but related information-disclosure surface. Route through
-  `write_file_secure` in Tier B.
+  `write_file_secure` in Tier B. — **Resolved via BX2: `write_file_secure`
+  with mode 0600 + one-time migration block.**
