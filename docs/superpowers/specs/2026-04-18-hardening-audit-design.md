@@ -445,6 +445,14 @@ implementation plan.
 
 #### C13. Trust-enforcement coverage gaps
 
+**Status: resolved 2026-04-19** (plan:
+`docs/superpowers/plans/2026-04-19-tier-b-trust-coverage.md`). All IPC
+actions named below now route through `checkTrustAndStage`
+(`src/trust-enforcement.ts`). `save_skill` is main-only by design (no
+agent path today) — deliberately skipped per task 7 of the plan.
+Defaults for every new action type added to all 9 agent trust.yaml
+files.
+
 - **Where:** `src/ipc.ts` — the following IPC actions do NOT go through
   `checkTrust`: `knowledge_publish`, `publish_to_bus`, `schedule_task`,
   `save_skill`, `deploy_mini_app`, `kg_query`, `dashboard_query`,

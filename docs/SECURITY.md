@@ -67,16 +67,32 @@ Messages and task operations are verified against group identity:
 
 ### Actions with trust-enforcement gates
 
-The `checkTrust` + `pending_actions` pipeline (trust.yaml per-agent) gates:
+The `checkTrust` + `pending_actions` pipeline (trust.yaml per-agent) gates
+every IPC action that produces a privileged side effect for an agent
+caller. Main-group callers (no agentName in the compound key) bypass the
+agent trust gate.
 
-- `send_message` (since 2026-03-21 audit)
-- `send_slack_dm` (since multi-agent work)
+Gated actions (C13 closed 2026-04-19):
 
-Tier B of the 2026-04-18 audit will extend coverage to
-`knowledge_publish`, `publish_to_bus`, `save_skill`, `deploy_mini_app`,
-`kg_query`, `dashboard_query`, `write_agent_memory`, and
-`write_agent_state`. Until then, these actions rely on main-only gates
-and/or payload validation. Notable payload hardening from 2026-04-18:
+- `send_message` (since 2026-03-21 audit; refactored to the shared
+  `checkTrustAndStage` helper in C13 task 12)
+- `send_slack_dm` (since multi-agent work; refactored in C13 task 13 —
+  now stages draft/ask levels instead of silently blocking)
+- `schedule_task`, `update_task`, `pause_task`, `resume_task`,
+  `cancel_task`
+- `publish_to_bus`
+- `write_agent_memory`, `write_agent_state`
+- `knowledge_publish`
+- `deploy_mini_app`
+- `kg_query`, `dashboard_query`
+
+`save_skill` is main-only (deliberately not routed through agent trust;
+any future agent path must add trust alongside A4 content validation).
+`imessage_*` is main-only.
+
+Defaults added to every agent trust.yaml in C13 task 14; operators can
+override per-agent. Notable payload hardening from 2026-04-18 (Tier A)
+still active:
 
 - `schedule_task.agent_name` is regex-validated and must resolve to a
   direct child of `data/agents/` (B5).
