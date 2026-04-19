@@ -5,3 +5,17 @@ actions:
   schedule_task: notify
   # send_email, draft_email, send_slack_dm, publish_to_bus fall through to 'ask'
   # — Warren shouldn't be sending financial correspondence directly; that's Marvin's job.
+  # === C13 additions (2026-04-19) ===
+  # Warren's comment above explicitly keeps publish_to_bus in
+  # ask-territory (not an operational agent).
+  publish_to_bus: ask
+  knowledge_publish: autonomous
+  write_agent_state: autonomous
+  save_skill: draft
+  deploy_mini_app: draft
+  kg_query: autonomous
+  dashboard_query: autonomous
+  update_task: notify
+  pause_task: notify
+  resume_task: notify
+  cancel_task: notify

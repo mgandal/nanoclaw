@@ -8,3 +8,14 @@ actions:
   schedule_task: notify
   draft_email: autonomous
   send_email: ask
+  # === C13 additions (2026-04-19) ===
+  knowledge_publish: autonomous
+  write_agent_state: autonomous
+  save_skill: draft
+  deploy_mini_app: draft
+  kg_query: autonomous
+  dashboard_query: autonomous
+  update_task: notify
+  pause_task: notify
+  resume_task: notify
+  cancel_task: notify

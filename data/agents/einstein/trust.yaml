@@ -6,3 +6,15 @@ actions:
   write_vault: notify
   search_literature: autonomous
   write_agent_memory: autonomous
+  # === C13 additions (2026-04-19) ===
+  schedule_task: draft
+  knowledge_publish: autonomous
+  write_agent_state: autonomous
+  save_skill: draft
+  deploy_mini_app: draft
+  kg_query: autonomous
+  dashboard_query: autonomous
+  update_task: notify
+  pause_task: notify
+  resume_task: notify
+  cancel_task: notify
