@@ -120,4 +120,74 @@ describe('BusWatcher', () => {
     const interval = await watcher.poll();
     expect(interval).toBe(30000);
   });
+
+  // --- B3(iii): from-field verification ---
+
+  it('rejects bus files with reserved from values (B3 iii)', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--recipient');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'spoof.json'),
+      JSON.stringify({ from: 'SYSTEM', topic: 't', summary: 'x' }),
+    );
+
+    const watcher = new BusWatcher(tmpDir, mockDispatch);
+    await watcher.poll();
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+    // File should have been moved to _errors/, not left in the recipient dir
+    expect(fs.existsSync(path.join(dir, 'spoof.json'))).toBe(false);
+    expect(fs.existsSync(path.join(agentsDir, '_errors', 'spoof.json'))).toBe(
+      true,
+    );
+  });
+
+  it('rejects bus files with reserved from values case-insensitively (B3 iii)', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--recipient');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'spoof-lower.json'),
+      JSON.stringify({ from: 'root', topic: 't', summary: 'x' }),
+    );
+
+    const watcher = new BusWatcher(tmpDir, mockDispatch);
+    await watcher.poll();
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects bus files whose from fails the agent-name regex (B3 iii)', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--recipient');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'bad.json'),
+      JSON.stringify({
+        from: '../../etc/passwd',
+        topic: 't',
+        summary: 'x',
+      }),
+    );
+
+    const watcher = new BusWatcher(tmpDir, mockDispatch);
+    await watcher.poll();
+
+    expect(mockDispatch).not.toHaveBeenCalled();
+  });
+
+  it('accepts bus files with a valid agent-style from (B3 iii)', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--recipient');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'ok.json'),
+      JSON.stringify({ id: '1', from: 'simon', topic: 't', summary: 'hi' }),
+    );
+
+    const watcher = new BusWatcher(tmpDir, mockDispatch);
+    await watcher.poll();
+
+    expect(mockDispatch).toHaveBeenCalledWith(
+      'telegram_test:recipient',
+      expect.arrayContaining([expect.objectContaining({ from: 'simon' })]),
+    );
+  });
 });

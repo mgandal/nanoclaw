@@ -5,6 +5,15 @@ import { fsPathToCompoundKey } from './compound-key.js';
 import { BUS_POLL_INTERVAL, BUS_HIGH_PRIORITY_INTERVAL } from './config.js';
 import type { BusMessage } from './message-bus.js';
 
+// B3(iii): the bus protocol carries `from` inside the JSON payload. An agent
+// with shell access can write a bus-message file directly under a recipient's
+// bus dir with `from: "SYSTEM"` (or a traversal path), bypassing the IPC-
+// layer `from = sourceAgent || sourceGroup` attribution. Full attribution
+// would require signed sender stamps (future work); the cheap containment is
+// syntactic + reserved-label blocklist.
+const FROM_REGEX = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const RESERVED_FROM = new Set(['SYSTEM', 'USER', 'MAIN', 'OWNER', 'ROOT']);
+
 type DispatchFn = (
   compoundKey: string,
   messages: BusMessage[],
@@ -31,6 +40,8 @@ export class BusWatcher {
       withFileTypes: true,
     })) {
       if (!entry.isDirectory()) continue;
+      // B3(iii): rejected bus messages land in _errors/; don't re-scan them.
+      if (entry.name === '_errors') continue;
 
       const dirPath = path.join(this.agentsDir, entry.name);
       const pendingFiles = fs
@@ -45,6 +56,28 @@ export class BusWatcher {
         try {
           const filePath = path.join(dirPath, file);
           const content = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+
+          // B3(iii): reject reserved-label or invalid `from`. Move to an
+          // _errors/ sibling so the record persists for inspection but is
+          // not replayed. Keep this check AFTER parse (need to read content)
+          // and BEFORE rename to .processing (otherwise a rejected file
+          // ends up stuck in the recipient dir).
+          const from = content?.from;
+          if (
+            typeof from !== 'string' ||
+            !FROM_REGEX.test(from) ||
+            RESERVED_FROM.has(from.toUpperCase())
+          ) {
+            logger.warn(
+              { file, from },
+              'Bus message rejected: invalid or reserved from',
+            );
+            const errorsDir = path.join(this.agentsDir, '_errors');
+            fs.mkdirSync(errorsDir, { recursive: true });
+            fs.renameSync(filePath, path.join(errorsDir, file));
+            continue;
+          }
+
           const processingPath = filePath.replace('.json', '.processing');
           fs.renameSync(filePath, processingPath);
           messages.push(content);
