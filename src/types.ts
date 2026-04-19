@@ -57,6 +57,12 @@ export interface RegisteredGroup {
   containerConfig?: ContainerConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
+  // Allowlist of `sender` values accepted from the container's send_message
+  // IPC. Undefined = any sender allowed (backwards compat, legacy rows).
+  // [] = no personas — all IPC sends go through the main bot. Non-empty list
+  // = only those names may fire a pooled/pinned Telegram bot; anything else
+  // is downgraded to a main-bot prefixed message.
+  permittedSenders?: string[];
 }
 
 export interface ImageAttachment {

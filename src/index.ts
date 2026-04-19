@@ -105,7 +105,9 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import {
+  extractPersonasCommand,
   extractSessionCommand,
+  handlePersonasCommand,
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
@@ -359,8 +361,34 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
-  // --- /new command: reset session (host-side, no agent involved) ---
   const groupTriggerPattern = getTriggerPattern(group.trigger);
+
+  // --- /personas admin command: edit per-group sender allowlist ---
+  // Main-group only. Updates both the DB row and the in-memory map so the
+  // next IPC send_message reflects the new policy without a restart.
+  if (isMainGroup) {
+    for (const msg of missedMessages) {
+      const cmd = extractPersonasCommand(msg.content, groupTriggerPattern);
+      if (!cmd) continue;
+      const reply = await handlePersonasCommand(cmd, {
+        getRegisteredGroups: () => registeredGroups,
+        getRegisteredGroup: (jid) => {
+          const g = registeredGroups[jid];
+          return g ? { jid, ...g } : undefined;
+        },
+        setRegisteredGroup: (jid, updatedGroup) => {
+          setRegisteredGroup(jid, updatedGroup);
+          registeredGroups[jid] = updatedGroup;
+        },
+      });
+      await channel.sendMessage(chatJid, reply);
+      lastAgentSeq[chatJid] = msg.seq;
+      saveState();
+      return true;
+    }
+  }
+
+  // --- /new command: reset session (host-side, no agent involved) ---
   const newCmdMsg = missedMessages.find((m) => {
     const text = m.content.trim().replace(groupTriggerPattern, '').trim();
     return text === '/new';

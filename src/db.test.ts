@@ -1884,6 +1884,66 @@ describe('NULL handling in optional columns', () => {
   });
 });
 
+// --- Permitted senders (persona allowlist) ---
+
+describe('permittedSenders roundtrip', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('stores and retrieves a non-empty allowlist', () => {
+    setRegisteredGroup('tg:lab', {
+      name: 'LAB-claw',
+      folder: 'telegram_lab-claw',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      permittedSenders: ['Marvin', 'Warren', 'Vincent', 'FranklinClaw'],
+    });
+    const group = getRegisteredGroup('tg:lab')!;
+    expect(group.permittedSenders).toEqual([
+      'Marvin',
+      'Warren',
+      'Vincent',
+      'FranklinClaw',
+    ]);
+  });
+
+  it('stores an empty allowlist (main bot only) and distinguishes it from undefined', () => {
+    setRegisteredGroup('tg:vault', {
+      name: 'VAULT-claw',
+      folder: 'telegram_vault-claw',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      permittedSenders: [],
+    });
+    const group = getRegisteredGroup('tg:vault')!;
+    expect(group.permittedSenders).toEqual([]);
+  });
+
+  it('returns undefined when the column was never set (allow-any, backwards compat)', () => {
+    setRegisteredGroup('tg:legacy', {
+      name: 'Legacy',
+      folder: 'telegram_legacy',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    });
+    const group = getRegisteredGroup('tg:legacy')!;
+    expect(group.permittedSenders).toBeUndefined();
+  });
+
+  it('getAllRegisteredGroups preserves the allowlist', () => {
+    setRegisteredGroup('tg:home', {
+      name: 'HOME-claw',
+      folder: 'telegram_home-claw',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      permittedSenders: ['Marvin', 'Warren'],
+    });
+    const all = getAllRegisteredGroups();
+    expect(all['tg:home'].permittedSenders).toEqual(['Marvin', 'Warren']);
+  });
+});
+
 // --- Transaction rollback on error ---
 
 describe('transaction rollback on error', () => {

@@ -86,7 +86,8 @@ function createSchema(database: Database): void {
       trigger_pattern TEXT NOT NULL,
       added_at TEXT NOT NULL,
       container_config TEXT,
-      requires_trigger INTEGER DEFAULT 1
+      requires_trigger INTEGER DEFAULT 1,
+      permitted_senders TEXT
     );
     CREATE TABLE IF NOT EXISTS agent_registry (
       agent_name TEXT NOT NULL,
@@ -191,6 +192,7 @@ function createSchema(database: Database): void {
   addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN agent_name TEXT`);
   addColumn(`ALTER TABLE sessions ADD COLUMN last_used TEXT`);
   addColumn(`ALTER TABLE sessions ADD COLUMN created_at TEXT`);
+  addColumn(`ALTER TABLE registered_groups ADD COLUMN permitted_senders TEXT`);
 
   if (
     addColumn(
@@ -973,6 +975,7 @@ export function getRegisteredGroup(
         container_config: string | null;
         requires_trigger: number | null;
         is_main: number | null;
+        permitted_senders: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -995,6 +998,7 @@ export function getRegisteredGroup(
     requiresTrigger:
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
+    permittedSenders: parsePermittedSenders(row.permitted_senders, row.jid),
   };
 }
 
@@ -1003,8 +1007,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, permitted_senders)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -1014,7 +1018,39 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.containerConfig ? JSON.stringify(group.containerConfig) : null,
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
+    group.permittedSenders === undefined
+      ? null
+      : JSON.stringify(group.permittedSenders),
   );
+}
+
+// Parse the JSON-encoded permitted_senders column. Returns undefined if NULL
+// (legacy / unset — allow any sender). Returns a (possibly empty) string[] on
+// valid JSON; logs and returns undefined on malformed JSON so a corrupted
+// column can't accidentally lock down a group harder than the operator
+// intended.
+function parsePermittedSenders(
+  raw: string | null,
+  jid: string,
+): string[] | undefined {
+  if (raw === null) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((v) => typeof v === 'string')) {
+      return parsed;
+    }
+    logger.warn(
+      { jid, raw },
+      'permitted_senders column is not a string array; treating as unset',
+    );
+    return undefined;
+  } catch (err) {
+    logger.warn(
+      { jid, raw, err },
+      'Failed to parse permitted_senders JSON; treating as unset',
+    );
+    return undefined;
+  }
 }
 
 export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
@@ -1027,6 +1063,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     container_config: string | null;
     requires_trigger: number | null;
     is_main: number | null;
+    permitted_senders: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -1048,6 +1085,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
       requiresTrigger:
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
+      permittedSenders: parsePermittedSenders(row.permitted_senders, row.jid),
     };
   }
   return result;

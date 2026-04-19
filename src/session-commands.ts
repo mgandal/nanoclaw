@@ -1,4 +1,4 @@
-import type { NewMessage } from './types.js';
+import type { NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
 export type ApprovalCommand =
@@ -24,6 +24,108 @@ export function extractApprovalCommand(
   const reject = text.match(/^\/reject\s+([A-Za-z0-9_-]{1,80})$/);
   if (reject) return { kind: 'reject', id: reject[1] };
   return null;
+}
+
+export type PersonasCommand =
+  | { kind: 'list' }
+  | { kind: 'show'; jid: string }
+  | { kind: 'set'; jid: string; permittedSenders: string[] | undefined };
+
+/**
+ * Extract a /personas admin command from a message. Returns null if not a
+ * personas command. Accepted forms (after trigger strip):
+ *   /personas                              → list all groups
+ *   /personas <jid>                        → show one group
+ *   /personas <jid> none                   → set []
+ *   /personas <jid> any                    → clear (undefined)
+ *   /personas <jid> Name1,Name2,...        → set array (whitespace trimmed)
+ *
+ * `<jid>` is any non-whitespace token (tg:..., slack:..., emacs:...).
+ */
+export function extractPersonasCommand(
+  content: string,
+  triggerPattern: RegExp,
+): PersonasCommand | null {
+  const text = content.trim().replace(triggerPattern, '').trim();
+  if (text === '/personas') return { kind: 'list' };
+  const match = text.match(/^\/personas\s+(\S+)(?:\s+(.+))?$/);
+  if (!match) return null;
+  const jid = match[1];
+  const rest = match[2]?.trim();
+  if (rest === undefined || rest === '') return { kind: 'show', jid };
+  if (rest === 'any') return { kind: 'set', jid, permittedSenders: undefined };
+  if (rest === 'none') return { kind: 'set', jid, permittedSenders: [] };
+  const names = rest
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return { kind: 'set', jid, permittedSenders: names };
+}
+
+export interface PersonasCommandDeps {
+  getRegisteredGroups: () => Record<string, RegisteredGroup>;
+  getRegisteredGroup: (
+    jid: string,
+  ) => (RegisteredGroup & { jid: string }) | undefined;
+  setRegisteredGroup: (jid: string, group: RegisteredGroup) => void;
+}
+
+/**
+ * Handle a /personas command. Returns a short user-facing string to send
+ * back to the calling group. Does NOT check authorization — caller is
+ * responsible for gating this to the main group.
+ */
+export async function handlePersonasCommand(
+  cmd: PersonasCommand,
+  deps: PersonasCommandDeps,
+): Promise<string> {
+  if (cmd.kind === 'list') {
+    const groups = deps.getRegisteredGroups();
+    const lines = Object.entries(groups)
+      .sort(([, a], [, b]) => a.folder.localeCompare(b.folder))
+      .map(([jid, g]) => {
+        const senders =
+          g.permittedSenders === undefined
+            ? 'any'
+            : g.permittedSenders.length === 0
+              ? 'none'
+              : g.permittedSenders.join(',');
+        return `${g.folder.padEnd(24)} ${jid.padEnd(26)} ${senders}`;
+      });
+    return lines.length > 0
+      ? `Personas:\n${lines.join('\n')}`
+      : 'No registered groups.';
+  }
+  const group = deps.getRegisteredGroup(cmd.jid);
+  if (!group) {
+    return `Unknown JID: ${cmd.jid}`;
+  }
+  if (cmd.kind === 'show') {
+    const senders =
+      group.permittedSenders === undefined
+        ? 'any'
+        : group.permittedSenders.length === 0
+          ? 'none'
+          : group.permittedSenders.join(',');
+    return `${cmd.jid} (${group.folder}): ${senders}`;
+  }
+  // kind === 'set'
+  const { jid: _jid, ...rest } = group;
+  deps.setRegisteredGroup(cmd.jid, {
+    ...rest,
+    permittedSenders: cmd.permittedSenders,
+  });
+  const senders =
+    cmd.permittedSenders === undefined
+      ? 'any'
+      : cmd.permittedSenders.length === 0
+        ? 'none'
+        : cmd.permittedSenders.join(',');
+  logger.info(
+    { jid: cmd.jid, permittedSenders: cmd.permittedSenders },
+    'Personas allowlist updated',
+  );
+  return `Updated ${cmd.jid} (${group.folder}): ${senders}`;
 }
 
 /**

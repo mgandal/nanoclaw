@@ -1,12 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   extractApprovalCommand,
+  extractPersonasCommand,
   extractSessionCommand,
   handleApprovalCommand,
+  handlePersonasCommand,
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
-import type { NewMessage } from './types.js';
+import type { NewMessage, RegisteredGroup } from './types.js';
 import type { SessionCommandDeps } from './session-commands.js';
 
 describe('extractSessionCommand', () => {
@@ -40,6 +42,205 @@ describe('extractSessionCommand', () => {
 
   it('is case-sensitive for the command', () => {
     expect(extractSessionCommand('/Compact', trigger)).toBeNull();
+  });
+});
+
+describe('extractPersonasCommand', () => {
+  const trigger = /^@Andy\b/i;
+
+  it('parses bare /personas as a list-all command', () => {
+    expect(extractPersonasCommand('/personas', trigger)).toEqual({
+      kind: 'list',
+    });
+  });
+
+  it('parses /personas <jid> as a show-one command', () => {
+    expect(extractPersonasCommand('/personas tg:-123', trigger)).toEqual({
+      kind: 'show',
+      jid: 'tg:-123',
+    });
+  });
+
+  it('parses /personas <jid> none as a set-empty command', () => {
+    expect(extractPersonasCommand('/personas tg:-123 none', trigger)).toEqual({
+      kind: 'set',
+      jid: 'tg:-123',
+      permittedSenders: [],
+    });
+  });
+
+  it('parses /personas <jid> any as a clear command (allow-any)', () => {
+    expect(extractPersonasCommand('/personas tg:-123 any', trigger)).toEqual({
+      kind: 'set',
+      jid: 'tg:-123',
+      permittedSenders: undefined,
+    });
+  });
+
+  it('parses /personas <jid> Name1,Name2 as a set-list command', () => {
+    expect(
+      extractPersonasCommand('/personas tg:-123 Marvin,Warren', trigger),
+    ).toEqual({
+      kind: 'set',
+      jid: 'tg:-123',
+      permittedSenders: ['Marvin', 'Warren'],
+    });
+  });
+
+  it('trims whitespace around list entries', () => {
+    expect(
+      extractPersonasCommand(
+        '/personas tg:-123 Marvin, Warren ,Vincent',
+        trigger,
+      ),
+    ).toEqual({
+      kind: 'set',
+      jid: 'tg:-123',
+      permittedSenders: ['Marvin', 'Warren', 'Vincent'],
+    });
+  });
+
+  it('works with the trigger prefix', () => {
+    expect(
+      extractPersonasCommand('@Andy /personas tg:-123 none', trigger),
+    ).toEqual({
+      kind: 'set',
+      jid: 'tg:-123',
+      permittedSenders: [],
+    });
+  });
+
+  it('returns null for non-/personas messages', () => {
+    expect(extractPersonasCommand('/approve abc', trigger)).toBeNull();
+    expect(extractPersonasCommand('hello', trigger)).toBeNull();
+  });
+});
+
+describe('handlePersonasCommand', () => {
+  const buildDeps = (groupsInit: Record<string, RegisteredGroup>) => {
+    const store = { ...groupsInit };
+    const writes: Array<{ jid: string; group: RegisteredGroup }> = [];
+    return {
+      store,
+      writes,
+      deps: {
+        getRegisteredGroups: () => ({ ...store }),
+        getRegisteredGroup: (jid: string) =>
+          store[jid] ? { jid, ...store[jid] } : undefined,
+        setRegisteredGroup: (jid: string, group: RegisteredGroup) => {
+          store[jid] = group;
+          writes.push({ jid, group });
+        },
+      },
+    };
+  };
+
+  it('list: returns one line per group with its current allowlist', async () => {
+    const { deps } = buildDeps({
+      'tg:A': {
+        name: 'A',
+        folder: 'telegram_a',
+        trigger: '@',
+        added_at: '',
+        permittedSenders: ['Marvin'],
+      },
+      'tg:B': {
+        name: 'B',
+        folder: 'telegram_b',
+        trigger: '@',
+        added_at: '',
+        permittedSenders: [],
+      },
+      'tg:C': {
+        name: 'C',
+        folder: 'telegram_c',
+        trigger: '@',
+        added_at: '',
+      },
+    });
+    const out = await handlePersonasCommand({ kind: 'list' }, deps);
+    expect(out).toContain('tg:A');
+    expect(out).toContain('Marvin');
+    expect(out).toContain('tg:B');
+    expect(out).toContain('none');
+    expect(out).toContain('tg:C');
+    expect(out).toContain('any');
+  });
+
+  it('show: returns the current allowlist for one jid', async () => {
+    const { deps } = buildDeps({
+      'tg:A': {
+        name: 'A',
+        folder: 'telegram_a',
+        trigger: '@',
+        added_at: '',
+        permittedSenders: ['Marvin', 'Warren'],
+      },
+    });
+    const out = await handlePersonasCommand(
+      { kind: 'show', jid: 'tg:A' },
+      deps,
+    );
+    expect(out).toContain('Marvin');
+    expect(out).toContain('Warren');
+  });
+
+  it('show: reports unknown jid clearly', async () => {
+    const { deps } = buildDeps({});
+    const out = await handlePersonasCommand(
+      { kind: 'show', jid: 'tg:missing' },
+      deps,
+    );
+    expect(out.toLowerCase()).toContain('unknown');
+  });
+
+  it('set: persists new allowlist and confirms', async () => {
+    const { deps, writes } = buildDeps({
+      'tg:A': {
+        name: 'A',
+        folder: 'telegram_a',
+        trigger: '@',
+        added_at: '',
+      },
+    });
+    const out = await handlePersonasCommand(
+      {
+        kind: 'set',
+        jid: 'tg:A',
+        permittedSenders: ['Marvin', 'Warren'],
+      },
+      deps,
+    );
+    expect(writes).toHaveLength(1);
+    expect(writes[0].group.permittedSenders).toEqual(['Marvin', 'Warren']);
+    expect(out).toContain('Marvin');
+  });
+
+  it('set with undefined clears the allowlist (allow-any)', async () => {
+    const { deps, writes } = buildDeps({
+      'tg:A': {
+        name: 'A',
+        folder: 'telegram_a',
+        trigger: '@',
+        added_at: '',
+        permittedSenders: ['Marvin'],
+      },
+    });
+    await handlePersonasCommand(
+      { kind: 'set', jid: 'tg:A', permittedSenders: undefined },
+      deps,
+    );
+    expect(writes[0].group.permittedSenders).toBeUndefined();
+  });
+
+  it('set: refuses to edit an unknown jid', async () => {
+    const { deps, writes } = buildDeps({});
+    const out = await handlePersonasCommand(
+      { kind: 'set', jid: 'tg:nope', permittedSenders: [] },
+      deps,
+    );
+    expect(writes).toHaveLength(0);
+    expect(out.toLowerCase()).toContain('unknown');
   });
 });
 
