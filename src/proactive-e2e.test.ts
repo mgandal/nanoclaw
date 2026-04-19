@@ -47,9 +47,8 @@ describe('proactive e2e', () => {
     process.env.PROACTIVE_GOVERNOR = 'true';
     process.env.PROACTIVE_ENABLED = 'false';
     vi.resetModules();
-    const { _initTestDatabase: freshInit, getDb: freshGetDb } = await import(
-      './db.js'
-    );
+    const { _initTestDatabase: freshInit, getDb: freshGetDb } =
+      await import('./db.js');
     freshInit();
     freshGetDb().prepare('DELETE FROM proactive_log').run();
     const { deliverSendMessage } = await import('./ipc.js');
@@ -70,7 +69,9 @@ describe('proactive e2e', () => {
     );
     expect(sendMessage).not.toHaveBeenCalled();
     const rows = freshGetDb()
-      .prepare("SELECT * FROM proactive_log WHERE correlation_id = 'escalate:e2e:1'")
+      .prepare(
+        "SELECT * FROM proactive_log WHERE correlation_id = 'escalate:e2e:1'",
+      )
       .all() as { decision: string; reason: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].decision).toBe('drop');
@@ -81,9 +82,8 @@ describe('proactive e2e', () => {
     process.env.PROACTIVE_GOVERNOR = 'true';
     process.env.PROACTIVE_ENABLED = 'true';
     vi.resetModules();
-    const { _initTestDatabase: freshInit, getDb: freshGetDb } = await import(
-      './db.js'
-    );
+    const { _initTestDatabase: freshInit, getDb: freshGetDb } =
+      await import('./db.js');
     freshInit();
     freshGetDb().prepare('DELETE FROM proactive_log').run();
     const { deliverSendMessage } = await import('./ipc.js');
@@ -104,7 +104,9 @@ describe('proactive e2e', () => {
     );
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const row = freshGetDb()
-      .prepare("SELECT * FROM proactive_log WHERE correlation_id = 'escalate:e2e:2'")
+      .prepare(
+        "SELECT * FROM proactive_log WHERE correlation_id = 'escalate:e2e:2'",
+      )
       .get() as { dispatched_at: string | null; delivered_at: string | null };
     expect(row.dispatched_at).not.toBeNull();
     expect(row.delivered_at).not.toBeNull();
@@ -113,9 +115,8 @@ describe('proactive e2e', () => {
   it('off mode: governor flag off → reactive path unchanged, no log row', async () => {
     process.env.PROACTIVE_GOVERNOR = 'false';
     vi.resetModules();
-    const { _initTestDatabase: freshInit, getDb: freshGetDb } = await import(
-      './db.js'
-    );
+    const { _initTestDatabase: freshInit, getDb: freshGetDb } =
+      await import('./db.js');
     freshInit();
     freshGetDb().prepare('DELETE FROM proactive_log').run();
     const { deliverSendMessage } = await import('./ipc.js');

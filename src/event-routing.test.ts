@@ -104,10 +104,7 @@ describe('routeClassifiedEvent', () => {
       ['tg:science', { folder: 'telegram_science-claw' }],
     ]);
 
-    const event = makeEvent(
-      'security',
-      'Unrecognized login to recovery email',
-    );
+    const event = makeEvent('security', 'Unrecognized login to recovery email');
     const target = routeClassifiedEvent(event, agents, groups);
 
     expect(target).not.toBeNull();

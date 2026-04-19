@@ -89,16 +89,18 @@ export function routeClassifiedEvent(
     // No topic match — fall back to lead agent.
     const lead = agents.find((a) => a.lead === true);
     if (!lead) return null;
-    best = { agent: lead, score: 0, reason: 'fallback to lead (no topic match)' };
+    best = {
+      agent: lead,
+      score: 0,
+      reason: 'fallback to lead (no topic match)',
+    };
   }
 
   // Resolve the agent's target group. Use the first entry in identity.groups
   // that has a registered JID; if no groups declared or none registered, use
   // the main group (so the lead can at least surface it).
   const candidateFolders =
-    best.agent.groups && best.agent.groups.length > 0
-      ? best.agent.groups
-      : [];
+    best.agent.groups && best.agent.groups.length > 0 ? best.agent.groups : [];
 
   for (const folder of candidateFolders) {
     for (const [jid, g] of Object.entries(registeredGroups)) {
@@ -116,9 +118,7 @@ export function routeClassifiedEvent(
 
   // Final fallback: any registered group that has this agent by name
   // (e.g. lead in main) — use the main group if available.
-  const mainEntry = Object.entries(registeredGroups).find(
-    ([, g]) => g.isMain,
-  );
+  const mainEntry = Object.entries(registeredGroups).find(([, g]) => g.isMain);
   if (mainEntry) {
     return {
       agentName: best.agent.dirName,

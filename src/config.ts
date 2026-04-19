@@ -272,10 +272,7 @@ const _agentCooldownMinutes = parseInt(
 export const AGENT_COOLDOWN_MINUTES = Number.isFinite(_agentCooldownMinutes)
   ? _agentCooldownMinutes
   : 20;
-const _dedupWindowHours = parseInt(
-  process.env.DEDUP_WINDOW_HOURS || '24',
-  10,
-);
+const _dedupWindowHours = parseInt(process.env.DEDUP_WINDOW_HOURS || '24', 10);
 export const DEDUP_WINDOW_HOURS = Number.isFinite(_dedupWindowHours)
   ? _dedupWindowHours
   : 24;
