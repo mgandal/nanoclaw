@@ -2515,9 +2515,9 @@ describe('write_agent_state trust enforcement (C13)', () => {
     );
 
     expect(fs.existsSync(path.join(agentDir, 'state.md'))).toBe(false);
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('preserves append semantics in staged payload', async () => {
