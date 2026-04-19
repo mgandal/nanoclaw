@@ -1793,6 +1793,22 @@ describe('container-runner buildVolumeMounts global dir permissions', () => {
     expect(globalMount).toBeDefined();
     expect(globalMount!.readonly).toBe(false);
   });
+
+  it('mounts /app/src as readonly (B7)', () => {
+    // /app/src is a source cache consumed only by the dev-time agent-runner;
+    // the container entrypoint reads /app/dist. Keep read-only so agent-
+    // written source never becomes host code even if a future entrypoint
+    // change adds a build step.
+    vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) => {
+      const s = String(p);
+      if (s.endsWith('container/agent-runner/src')) return true;
+      return false;
+    });
+    const mounts = buildVolumeMounts(testGroup, false);
+    const appSrcMount = mounts.find((m) => m.containerPath === '/app/src');
+    expect(appSrcMount).toBeDefined();
+    expect(appSrcMount!.readonly).toBe(true);
+  });
 });
 
 describe('clearStaleSessionContinuity', () => {

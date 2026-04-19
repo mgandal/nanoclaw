@@ -367,10 +367,14 @@ export function buildVolumeMounts(
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
   }
+  // B7: /app/src is a source cache consumed only by the dev-time
+  // agent-runner; the container entrypoint reads /app/dist. Keep
+  // read-only so agent-written source never becomes host code even if
+  // a future entrypoint change adds a build step.
   mounts.push({
     hostPath: groupAgentRunnerDir,
     containerPath: '/app/src',
-    readonly: false,
+    readonly: true,
   });
 
   // Additional mounts validated against external allowlist (tamper-proof from containers)
