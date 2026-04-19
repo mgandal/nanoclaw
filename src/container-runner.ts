@@ -102,19 +102,34 @@ function isGroupSkillAllowed(skillDir: string): boolean {
   return true;
 }
 
+export interface SyncSkillsOpts {
+  /** Agent name whose crystallized skills should also be synced. */
+  agentName?: string;
+  /**
+   * Override for the agents root (AGENTS_DIR). Tests pass a tmp path;
+   * production calls without this and the default (AGENTS_DIR) is used.
+   */
+  agentsRoot?: string;
+}
+
 /**
- * Sync skills from container/skills/ and groups/{folder}/skills/ into the
- * group's session dir. Hardened per A2 of the 2026-04-18 audit:
+ * Sync skills from container/skills/, groups/{folder}/skills/, and
+ * (if agentName given) data/agents/{agentName}/skills/crystallized/
+ * into the group's session dir. Hardened per A2 of the 2026-04-18 audit:
  *   1. Destination is wiped before sync so agent-written skills from prior
  *      spawns do not persist across container restarts.
- *   2. Group skills are synced FIRST, container skills LAST — so a group
- *      cannot shadow a built-in by name.
- *   3. Group skills whose frontmatter declares `allowed-tools` containing
- *      Bash are rejected (operator must vet Bash-capable skills out-of-band).
+ *   2. Layering: group → agent-crystallized → container (each later layer
+ *      overwrites the earlier on name collision). Container always wins;
+ *      agent-crystallized beats group so a compromised group folder cannot
+ *      shadow a skill the agent has deliberately saved.
+ *   3. Group AND agent-crystallized skills whose frontmatter declares
+ *      `allowed-tools` containing Bash are rejected. Operator must vet
+ *      Bash-capable skills out-of-band.
  */
 export function syncSkillsForGroup(
   groupDir: string,
   sessionsDir: string,
+  opts: SyncSkillsOpts = {},
 ): void {
   const skillsDst = path.join(sessionsDir, 'skills');
 
@@ -141,7 +156,38 @@ export function syncSkillsForGroup(
     }
   }
 
-  // (2b) Container skills LAST — overwrite any group skill with the same name.
+  // (2b) Agent crystallized skills SECOND — overwrite any group skill
+  // with the same name. Same Bash-frontmatter filter as group skills.
+  if (opts.agentName) {
+    const agentsRoot = opts.agentsRoot ?? AGENTS_DIR;
+    const agentCrystallizedSrc = path.join(
+      agentsRoot,
+      opts.agentName,
+      'skills',
+      'crystallized',
+    );
+    if (fs.existsSync(agentCrystallizedSrc)) {
+      for (const skillDir of fs.readdirSync(agentCrystallizedSrc)) {
+        const srcDir = path.join(agentCrystallizedSrc, skillDir);
+        if (!fs.statSync(srcDir).isDirectory()) continue;
+        if (!isGroupSkillAllowed(srcDir)) {
+          logger.warn(
+            { skill: skillDir, agent: opts.agentName },
+            'Agent crystallized skill rejected: allowed-tools frontmatter contains Bash',
+          );
+          continue;
+        }
+        const dstDir = path.join(skillsDst, skillDir);
+        if (fs.existsSync(dstDir)) {
+          fs.rmSync(dstDir, { recursive: true, force: true });
+        }
+        fs.cpSync(srcDir, dstDir, { recursive: true });
+      }
+    }
+  }
+
+  // (2c) Container skills LAST — overwrite any earlier layer with the same
+  // name. A container builtin always wins.
   const skillsSrc = path.join(process.cwd(), 'container', 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
@@ -279,9 +325,10 @@ export function buildVolumeMounts(
     );
   }
 
-  // A2: hardened skills sync — wipe dst, group first, container last, and
-  // reject group skills that declare Bash. See syncSkillsForGroup below.
-  syncSkillsForGroup(groupDir, groupSessionsDir);
+  // A2 + skill-crystallization Phase 1: hardened skills sync. Layering:
+  // group → agent-crystallized → container (container always wins).
+  // Agent-crystallized only runs when agentName is provided.
+  syncSkillsForGroup(groupDir, groupSessionsDir, { agentName });
 
   mounts.push({
     hostPath: groupSessionsDir,
