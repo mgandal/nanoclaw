@@ -7,6 +7,47 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="$SCRIPT_DIR/sync.log"
 PYTHON3="/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3"
 
+# B9: concurrent-run guard. launchd fires every 4h; a slow run (ollama
+# classification, gmail rate limit) must not collide with the next tick
+# or email-ingest-state.json ends up last-writer-wins.
+#
+# flock(1) isn't installed on macOS by default (util-linux is a separate
+# brew formula); use mkdir atomicity instead — POSIX-guaranteed, zero
+# dependencies. The lock dir is cleaned up by the EXIT trap on normal
+# exit; a hung previous run would leave the dir behind, so we also
+# check the stored PID and break the lock if the holder is dead.
+LOCK_DIR="${NANOCLAW_SYNC_LOCK:-/var/tmp/nanoclaw-sync.lock.d}"
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+  echo $$ > "$LOCK_DIR/pid"
+  trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+else
+  # Stale lock check: if holder PID is dead, steal the lock.
+  if [ -f "$LOCK_DIR/pid" ]; then
+    holder=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      echo "[lock] Stale lock from dead PID $holder — breaking" >&2
+      rm -rf "$LOCK_DIR"
+      mkdir "$LOCK_DIR" || exit 0
+      echo $$ > "$LOCK_DIR/pid"
+      trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
+    else
+      # Live holder — exit silently. stderr goes to launchd's own log; we
+      # intentionally don't write to sync.log here to avoid noise when
+      # everything is fine.
+      exit 0
+    fi
+  else
+    exit 0
+  fi
+fi
+
+# Test seam — lets B9 tests verify the lock path without running any
+# real sync work. Consumers: scripts/sync/tests/test_sync_lock.bats.
+if [ "${HALT_AFTER_LOCK:-}" = "1" ]; then
+  echo "HALT_AFTER_LOCK"
+  exit 0
+fi
+
 # Redirect all output to log (and stdout for launchd)
 exec > >(tee -a "$LOG_FILE") 2>&1
 
