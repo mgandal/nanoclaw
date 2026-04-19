@@ -2436,6 +2436,112 @@ describe('write_agent_memory section upsert', () => {
   });
 });
 
+// --- C13: deploy_mini_app trust enforcement for agent callers ---
+
+describe('deploy_mini_app trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-deploy-agent';
+  let agentDir: string;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    process.env.VERCEL_TOKEN = 'test-token';
+    fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ url: 'nanoclaw-test.vercel.app' }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+    delete process.env.VERCEL_TOKEN;
+    vi.unstubAllGlobals();
+  });
+
+  const deployData = {
+    type: 'deploy_mini_app',
+    requestId: 'req-c13-1',
+    appName: 'test-app',
+    html: '<html><body>test</body></html>',
+  };
+
+  it('deploys immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  deploy_mini_app: autonomous\n',
+    );
+
+    await processTaskIpc(
+      deployData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  deploy_mini_app: draft\n',
+    );
+
+    await processTaskIpc(
+      deployData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('deploy_mini_app');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.appName).toBe('test-app');
+    expect(payload.html).toContain('test');
+    expect(payload.requestId).toBe('req-c13-1');
+  });
+
+  it('stages on ask (no policy listed)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      deployData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('bypasses trust for non-agent callers', async () => {
+    await processTaskIpc(
+      deployData as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 // --- C13: write_agent_state trust enforcement for agent callers ---
 
 describe('write_agent_state trust enforcement (C13)', () => {

@@ -1419,12 +1419,44 @@ export async function processTaskIpc(
     default: {
       let handled = false;
       if (typeof data.type === 'string' && data.type === 'deploy_mini_app') {
-        handled = await handleDeployMiniApp(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          DATA_DIR,
+        // C13: trust enforcement for agent callers. Gated at the dispatch
+        // layer so vercel-deployer.ts stays focused on deploy mechanics.
+        const { group: dmBaseGroup, agent: dmAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
         );
+        let dmAllowed = true;
+        if (dmAgent) {
+          const d = data as Record<string, unknown>;
+          const trust = loadAgentTrust(path.join(AGENTS_DIR, dmAgent));
+          const trustDecision = checkTrustAndStage({
+            agentName: dmAgent,
+            groupFolder: dmBaseGroup,
+            actionType: 'deploy_mini_app',
+            summary:
+              typeof d.appName === 'string'
+                ? d.appName.slice(0, 100)
+                : '(unnamed)',
+            target: 'vercel',
+            payloadForStaging: {
+              type: 'deploy_mini_app',
+              requestId: d.requestId,
+              appName: d.appName,
+              html: d.html,
+            },
+            trust,
+          });
+          dmAllowed = trustDecision.allowed;
+        }
+        if (dmAllowed) {
+          handled = await handleDeployMiniApp(
+            data as Record<string, unknown>,
+            sourceGroup,
+            isMain,
+            DATA_DIR,
+          );
+        } else {
+          handled = true; // staged/blocked, not passed through
+        }
       }
       if (typeof data.type === 'string' && data.type === 'dashboard_query') {
         handled = await handleDashboardIpc(
