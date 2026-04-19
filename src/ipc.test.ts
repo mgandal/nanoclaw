@@ -770,9 +770,9 @@ describe('schedule_task trust enforcement (C13)', () => {
     );
 
     expect(getAllTasks()).toHaveLength(0);
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('writes an agent_actions audit row on every attempt', async () => {
