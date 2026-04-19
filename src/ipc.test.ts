@@ -2414,9 +2414,9 @@ describe('write_agent_memory trust enforcement (C13)', () => {
     const content = fs.readFileSync(path.join(agentDir, 'memory.md'), 'utf-8');
     expect(content).toBe('# original\n');
 
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('uses section as audit-log summary', async () => {

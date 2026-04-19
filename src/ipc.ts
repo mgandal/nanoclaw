@@ -1268,8 +1268,7 @@ export async function processTaskIpc(
         const section = (d.section as string) || '(full)';
         const trustDecision = checkTrustAndStage({
           agentName: compoundAgent,
-          groupFolder: parseCompoundKey(fsPathToCompoundKey(sourceGroup))
-            .group,
+          groupFolder: parseCompoundKey(fsPathToCompoundKey(sourceGroup)).group,
           actionType: 'write_agent_memory',
           summary: section,
           target: agentName,
