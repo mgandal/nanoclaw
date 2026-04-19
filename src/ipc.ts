@@ -1132,6 +1132,34 @@ export async function processTaskIpc(
         break;
       }
 
+      // C13: trust enforcement for agent callers. sourceAgent + pubBaseGroup
+      // already extracted above (line 1117). Main-group bypass via agent null.
+      if (sourceAgent) {
+        const safePubSummary =
+          typeof d.summary === 'string' ? d.summary.slice(0, 500) : '';
+        const safePubTopic =
+          typeof topic === 'string' ? topic.slice(0, 100) : '';
+        const trust = loadAgentTrust(path.join(AGENTS_DIR, sourceAgent));
+        const trustDecision = checkTrustAndStage({
+          agentName: sourceAgent,
+          groupFolder: pubBaseGroup,
+          actionType: 'publish_to_bus',
+          summary: safePubSummary,
+          target: `${targetGroup}--${toAgent}`,
+          payloadForStaging: {
+            type: 'publish_to_bus',
+            to_agent: toAgent,
+            to_group: targetGroup,
+            topic: safePubTopic,
+            priority: d.priority,
+            summary: safePubSummary,
+            payload: d.payload,
+          },
+          trust,
+        });
+        if (!trustDecision.allowed) break;
+      }
+
       if (deps.messageBus) {
         // B3: cap agent-controlled fields at publish time. The bus dispatcher
         // re-escapes + re-caps (defense in depth), but capping at publish

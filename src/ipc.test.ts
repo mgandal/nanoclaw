@@ -317,39 +317,49 @@ describe('register_group isMain preservation', () => {
 
 describe('publish_to_bus', () => {
   it('publishes message to bus with correct fields', async () => {
-    const writeAgentMessageSpy = vi.fn();
-    const bussDeps = {
-      ...deps,
-      messageBus: {
-        publish: vi.fn(),
-        writeAgentMessage: writeAgentMessageSpy,
-        subscribe: vi.fn(),
-      } as any,
-    };
-
-    await processTaskIpc(
-      {
-        type: 'publish_to_bus',
-        topic: 'status-update',
-        to_agent: 'einstein',
-        summary: 'System is healthy',
-        priority: 'low',
-      } as any,
-      'telegram_other--curator',
-      false,
-      bussDeps,
+    const agentDir = path.join(DATA_DIR, 'agents', 'curator');
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  publish_to_bus: autonomous\n',
     );
+    try {
+      const writeAgentMessageSpy = vi.fn();
+      const bussDeps = {
+        ...deps,
+        messageBus: {
+          publish: vi.fn(),
+          writeAgentMessage: writeAgentMessageSpy,
+          subscribe: vi.fn(),
+        } as any,
+      };
 
-    expect(writeAgentMessageSpy).toHaveBeenCalledWith(
-      'telegram_other--einstein',
-      expect.objectContaining({
-        from: 'curator',
-        topic: 'status-update',
-        to_agent: 'einstein',
-        to_group: 'telegram_other',
-        priority: 'low',
-      }),
-    );
+      await processTaskIpc(
+        {
+          type: 'publish_to_bus',
+          topic: 'status-update',
+          to_agent: 'einstein',
+          summary: 'System is healthy',
+          priority: 'low',
+        } as any,
+        'telegram_other--curator',
+        false,
+        bussDeps,
+      );
+
+      expect(writeAgentMessageSpy).toHaveBeenCalledWith(
+        'telegram_other--einstein',
+        expect.objectContaining({
+          from: 'curator',
+          topic: 'status-update',
+          to_agent: 'einstein',
+          to_group: 'telegram_other',
+          priority: 'low',
+        }),
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it('does nothing when messageBus is not available', async () => {
@@ -794,6 +804,136 @@ describe('schedule_task trust enforcement (C13)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].outcome).toBe('allowed');
     expect(rows[0].action_type).toBe('schedule_task');
+  });
+});
+
+// --- 4b. C13: publish_to_bus trust enforcement for agent callers ---
+
+describe('publish_to_bus trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-bus-agent';
+  let agentDir: string;
+  let writeAgentMessageSpy: ReturnType<typeof vi.fn>;
+  let bussDeps: IpcDeps;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    writeAgentMessageSpy = vi.fn();
+    bussDeps = {
+      ...deps,
+      messageBus: {
+        publish: vi.fn(),
+        writeAgentMessage: writeAgentMessageSpy,
+        subscribe: vi.fn(),
+      } as any,
+    };
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const busData = {
+    type: 'publish_to_bus',
+    topic: 'status-update',
+    to_agent: 'einstein',
+    summary: 'All green',
+    priority: 'low',
+  };
+
+  it('publishes immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  publish_to_bus: autonomous\n',
+    );
+
+    await processTaskIpc(
+      busData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  publish_to_bus: draft\n',
+    );
+
+    await processTaskIpc(
+      busData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).not.toHaveBeenCalled();
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('publish_to_bus');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.to_agent).toBe('einstein');
+    expect(payload.topic).toBe('status-update');
+    expect(payload.summary).toBe('All green');
+    expect(payload.priority).toBe('low');
+  });
+
+  it('stages on ask (no policy for publish_to_bus)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      busData as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).not.toHaveBeenCalled();
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('bypasses trust for main-group callers', async () => {
+    await processTaskIpc(busData as any, 'telegram_main', true, bussDeps);
+    expect(writeAgentMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('stages before the cross-group check (defense in depth)', async () => {
+    // With draft trust AND a cross-group target, trust stages take priority
+    // over the cross-group block — the action never reaches the bus.
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  publish_to_bus: draft\n',
+    );
+
+    // Try to publish to a different group (which the cross-group check
+    // would block for a non-main caller anyway)
+    await processTaskIpc(
+      { ...busData, to_group: 'telegram_main' } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      bussDeps,
+    );
+
+    expect(writeAgentMessageSpy).not.toHaveBeenCalled();
+    // Cross-group check runs BEFORE trust (line 1127), so this will
+    // block at the cross-group layer — nothing staged.
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(0);
   });
 });
 
@@ -1716,6 +1856,28 @@ describe('update_task with schedule_value only (no schedule_type)', () => {
 });
 
 describe('publish_to_bus with optional fields', () => {
+  // C13: trust gate means agent callers need a trust.yaml on disk.
+  const agentNames = ['curator', 'custom_sender'];
+  const agentDirs = agentNames.map((n) =>
+    path.join(DATA_DIR, 'agents', n),
+  );
+
+  beforeEach(() => {
+    for (const dir of agentDirs) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'trust.yaml'),
+        'actions:\n  publish_to_bus: autonomous\n',
+      );
+    }
+  });
+
+  afterEach(() => {
+    for (const dir of agentDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('publishes message even when optional priority is missing', async () => {
     const writeAgentMessageSpy = vi.fn();
     const busDeps = {
