@@ -294,13 +294,39 @@ describe('Zod version compatibility', () => {
 // ─────────────────────────────────────────────────
 describe('Dockerfile entrypoint', () => {
   it('must not contain runtime tsc compilation', () => {
+    const entrypoint = fs.readFileSync(
+      path.join(process.cwd(), 'container/entrypoint.sh'),
+      'utf-8',
+    );
+    // Entrypoint should exec the build-time output at /app/dist/, never compile at runtime.
+    expect(entrypoint).toContain('node /app/dist/index.js');
+    expect(entrypoint).not.toContain('npx tsc --outDir /tmp/dist');
+  });
+
+  // @readwise/cli (0.5.x) reads auth from ~/.readwise-cli.json, not env.
+  // The entrypoint must seed that file from $READWISE_ACCESS_TOKEN so the
+  // CLI works inside containers without an interactive `readwise login`.
+  it('seeds ~/.readwise-cli.json from $READWISE_ACCESS_TOKEN', () => {
+    const entrypoint = fs.readFileSync(
+      path.join(process.cwd(), 'container/entrypoint.sh'),
+      'utf-8',
+    );
+    expect(entrypoint).toContain('READWISE_ACCESS_TOKEN');
+    expect(entrypoint).toContain('.readwise-cli.json');
+    expect(entrypoint).toContain('auth_type');
+    // Must guard against overwriting a user-supplied config
+    expect(entrypoint).toMatch(
+      /\[\s*!\s*-f\s+"\$HOME\/\.readwise-cli\.json"\s*\]/,
+    );
+  });
+
+  it('Dockerfile installs entrypoint.sh from the build context', () => {
     const dockerfile = fs.readFileSync(
       path.join(process.cwd(), 'container/Dockerfile'),
       'utf-8',
     );
-    // The entrypoint should use /app/dist/ (build-time output), not /tmp/dist (runtime tsc)
-    expect(dockerfile).toContain('node /app/dist/index.js');
-    expect(dockerfile).not.toContain('npx tsc --outDir /tmp/dist');
+    expect(dockerfile).toMatch(/COPY\s+entrypoint\.sh\s+\/app\/entrypoint\.sh/);
+    expect(dockerfile).toContain('chmod +x /app/entrypoint.sh');
   });
 });
 
