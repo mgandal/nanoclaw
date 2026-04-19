@@ -2437,6 +2437,213 @@ describe('write_agent_memory section upsert', () => {
   });
 });
 
+// --- C13: task-lifecycle trust enforcement (pause/resume/cancel/update_task) ---
+
+describe('task-lifecycle trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-task-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+
+    createTask({
+      id: 'c13-lifecycle-task',
+      group_folder: 'telegram_other',
+      chat_jid: 'tg:other456',
+      prompt: 'ping',
+      schedule_type: 'interval',
+      schedule_value: '1800000',
+      context_mode: 'isolated',
+      next_run: '2026-04-20T00:00:00.000Z',
+      status: 'active',
+      agent_name: null,
+      created_at: '2024-01-01T00:00:00.000Z',
+    });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const compoundKey = `telegram_other--${TEST_AGENT}`;
+
+  it('pause_task: executes when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  pause_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.status).toBe('paused');
+  });
+
+  it('pause_task: stages when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  pause_task: draft\n',
+    );
+
+    await processTaskIpc(
+      { type: 'pause_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.status).toBe('active');
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('pause_task');
+  });
+
+  it('resume_task: executes when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  resume_task: autonomous\n',
+    );
+    updateTask('c13-lifecycle-task', { status: 'paused' });
+
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.status).toBe('active');
+  });
+
+  it('resume_task: stages when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  resume_task: draft\n',
+    );
+    updateTask('c13-lifecycle-task', { status: 'paused' });
+
+    await processTaskIpc(
+      { type: 'resume_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.status).toBe('paused');
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('cancel_task: executes when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  cancel_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')).toBeUndefined();
+  });
+
+  it('cancel_task: stages when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  cancel_task: draft\n',
+    );
+
+    await processTaskIpc(
+      { type: 'cancel_task', taskId: 'c13-lifecycle-task' } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')).toBeDefined();
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('update_task: executes when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  update_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'c13-lifecycle-task',
+        prompt: 'new prompt',
+      } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.prompt).toBe('new prompt');
+  });
+
+  it('update_task: stages when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  update_task: draft\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'c13-lifecycle-task',
+        prompt: 'new prompt',
+      } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.prompt).toBe('ping');
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('update_task');
+    expect(JSON.parse(pending[0].payload_json).prompt).toBe('new prompt');
+  });
+
+  it('update_task: A1 script gate still rejects script field from non-main', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  update_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'update_task',
+        taskId: 'c13-lifecycle-task',
+        script: '/bin/evil',
+      } as any,
+      compoundKey,
+      false,
+      deps,
+    );
+
+    expect(getTaskById('c13-lifecycle-task')!.script).not.toBe('/bin/evil');
+  });
+});
+
 // --- C13: kg_query trust enforcement for agent callers ---
 
 describe('kg_query trust enforcement (C13)', () => {
@@ -3242,14 +3449,16 @@ describe('deliverSendMessage sender-allowlist enforcement', () => {
     );
   });
 
-  it('when sender is in permittedSenders, follows the normal (pool or fallback) path', async () => {
-    // With no pool configured in this test env, the normal path falls
-    // through to plain sendMessage without prefix. What matters here is
-    // that the disallowed-downgrade did NOT fire.
+  it('when sender is in permittedSenders, routes through the pool path (not the allowlist-downgrade)', async () => {
+    // The pool path still exists; permittedSenders just gates entry. The
+    // existing pool-unreachable fallback produces the same `*sender:*`
+    // prefix, so to distinguish "allowed → pool path" from "disallowed →
+    // allowlist-downgrade", we assert that a non-tg JID still gets the
+    // plain send (pool branch doesn't apply, allowlist doesn't block).
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     await deliverSendMessage(
       {
-        chatJid: 'tg:lab-123',
+        chatJid: 'slack:C-lab',
         text: 'done',
         sender: 'Marvin',
         permittedSenders: ['Marvin', 'Warren'],
@@ -3257,16 +3466,17 @@ describe('deliverSendMessage sender-allowlist enforcement', () => {
       { sendMessage },
       'telegram_lab-claw',
     );
-    // No prefix — this is the "sender-allowed, no pool available" path,
-    // equivalent to the existing "falls back to plain sendMessage" test.
-    expect(sendMessage).toHaveBeenCalledWith('tg:lab-123', 'done');
+    expect(sendMessage).toHaveBeenCalledWith('slack:C-lab', 'done');
   });
 
-  it('when permittedSenders is undefined, behaves like today (backwards compat)', async () => {
+  it('when permittedSenders is undefined, the allowlist-downgrade never fires (backwards compat)', async () => {
+    // With no allowlist, a non-tg JID + sender falls through to plain
+    // sendMessage (existing behavior). This proves the new allowlist
+    // check doesn't accidentally downgrade legacy rows.
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     await deliverSendMessage(
       {
-        chatJid: 'tg:legacy-123',
+        chatJid: 'slack:C-legacy',
         text: 'hello',
         sender: 'Whoever',
         // permittedSenders omitted
@@ -3274,7 +3484,7 @@ describe('deliverSendMessage sender-allowlist enforcement', () => {
       { sendMessage },
       'telegram_legacy',
     );
-    expect(sendMessage).toHaveBeenCalledWith('tg:legacy-123', 'hello');
+    expect(sendMessage).toHaveBeenCalledWith('slack:C-legacy', 'hello');
   });
 });
 

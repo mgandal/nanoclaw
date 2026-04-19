@@ -914,7 +914,27 @@ export async function processTaskIpc(
     case 'pause_task':
       if (data.taskId) {
         const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
+        const { group: ptBaseGroup, agent: ptAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (task && (isMain || task.group_folder === ptBaseGroup)) {
+          // C13: trust enforcement for agent callers.
+          if (ptAgent) {
+            const trust = loadAgentTrust(path.join(AGENTS_DIR, ptAgent));
+            const trustDecision = checkTrustAndStage({
+              agentName: ptAgent,
+              groupFolder: ptBaseGroup,
+              actionType: 'pause_task',
+              summary: data.taskId,
+              target: data.taskId,
+              payloadForStaging: {
+                type: 'pause_task',
+                taskId: data.taskId,
+              },
+              trust,
+            });
+            if (!trustDecision.allowed) break;
+          }
           updateTask(data.taskId, { status: 'paused' });
           logger.info(
             { taskId: data.taskId, sourceGroup },
@@ -933,7 +953,27 @@ export async function processTaskIpc(
     case 'resume_task':
       if (data.taskId) {
         const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
+        const { group: rtBaseGroup, agent: rtAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (task && (isMain || task.group_folder === rtBaseGroup)) {
+          // C13: trust enforcement for agent callers.
+          if (rtAgent) {
+            const trust = loadAgentTrust(path.join(AGENTS_DIR, rtAgent));
+            const trustDecision = checkTrustAndStage({
+              agentName: rtAgent,
+              groupFolder: rtBaseGroup,
+              actionType: 'resume_task',
+              summary: data.taskId,
+              target: data.taskId,
+              payloadForStaging: {
+                type: 'resume_task',
+                taskId: data.taskId,
+              },
+              trust,
+            });
+            if (!trustDecision.allowed) break;
+          }
           // Recompute next_run when resuming
           const updates: Parameters<typeof updateTask>[1] = {
             status: 'active',
@@ -976,7 +1016,27 @@ export async function processTaskIpc(
     case 'cancel_task':
       if (data.taskId) {
         const task = getTaskById(data.taskId);
-        if (task && (isMain || task.group_folder === sourceGroup)) {
+        const { group: ctBaseGroup, agent: ctAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (task && (isMain || task.group_folder === ctBaseGroup)) {
+          // C13: trust enforcement for agent callers.
+          if (ctAgent) {
+            const trust = loadAgentTrust(path.join(AGENTS_DIR, ctAgent));
+            const trustDecision = checkTrustAndStage({
+              agentName: ctAgent,
+              groupFolder: ctBaseGroup,
+              actionType: 'cancel_task',
+              summary: data.taskId,
+              target: data.taskId,
+              payloadForStaging: {
+                type: 'cancel_task',
+                taskId: data.taskId,
+              },
+              trust,
+            });
+            if (!trustDecision.allowed) break;
+          }
           deleteTask(data.taskId);
           logger.info(
             { taskId: data.taskId, sourceGroup },
@@ -1002,7 +1062,10 @@ export async function processTaskIpc(
           );
           break;
         }
-        if (!isMain && task.group_folder !== sourceGroup) {
+        const { group: utBaseGroup, agent: utAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (!isMain && task.group_folder !== utBaseGroup) {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'Unauthorized task update attempt',
@@ -1013,13 +1076,36 @@ export async function processTaskIpc(
         // A1: same gate as schedule_task — non-main groups cannot add/modify
         // the script field via update_task, which would otherwise be a
         // trivial bypass (create a scriptless task, then update to add the
-        // script).
+        // script). A1 runs BEFORE C13 trust — script injection is always
+        // rejected regardless of trust level.
         if (data.script !== undefined && !isMain) {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
             'update_task rejected: script field is main-only',
           );
           break;
+        }
+
+        // C13: trust enforcement for agent callers.
+        if (utAgent) {
+          const trust = loadAgentTrust(path.join(AGENTS_DIR, utAgent));
+          const trustDecision = checkTrustAndStage({
+            agentName: utAgent,
+            groupFolder: utBaseGroup,
+            actionType: 'update_task',
+            summary: data.taskId,
+            target: data.taskId,
+            payloadForStaging: {
+              type: 'update_task',
+              taskId: data.taskId,
+              prompt: data.prompt,
+              schedule_type: data.schedule_type,
+              schedule_value: data.schedule_value,
+              // script intentionally omitted — main-only per A1
+            },
+            trust,
+          });
+          if (!trustDecision.allowed) break;
         }
 
         const updates: Parameters<typeof updateTask>[1] = {};
