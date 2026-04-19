@@ -571,19 +571,13 @@ Note: this is the action whose SOP was just codified in `docs/memory-writeback-s
 
 ---
 
-## Task 7: Retrofit `save_skill`
+## Task 7: Retrofit `save_skill` — **SKIPPED 2026-04-19**
 
-**Files:**
-- Modify: `src/ipc.ts` — find `case 'save_skill':` (grep if line has drifted).
-- Test: `src/ipc.test.ts`
+**Finding:** `save_skill` is already main-only at `src/ipc.ts:1567` (`if (!isMain) { logger.warn(...); handled = true; }`). Non-main callers are rejected before any content handler runs. There is no compound-key agent execution path today — trust gating is moot.
 
-**Note:** A4 in the hardening spec covers *content validation* for `save_skill` (allowlist, block `allowed-tools: Bash`, content cap). This task only covers **trust gating** — the content validation layers on top in a separate commit. Keep the two concerns separate.
+**Decision:** Do not retrofit. C13's goal is enforcing `trust.yaml` policy at runtime for privileged actions that DO reach agent callers. `save_skill` is not one of them today.
 
-- [ ] **Step 1: Tests.**
-- [ ] **Step 2: Verify FAIL.**
-- [ ] **Step 3: Retrofit.** Action type: `'save_skill'`. Default trust: `draft`. Payload: `{type, skill_name, content}`.
-- [ ] **Step 4: Verify PASS.**
-- [ ] **Step 5: Commit** `feat(trust): gate save_skill via checkTrustAndStage (C13)`.
+**Follow-up:** if a future A4-related spec opens `save_skill` to agents (content validation + `allowed-tools: Bash` block), this retrofit should land at the same time so the trust gate and content gate ship together. A4 is documented separately in the hardening audit.
 
 ---
 
