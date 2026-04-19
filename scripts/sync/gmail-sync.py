@@ -60,6 +60,7 @@ log = logging.getLogger("gmail-sync")
 def load_credentials(email, cred_paths, oauth_keys_path=None):
     """Load Gmail API credentials from known locations."""
     from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
 
     for cred_path in cred_paths:
         if not cred_path.exists():
@@ -92,7 +93,7 @@ def load_credentials(email, cred_paths, oauth_keys_path=None):
                 client_id = installed.get("client_id")
                 client_secret = installed.get("client_secret")
 
-        if not (token and refresh_token and client_id):
+        if not (refresh_token and client_id):
             continue
 
         creds = Credentials(
@@ -103,6 +104,17 @@ def load_credentials(email, cred_paths, oauth_keys_path=None):
             client_secret=client_secret,
             scopes=data.get("scopes", []),
         )
+
+        # Verify token is actually usable server-side. Tokens can be revoked
+        # (e.g. Google's 7-day idle-revocation for test-mode OAuth clients)
+        # while still looking valid locally. Fall through to the next path
+        # on any refresh error — matches the proven pattern in email_ingest.
+        try:
+            creds.refresh(Request())
+        except Exception as e:
+            log.warning("Credential refresh failed for %s: %s — trying next", cred_path, e)
+            continue
+
         log.info("Loaded credentials for %s from %s", email, cred_path)
         return creds, cred_path
 
