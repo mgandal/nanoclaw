@@ -39,6 +39,8 @@ Create `wiki/` and `sources/` directories in the group folder. Create initial `i
 
 Create a `container/skills/wiki/SKILL.md` tailored to this user's wiki. This is the schema layer from the pattern — it tells the agent how to maintain the wiki. Base it on the pattern's Operations section (ingest, query, lint) and the conventions you agreed on with the user. Don't over-prescribe — the pattern says "your LLM figures out the rest."
 
+For the ingest prompts (summary → concepts plan → concept pages), reuse the battle-tested OpenKB templates rather than inventing new ones. They live at `~/.claude/lib/wiki-lint/compile-prompts.md` — copy the relevant sections verbatim into the container skill, adapting placeholders to the user's schema.
+
 ### 3c. Group CLAUDE.md
 
 Edit the group's CLAUDE.md to add a wiki section. This is critical — it's what turns the agent into a wiki maintainer. It should:
@@ -70,6 +72,8 @@ AskUserQuestion: "Want periodic wiki health checks?"
 1. **Weekly**
 2. **Monthly**
 3. **Skip** — lint manually
+
+The lint pass has two phases — structural (fast, deterministic) and semantic (LLM-driven). The host-side `/wiki-lint` slash command runs both on demand; the scheduled task below asks the agent to run the semantic pass inside the container. To also run the structural checks, the task can shell out to `python3 ~/.claude/lib/wiki-lint/structural_lint.py <wiki-path>` — but only if that path is mounted into the container.
 
 If yes, create a NanoClaw scheduled task that runs in the wiki group. This is NOT a Claude Code cron job — it's a NanoClaw group task that runs in the agent container. Insert it into the SQLite database:
 

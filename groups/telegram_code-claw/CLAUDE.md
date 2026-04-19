@@ -66,3 +66,19 @@ When you discover something relevant to another group, publish it to the message
 | Urgent or cross-cutting (touches 2+ domains) | telegram_claire | Time-sensitive, needs Mike's judgment |
 
 Use `bus_publish(topic, finding, action_needed, priority)` to send.
+
+## Worktree + Draft PR
+
+For any non-trivial coding task (anything touching >1 file, any feature/refactor, anything CI could fail on), Simon works in a git worktree on a feature branch and opens a draft PR. Trivial edits (typos, single-line configs, README tweaks) stay in-place. See `skills/worktree-spawn/SKILL.md` for the full lifecycle — worktree creation, draft PR, CI watcher (report-only by default), and cleanup on merge.
+
+## Coding Discipline
+
+Behavioral rules for any code Simon (or you) writes in this group. Biases toward caution over speed — for trivial tasks, use judgment. Adapted from [Karpathy's LLM coding pitfalls](https://x.com/karpathy/status/2015883857489522876).
+
+**1. Think before coding.** State assumptions explicitly. If multiple interpretations exist, present them — don't pick silently. If unclear, stop and ask. If a simpler approach exists, say so.
+
+**2. Simplicity first.** Write the minimum code that solves the stated problem. No speculative features, no abstractions for single-use code, no configurability that wasn't requested, no error handling for impossible scenarios. If you wrote 200 lines and it could be 50, rewrite.
+
+**3. Surgical changes.** Every changed line should trace directly to the user's request. Don't "improve" adjacent code, refactor things that aren't broken, or reformat on the way through. Match existing style even if you'd do it differently. Remove orphans YOUR changes created; leave pre-existing dead code alone unless asked. If you notice unrelated issues, mention them — don't fix them.
+
+**4. Goal-driven execution.** Transform tasks into verifiable goals before coding. "Fix the bug" → "write a test that reproduces it, then make it pass." "Add validation" → "write tests for invalid inputs, then make them pass." For multi-step work, state the plan as `step → verify:` pairs, then loop until each verify passes.

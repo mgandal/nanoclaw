@@ -25,7 +25,7 @@ All global Danger Zone rules apply (see global CLAUDE.md), plus main-channel-spe
 
 ## Message Formatting
 
-See global CLAUDE.md for formatting rules. This is Telegram: single `*bold*`, `_italic_`, `•` bullets. No `##` headings, no `**double stars**`.
+See global CLAUDE.md for formatting rules. This is Telegram: single `*bold*`, `_italic_`, `•` bullets. No `##` headings, no `**double stars**`, no markdown tables (`| col | col |`). Tables do not render in Telegram — convert to bullets.
 
 ## Agent Teams
 
