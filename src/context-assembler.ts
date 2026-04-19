@@ -455,9 +455,20 @@ export async function assembleContextPacket(
           })
           .filter(Boolean);
         if (pending.length > 0) {
+          // BX1: bus-message content is agent-written, arbitrary data.
+          // JSON.stringify isn't escape — a malicious summary/topic/from
+          // can contain `</pending-bus-messages>`. Wrap the JSON in an
+          // inner agent-bus-pending-content tag via wrapAgentXml, which
+          // rewrites forged closers to an -escaped form. The outer
+          // pending-bus-messages tag stays in place so downstream prompts
+          // that grep for it still match.
+          const serialized = JSON.stringify(pending, null, 2);
           sections.push({
             priority: 3,
-            content: `<pending-bus-messages count="${pendingFiles.length}">\n${JSON.stringify(pending, null, 2)}\n</pending-bus-messages>`,
+            content:
+              `<pending-bus-messages count="${pendingFiles.length}">\n` +
+              wrapAgentXml('agent-bus-pending-content', serialized) +
+              `\n</pending-bus-messages>`,
           });
         }
       }
