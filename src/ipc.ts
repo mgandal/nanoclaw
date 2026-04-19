@@ -118,8 +118,11 @@ function isValidAgentName(name: string): boolean {
  * `group`? `undefined` permittedSenders = allow any (legacy rows, backwards
  * compat). Empty array = no personas; every `sender` is downgraded to the
  * main bot. Non-empty array = strict allowlist (exact-match, case-sensitive).
+ *
+ * Named distinctly from `isSenderAllowed` in `sender-allowlist.ts`, which
+ * gates whether a raw incoming message is processed at all.
  */
-export function isSenderAllowed(
+export function isSenderAllowedForPool(
   group: RegisteredGroup,
   sender: string,
 ): boolean {
@@ -402,71 +405,31 @@ export async function processIpcMessage(
     const { group: baseGroupFolder, agent: agentName } =
       parseCompoundKey(baseKey);
     if (isMain || (targetGroup && targetGroup.folder === baseGroupFolder)) {
-      // Trust enforcement for compound groups (agents)
-      let trustDecisionForNotify: ReturnType<typeof checkTrust> | null = null;
+      // Trust enforcement for compound groups (agents). Uses the shared
+      // checkTrustAndStage helper; the only reason this branch is not a
+      // one-liner like the other retrofits is that `send_message` also
+      // fires a post-hoc notify (further down) when trust.level = notify,
+      // so we capture `decision.notify` for use after delivery succeeds.
+      let trustDecisionForNotify: { notify: boolean } | null = null;
       if (agentName) {
         const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
-        const decision = checkTrust(
+        const decision = checkTrustAndStage({
           agentName,
-          baseGroupFolder,
-          'send_message',
-          trust,
-        );
-        trustDecisionForNotify = decision;
-        insertAgentAction({
-          agent_name: agentName,
-          group_folder: baseGroupFolder,
-          action_type: 'send_message',
-          trust_level: decision.level,
-          summary: data.text.slice(0, 200),
+          groupFolder: baseGroupFolder,
+          actionType: 'send_message',
+          summary: data.text,
           target: data.chatJid,
-          outcome: decision.allowed
-            ? 'allowed'
-            : decision.stage
-              ? 'staged'
-              : 'blocked',
+          payloadForStaging: {
+            type: 'message',
+            chatJid: data.chatJid,
+            text: data.text,
+            sender: data.sender,
+            webAppUrl: data.webAppUrl,
+          },
+          trust,
         });
-        if (!decision.allowed) {
-          if (decision.stage) {
-            // Route through the approval queue instead of silently dropping.
-            const pendingId = insertPendingAction({
-              agent_name: agentName,
-              group_folder: baseGroupFolder,
-              action_type: 'send_message',
-              summary: data.text.slice(0, 500),
-              payload: {
-                type: 'message',
-                chatJid: data.chatJid,
-                text: data.text,
-                sender: data.sender,
-                webAppUrl: data.webAppUrl,
-              },
-            });
-            logger.info(
-              {
-                pendingId,
-                agentName,
-                level: decision.level,
-                chatJid: data.chatJid,
-              },
-              'Trust: send_message staged for approval',
-            );
-            // TODO(A4): surface pending actions in morning briefing; for now
-            // the agent's next session will see it via the pending_approvals
-            // dashboard query or the /pending session command.
-          } else {
-            logger.info(
-              {
-                agentName,
-                chatJid: data.chatJid,
-                sourceGroup,
-                level: decision.level,
-              },
-              'Trust: send_message blocked for agent',
-            );
-          }
-          return;
-        }
+        trustDecisionForNotify = { notify: decision.notify };
+        if (!decision.allowed) return;
       }
 
       await deliverSendMessage(
