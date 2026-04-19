@@ -1,4 +1,5 @@
 import { logger } from './logger.js';
+import { insertAgentAction, insertPendingAction } from './db.js';
 
 export interface TrustDecision {
   /** Whether the action should execute immediately. */
@@ -67,4 +68,91 @@ export function checkTrust(
       );
       return { allowed: false, level: 'ask', notify: false, stage: true };
   }
+}
+
+export interface CheckTrustAndStageInput {
+  agentName: string;
+  groupFolder: string;
+  actionType: string;
+  summary: string;
+  target?: string;
+  payloadForStaging: Record<string, unknown>;
+  trust: { actions: Record<string, string> } | null;
+}
+
+export interface CheckTrustAndStageResult {
+  allowed: boolean;
+  level: string;
+  notify: boolean;
+  /** Non-null only when the action was staged into pending_actions. */
+  pendingId: string | null;
+}
+
+/**
+ * Combines checkTrust + agent_actions audit log + (on stage) pending_actions
+ * insert. Callers use this instead of re-implementing the trust-gate pattern
+ * inline. Behaviour matches the send_message reference path in ipc.ts.
+ *
+ * C13 migration helper — every privileged IPC action routes through this.
+ */
+export function checkTrustAndStage(
+  input: CheckTrustAndStageInput,
+): CheckTrustAndStageResult {
+  const decision = checkTrust(
+    input.agentName,
+    input.groupFolder,
+    input.actionType,
+    input.trust,
+  );
+
+  insertAgentAction({
+    agent_name: input.agentName,
+    group_folder: input.groupFolder,
+    action_type: input.actionType,
+    trust_level: decision.level,
+    summary: input.summary.slice(0, 200),
+    target: input.target,
+    outcome: decision.allowed
+      ? 'allowed'
+      : decision.stage
+        ? 'staged'
+        : 'blocked',
+  });
+
+  let pendingId: string | null = null;
+  if (!decision.allowed && decision.stage) {
+    pendingId = insertPendingAction({
+      agent_name: input.agentName,
+      group_folder: input.groupFolder,
+      action_type: input.actionType,
+      summary: input.summary,
+      payload: input.payloadForStaging,
+    });
+    logger.info(
+      {
+        pendingId,
+        agentName: input.agentName,
+        actionType: input.actionType,
+        level: decision.level,
+      },
+      `Trust: ${input.actionType} staged for approval`,
+    );
+  } else if (!decision.allowed) {
+    logger.info(
+      {
+        agentName: input.agentName,
+        actionType: input.actionType,
+        groupFolder: input.groupFolder,
+        level: decision.level,
+      },
+      `Trust: ${input.actionType} blocked for agent`,
+    );
+  }
+
+  return {
+    allowed: decision.allowed,
+    level: decision.level,
+    notify: decision.notify,
+    pendingId,
+  };
 }
