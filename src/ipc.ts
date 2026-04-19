@@ -30,7 +30,7 @@ import {
   validateTaskSchedule,
 } from './db.js';
 import { loadAgentTrust } from './agent-registry.js';
-import { checkTrust } from './trust-enforcement.js';
+import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -725,8 +725,14 @@ export async function processTaskIpc(
 
         const targetFolder = targetGroupEntry.folder;
 
-        // Authorization: non-main groups can only schedule for themselves
-        if (!isMain && targetFolder !== sourceGroup) {
+        // Authorization: non-main groups can only schedule for themselves.
+        // Use the BASE group folder from the compound key — agent callers
+        // arrive with sourceGroup like 'telegram_other--marvin' which must
+        // resolve to 'telegram_other' for this comparison.
+        const { group: scheduleSourceBaseGroup } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (!isMain && targetFolder !== scheduleSourceBaseGroup) {
           logger.warn(
             { sourceGroup, targetFolder },
             'Unauthorized schedule_task attempt blocked',
@@ -806,6 +812,37 @@ export async function processTaskIpc(
             break;
           }
           agentName = rawAgentName;
+        }
+
+        // C13: trust enforcement for agent callers. Main-group bypass preserved
+        // via the sourceAgent null check (compound keys only exist for agents).
+        const { agent: sourceAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
+        );
+        if (sourceAgent) {
+          const trust = loadAgentTrust(path.join(AGENTS_DIR, sourceAgent));
+          const trustDecision = checkTrustAndStage({
+            agentName: sourceAgent,
+            groupFolder: scheduleSourceBaseGroup,
+            actionType: 'schedule_task',
+            summary: String(data.prompt).slice(0, 500),
+            target: targetFolder,
+            payloadForStaging: {
+              type: 'schedule_task',
+              prompt: data.prompt,
+              schedule_type: scheduleType,
+              schedule_value: data.schedule_value,
+              targetJid: targetJid,
+              context_mode: contextMode,
+              agent_name: agentName,
+              // script intentionally omitted — main-only per A1
+            },
+            trust,
+          });
+          if (!trustDecision.allowed) break;
+          // TODO: wire post-hoc notify when trustDecision.notify is true.
+          // schedule_task isn't the highest-priority action for notify; most
+          // agents will carry 'draft' or 'autonomous' by default.
         }
 
         createTask({

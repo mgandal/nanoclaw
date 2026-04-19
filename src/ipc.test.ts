@@ -676,6 +676,127 @@ describe('schedule_task custom taskId', () => {
   });
 });
 
+// --- 9b. C13: schedule_task trust enforcement for agent callers ---
+
+describe('schedule_task trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-schedule-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const scheduleData = {
+    type: 'schedule_task',
+    prompt: 'ping',
+    schedule_type: 'interval',
+    schedule_value: '1800000',
+    targetJid: 'tg:other456',
+  };
+
+  it('bypasses trust for main-group callers (no agentName)', async () => {
+    await processTaskIpc(scheduleData, 'telegram_main', true, deps);
+
+    expect(getAllTasks()).toHaveLength(1);
+  });
+
+  it('executes immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  schedule_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      scheduleData,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(1);
+    expect(getAllTasks()[0].prompt).toBe('ping');
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  schedule_task: draft\n',
+    );
+
+    await processTaskIpc(
+      scheduleData,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    // No task created
+    expect(getAllTasks()).toHaveLength(0);
+
+    // Pending action created
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('schedule_task');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.prompt).toBe('ping');
+    expect(payload.schedule_type).toBe('interval');
+    expect(payload.schedule_value).toBe('1800000');
+    expect(payload.targetJid).toBe('tg:other456');
+    // script must NOT be in the payload — it's main-only per A1
+    expect(payload.script).toBeUndefined();
+  });
+
+  it('stages on ask (unknown action defaults to ask)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    // trust.yaml omits schedule_task → checkTrust defaults to 'ask' → stages
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      scheduleData,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+    expect(
+      listPendingActions({ groupFolder: 'telegram_other' }),
+    ).toHaveLength(1);
+  });
+
+  it('writes an agent_actions audit row on every attempt', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  schedule_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      scheduleData,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const rows = getDb()
+      .prepare('SELECT outcome, action_type FROM agent_actions')
+      .all() as { outcome: string; action_type: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('allowed');
+    expect(rows[0].action_type).toBe('schedule_task');
+  });
+});
+
 // --- 10. save_skill IPC ---
 
 describe('save_skill', () => {
