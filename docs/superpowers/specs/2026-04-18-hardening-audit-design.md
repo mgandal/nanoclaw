@@ -174,12 +174,28 @@ implementation plan.
 
 #### B1. Localhost MCP bridges reachable unauthenticated from every container
 
-**Status: client side resolved 2026-04-19** (plan:
-`docs/superpowers/plans/2026-04-19-tier-b-remaining.md` task 7).
-Containers now inject `NANOCLAW_BRIDGE_TOKEN` and forward
-`Authorization: Bearer` on every HTTP bridge call. Server-side
-enforcement (supergateway plists that require the bearer) is a
-follow-up; until then the token is a speed bump, not a gate.
+**Status: server-side machinery deployed, enforce mode pending live
+verification** (plans: `docs/superpowers/plans/2026-04-19-tier-b-remaining.md`
+task 7 [client], `docs/superpowers/plans/2026-04-19-b1-server-enforcement.md`
+[server]).
+
+Client side (2026-04-19): containers inject `NANOCLAW_BRIDGE_TOKEN`
+and forward `Authorization: Bearer` on every HTTP bridge call.
+
+Server side (2026-04-19): each bridge proxy (`~/.cache/qmd/proxy-
+resilient.mjs`, `~/.cache/{apple-notes,todoist,calendar}-mcp/proxy.mjs`)
+is now an HTTP-aware forwarder that parses `Authorization: Bearer`
+and checks against `~/.cache/nanoclaw/bridge-token` (0600). Currently
+running in **warn mode**: missing bearer is logged, then forwarded.
+
+**Still deferred:** flipping each bridge's launchd plist to
+`NANOCLAW_BRIDGE_AUTH=enforce`. Blocked on live verification that
+container MCP traffic actually carries the bearer — the Claude
+Agent SDK's `McpHttpServerConfig.headers` is documented to forward
+on every request, but warn logs during plan execution showed
+mixed signals (most warns were from the daemon's own health
+monitor, since fixed). Next step: observe warn logs over a longer
+window with real agent traffic; if clean, flip enforce per-bridge.
 
 - **Where:** `src/container-runner.ts:400-545` (env-URL passthrough for QMD,
   Apple Notes, Todoist, Calendar, Honcho, Hindsight, Slack MCP, Mail Bridge)

@@ -122,8 +122,13 @@ still active:
 - MCP bridges (QMD, Apple Notes, Todoist, Calendar, Honcho,
   Hindsight, Ollama, Slack, Mail Bridge) receive `Authorization:
   Bearer <NANOCLAW_BRIDGE_TOKEN>` on every container-initiated HTTP
-  call. Client-side only today; server-side enforcement is a
-  follow-up (B1 client, 2026-04-19).
+  call. Server-side machinery is deployed: each bridge proxy is now
+  HTTP-aware and reads the shared token from `~/.cache/nanoclaw/
+  bridge-token` (0600) — currently running in warn mode (logs
+  missing bearer but forwards). Enforce mode flip is pending live
+  verification that container MCP traffic carries the bearer over
+  the Claude Agent SDK's HTTP transport (B1 client/server,
+  2026-04-19).
 - `sync-all.sh` acquires a `mkdir`-based lock at
   `/var/tmp/nanoclaw-sync.lock.d` before running — concurrent
   launchd-fired runs exit silently; stale locks from dead holders
