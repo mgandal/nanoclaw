@@ -1203,6 +1203,32 @@ export async function processTaskIpc(
         evidence: (data as any).evidence || '',
         tags: (data as any).tags || [],
       };
+
+      // C13: trust enforcement. Only fires when caller is a compound-key
+      // agent; plain-group callers keep legacy bypass (see test at line 1211).
+      const { group: kpBaseGroup, agent: kpAgent } = parseCompoundKey(
+        fsPathToCompoundKey(sourceGroup),
+      );
+      if (kpAgent) {
+        const trust = loadAgentTrust(path.join(AGENTS_DIR, kpAgent));
+        const trustDecision = checkTrustAndStage({
+          agentName: kpAgent,
+          groupFolder: kpBaseGroup,
+          actionType: 'knowledge_publish',
+          summary: entry.topic,
+          target: 'agent-knowledge',
+          payloadForStaging: {
+            type: 'knowledge_publish',
+            topic: entry.topic,
+            finding: entry.finding,
+            evidence: entry.evidence,
+            tags: entry.tags,
+          },
+          trust,
+        });
+        if (!trustDecision.allowed) break;
+      }
+
       const filePath = publishKnowledge(entry, sourceGroup, knowledgeDir);
       logger.info(
         { sourceGroup, topic: entry.topic, filePath },

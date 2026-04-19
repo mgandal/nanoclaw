@@ -1234,6 +1234,115 @@ describe('processTaskIpc', () => {
   });
 });
 
+// --- C13: knowledge_publish trust enforcement for agent callers ---
+
+describe('knowledge_publish trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-knowledge-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+    (publishKnowledge as any).mockClear();
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  const publishData = {
+    type: 'knowledge_publish',
+    topic: 'finding-A',
+    finding: 'something measurable',
+    evidence: 'file:src/foo.ts:42',
+    tags: ['research'],
+  };
+
+  it('publishes immediately when trust.yaml says autonomous', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  knowledge_publish: autonomous\n',
+    );
+
+    await processTaskIpc(
+      publishData as any,
+      `telegram_science-claw--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(publishKnowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  knowledge_publish: draft\n',
+    );
+
+    await processTaskIpc(
+      publishData as any,
+      `telegram_science-claw--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(publishKnowledge).not.toHaveBeenCalled();
+
+    const pending = listPendingActions({
+      groupFolder: 'telegram_science-claw',
+    });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('knowledge_publish');
+    expect(pending[0].agent_name).toBe(TEST_AGENT);
+
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.topic).toBe('finding-A');
+    expect(payload.finding).toBe('something measurable');
+    expect(payload.evidence).toBe('file:src/foo.ts:42');
+    expect(payload.tags).toEqual(['research']);
+  });
+
+  it('stages on ask (no policy listed)', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  send_message: notify\n',
+    );
+
+    await processTaskIpc(
+      publishData as any,
+      `telegram_science-claw--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    expect(publishKnowledge).not.toHaveBeenCalled();
+    expect(
+      listPendingActions({ groupFolder: 'telegram_science-claw' }),
+    ).toHaveLength(1);
+  });
+
+  it('bypasses trust for non-agent callers (plain group sourceGroup)', async () => {
+    // Existing behavior preserved: plain groups can publish knowledge
+    // without trust enforcement. Only compound-key agent callers are gated.
+    await processTaskIpc(
+      publishData as any,
+      'telegram_science-claw',
+      false,
+      deps,
+    );
+
+    expect(publishKnowledge).toHaveBeenCalledTimes(1);
+  });
+
+  it('bypasses trust for main-group callers', async () => {
+    await processTaskIpc(publishData as any, 'telegram_main', true, deps);
+    expect(publishKnowledge).toHaveBeenCalledTimes(1);
+  });
+});
+
 // --- 14. Authorization enforcement ---
 
 describe('authorization enforcement', () => {
