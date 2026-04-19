@@ -125,11 +125,12 @@ still active:
   Hindsight, Ollama, Slack, Mail Bridge) receive `Authorization:
   Bearer <NANOCLAW_BRIDGE_TOKEN>` on every container-initiated HTTP
   call. Each bridge proxy reads the shared token from `~/.cache/
-  nanoclaw/bridge-token` (0600). **Apple Notes, Todoist, Calendar
-  now run in enforce mode** — unauth'd POSTs get 401. QMD stays in
-  warn mode pending investigation of one init-time GET per container
-  spawn. Honcho/Hindsight/Ollama/Slack/Mail Bridge aren't yet in the
-  enforcement scope. (B1 client/server, 2026-04-19.)
+  nanoclaw/bridge-token` (0600). **Apple Notes, Todoist, Calendar,
+  and QMD all run in enforce mode** — unauth'd requests get 401. A
+  bounded handful of init-time GETs per container spawn still hit
+  401 on all four bridges (the MCP client's pre-auth handshake) and
+  are benign. Honcho/Hindsight/Ollama/Slack/Mail Bridge aren't yet
+  in the enforcement scope. (B1 client/server, 2026-04-19.)
 - `sync-all.sh` acquires a `mkdir`-based lock at
   `/var/tmp/nanoclaw-sync.lock.d` before running — concurrent
   launchd-fired runs exit silently; stale locks from dead holders
