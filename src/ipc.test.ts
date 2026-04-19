@@ -3459,7 +3459,12 @@ describe('send_file credential blocklist (B2/B4)', () => {
     // Clean up any test files we wrote under groups/telegram_other/
     const testOtherDir = path.join(GROUPS_ROOT, 'telegram_other');
     if (fs.existsSync(testOtherDir)) {
-      for (const f of ['credentials.json', 'bundle.pem', 'notes.json', 'report.md']) {
+      for (const f of [
+        'credentials.json',
+        'bundle.pem',
+        'notes.json',
+        'report.md',
+      ]) {
         try {
           fs.unlinkSync(path.join(testOtherDir, f));
         } catch {
