@@ -113,6 +113,52 @@ function isValidAgentName(name: string): boolean {
   return path.dirname(resolved) === parent;
 }
 
+// --- B2/B4: send_file credential blocklist ---
+
+const CREDENTIAL_FILENAME_PATTERNS = [
+  /^credentials\.json$/i,
+  /^token\.json$/i,
+  /^gmail-token\.json$/i,
+  /^paperclip-.*\.json$/i,
+  /\.pem$/i,
+  /\.key$/i,
+  /^oauth.*$/i,
+  /^\.env$/i,
+  /^id_rsa$|^id_ed25519$|^id_ecdsa$/,
+];
+
+const CREDENTIAL_CONTENT_PATTERNS = [
+  /refresh_token/i,
+  /client_secret/i,
+  /private_key/i,
+  /-----BEGIN .* PRIVATE KEY-----/,
+  /xoxb-[A-Za-z0-9-]{10,}/, // slack bot token
+  /ghp_[A-Za-z0-9]{20,}/, // github PAT
+];
+
+/**
+ * Reject files that look like credentials. Called from the send_file IPC
+ * path for non-main groups. Main-group bypasses — operator tooling
+ * legitimately forwards tokens or pem files on occasion.
+ *
+ * Two-layer: filename pattern (fast, catches unrenamed credential files)
+ * + content pattern sample (catches the "renamed to x.json" bypass).
+ * The content read is capped at 64KB to avoid DoS on large files.
+ */
+export function isFileCredentialLike(
+  filePath: string,
+  contentSample: Buffer,
+): boolean {
+  const name = path.basename(filePath);
+  if (CREDENTIAL_FILENAME_PATTERNS.some((re) => re.test(name))) return true;
+  const sampleStr = contentSample.toString(
+    'utf-8',
+    0,
+    Math.min(contentSample.length, 65536),
+  );
+  return CREDENTIAL_CONTENT_PATTERNS.some((re) => re.test(sampleStr));
+}
+
 /**
  * Policy: is `sender` allowed to fire a pooled/pinned Telegram bot in
  * `group`? `undefined` permittedSenders = allow any (legacy rows, backwards
@@ -514,6 +560,31 @@ export async function processIpcMessage(
           'IPC send_file: file not found or path not resolvable',
         );
       } else {
+        // B2/B4: credential blocklist. Main-group bypasses (operator
+        // tooling legitimately forwards tokens). Non-main checks both
+        // filename and a content sample so rename-to-x.json doesn't
+        // defeat it.
+        if (!isMain) {
+          try {
+            const fd = fs.openSync(hostFilePath, 'r');
+            const sample = Buffer.alloc(65536);
+            const bytes = fs.readSync(fd, sample, 0, sample.length, 0);
+            fs.closeSync(fd);
+            const slice = sample.subarray(0, bytes);
+            if (isFileCredentialLike(hostFilePath, slice)) {
+              logger.warn(
+                { sourceGroup, chatJid: data.chatJid, hostFilePath },
+                'IPC send_file rejected: credential-like file from non-main',
+              );
+              return;
+            }
+          } catch (err) {
+            logger.warn(
+              { err, hostFilePath },
+              'IPC send_file: failed to read credential sample (proceeding)',
+            );
+          }
+        }
         await deps.sendFile(data.chatJid, hostFilePath, data.caption);
         logger.info(
           {

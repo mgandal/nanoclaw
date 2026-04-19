@@ -3436,6 +3436,148 @@ describe('send_file compound key auth', () => {
   });
 });
 
+// --- B2/B4: send_file credential blocklist ---
+
+describe('send_file credential blocklist (B2/B4)', () => {
+  // Each test creates a tmp file on disk under OTHER_GROUP's workspace
+  // path so auth passes, then verifies whether sendFile was called.
+  // We use the absolute-path-from-main escape for content tests because
+  // non-main paths go through resolveContainerFilePathToHost which
+  // requires a real group workspace.
+
+  const GROUPS_ROOT = path.resolve(DATA_DIR, '..', 'groups');
+
+  function makeGroupFile(groupFolder: string, name: string, content: string) {
+    const groupDir = path.join(GROUPS_ROOT, groupFolder);
+    fs.mkdirSync(groupDir, { recursive: true });
+    const filePath = path.join(groupDir, name);
+    fs.writeFileSync(filePath, content);
+    return filePath;
+  }
+
+  afterEach(() => {
+    // Clean up any test files we wrote under groups/telegram_other/
+    const testOtherDir = path.join(GROUPS_ROOT, 'telegram_other');
+    if (fs.existsSync(testOtherDir)) {
+      for (const f of ['credentials.json', 'bundle.pem', 'notes.json', 'report.md']) {
+        try {
+          fs.unlinkSync(path.join(testOtherDir, f));
+        } catch {
+          /* not ours */
+        }
+      }
+    }
+  });
+
+  it('rejects filename matching credential pattern from non-main', async () => {
+    // Non-main, own target, a credentials.json-shaped file
+    makeGroupFile('telegram_other', 'credentials.json', '{"safe":"ok"}');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/credentials.json',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects filename matching .pem pattern from non-main', async () => {
+    makeGroupFile('telegram_other', 'bundle.pem', 'not-a-real-pem');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/bundle.pem',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects content containing refresh_token even with innocuous filename', async () => {
+    makeGroupFile(
+      'telegram_other',
+      'notes.json',
+      JSON.stringify({ refresh_token: 'abc123', scope: 'mail' }),
+    );
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/notes.json',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('allows a normal non-credential file', async () => {
+    makeGroupFile('telegram_other', 'report.md', '# Report\n\nContents.');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/report.md',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).toHaveBeenCalled();
+  });
+
+  it('main group bypasses the blocklist (operator tooling)', async () => {
+    const hostFile = path.join(
+      os.tmpdir(),
+      `nc-sfmain-${Date.now()}-credentials.json`,
+    );
+    fs.writeFileSync(hostFile, '{"refresh_token":"x"}');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    try {
+      await processIpcMessage(
+        {
+          type: 'send_file',
+          chatJid: 'tg:main123',
+          filePath: hostFile,
+        },
+        'telegram_main',
+        true,
+        testDeps,
+      );
+
+      expect(sendFile).toHaveBeenCalled();
+    } finally {
+      fs.unlinkSync(hostFile);
+    }
+  });
+});
+
 describe('deliverSendMessage', () => {
   it('calls sendWebAppButton when webAppUrl is present', async () => {
     const sendWebAppButton = vi.fn().mockResolvedValue(undefined);
