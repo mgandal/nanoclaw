@@ -16,6 +16,7 @@ import {
   processTaskIpc,
   processIpcMessage,
   deliverSendMessage,
+  isSenderAllowed,
   IpcDeps,
 } from './ipc.js';
 import { DATA_DIR } from './config.js';
@@ -2436,6 +2437,152 @@ describe('write_agent_memory section upsert', () => {
   });
 });
 
+// --- C13: kg_query trust enforcement for agent callers ---
+
+describe('kg_query trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-kg-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it('writes an audit row for autonomous caller', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  kg_query: autonomous\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'kg_query',
+        requestId: 'c13-kg-req1',
+        query: 'nothing',
+      } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const rows = getDb()
+      .prepare(
+        "SELECT outcome FROM agent_actions WHERE action_type = 'kg_query' AND agent_name = ?",
+      )
+      .all(TEST_AGENT) as { outcome: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('allowed');
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  kg_query: draft\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'kg_query',
+        requestId: 'c13-kg-req2',
+        query: 'flash',
+        hops: 2,
+      } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    // No result file should be written
+    const resultFile = path.join(
+      DATA_DIR,
+      'ipc',
+      `telegram_other--${TEST_AGENT}`,
+      'kg_results',
+      'c13-kg-req2.json',
+    );
+    expect(fs.existsSync(resultFile)).toBe(false);
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('kg_query');
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.query).toBe('flash');
+    expect(payload.hops).toBe(2);
+  });
+});
+
+// --- C13: dashboard_query trust enforcement for agent callers ---
+
+describe('dashboard_query trust enforcement (C13)', () => {
+  const TEST_AGENT = 'c13-dashboard-agent';
+  let agentDir: string;
+
+  beforeEach(() => {
+    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it('writes an audit row for autonomous caller', async () => {
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  dashboard_query: autonomous\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'dashboard_query',
+        requestId: 'c13-dash-req1',
+        view: 'summary',
+      } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const rows = getDb()
+      .prepare(
+        "SELECT outcome FROM agent_actions WHERE action_type = 'dashboard_query' AND agent_name = ?",
+      )
+      .all(TEST_AGENT) as { outcome: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('allowed');
+  });
+
+  it('stages for approval when trust.yaml says draft', async () => {
+    const { listPendingActions } = await import('./db.js');
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  dashboard_query: draft\n',
+    );
+
+    await processTaskIpc(
+      {
+        type: 'dashboard_query',
+        requestId: 'c13-dash-req2',
+        view: 'tasks',
+      } as any,
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const pending = listPendingActions({ groupFolder: 'telegram_other' });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].action_type).toBe('dashboard_query');
+    const payload = JSON.parse(pending[0].payload_json);
+    expect(payload.view).toBe('tasks');
+  });
+});
+
 // --- C13: deploy_mini_app trust enforcement for agent callers ---
 
 describe('deploy_mini_app trust enforcement (C13)', () => {
@@ -3033,6 +3180,101 @@ describe('deliverSendMessage', () => {
       'telegram_main',
     );
     expect(sendMessage).toHaveBeenCalledWith('tg:main123', 'hello');
+  });
+});
+
+describe('isSenderAllowed', () => {
+  it('allows any sender when permittedSenders is undefined (legacy / unset)', () => {
+    const group: RegisteredGroup = {
+      name: 'Legacy',
+      folder: 'telegram_legacy',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+    };
+    expect(isSenderAllowed(group, 'Freud')).toBe(true);
+    expect(isSenderAllowed(group, 'Anybody')).toBe(true);
+  });
+
+  it('rejects every sender when permittedSenders is an empty array (main bot only)', () => {
+    const group: RegisteredGroup = {
+      name: 'Vault',
+      folder: 'telegram_vault-claw',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      permittedSenders: [],
+    };
+    expect(isSenderAllowed(group, 'Freud')).toBe(false);
+    expect(isSenderAllowed(group, 'Marvin')).toBe(false);
+  });
+
+  it('only allows senders in a non-empty permittedSenders list', () => {
+    const group: RegisteredGroup = {
+      name: 'Lab',
+      folder: 'telegram_lab-claw',
+      trigger: '@Bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      permittedSenders: ['Marvin', 'Warren'],
+    };
+    expect(isSenderAllowed(group, 'Marvin')).toBe(true);
+    expect(isSenderAllowed(group, 'Warren')).toBe(true);
+    expect(isSenderAllowed(group, 'Freud')).toBe(false);
+    expect(isSenderAllowed(group, 'marvin')).toBe(false); // exact match only
+  });
+});
+
+describe('deliverSendMessage sender-allowlist enforcement', () => {
+  it('when sender is not in permittedSenders, falls back to prefixed main-bot send', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      {
+        chatJid: 'tg:vault-123',
+        text: 'scanning inbox',
+        sender: 'Freud',
+        permittedSenders: [], // vault allows no personas
+      },
+      { sendMessage },
+      'telegram_vault-claw',
+    );
+    // Downgrade: main bot sends text with *Sender:* prefix; no pool bot.
+    expect(sendMessage).toHaveBeenCalledWith(
+      'tg:vault-123',
+      '*Freud:*\nscanning inbox',
+    );
+  });
+
+  it('when sender is in permittedSenders, follows the normal (pool or fallback) path', async () => {
+    // With no pool configured in this test env, the normal path falls
+    // through to plain sendMessage without prefix. What matters here is
+    // that the disallowed-downgrade did NOT fire.
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      {
+        chatJid: 'tg:lab-123',
+        text: 'done',
+        sender: 'Marvin',
+        permittedSenders: ['Marvin', 'Warren'],
+      },
+      { sendMessage },
+      'telegram_lab-claw',
+    );
+    // No prefix — this is the "sender-allowed, no pool available" path,
+    // equivalent to the existing "falls back to plain sendMessage" test.
+    expect(sendMessage).toHaveBeenCalledWith('tg:lab-123', 'done');
+  });
+
+  it('when permittedSenders is undefined, behaves like today (backwards compat)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    await deliverSendMessage(
+      {
+        chatJid: 'tg:legacy-123',
+        text: 'hello',
+        sender: 'Whoever',
+        // permittedSenders omitted
+      },
+      { sendMessage },
+      'telegram_legacy',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('tg:legacy-123', 'hello');
   });
 });
 

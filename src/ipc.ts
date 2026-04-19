@@ -114,6 +114,20 @@ function isValidAgentName(name: string): boolean {
 }
 
 /**
+ * Policy: is `sender` allowed to fire a pooled/pinned Telegram bot in
+ * `group`? `undefined` permittedSenders = allow any (legacy rows, backwards
+ * compat). Empty array = no personas; every `sender` is downgraded to the
+ * main bot. Non-empty array = strict allowlist (exact-match, case-sensitive).
+ */
+export function isSenderAllowed(
+  group: RegisteredGroup,
+  sender: string,
+): boolean {
+  if (group.permittedSenders === undefined) return true;
+  return group.permittedSenders.includes(sender);
+}
+
+/**
  * Deliver a send_message payload through the appropriate channel path:
  * WebApp button → pool bot with sender prefix → plain main-bot send.
  *
@@ -136,6 +150,11 @@ export async function deliverSendMessage(
     ruleId?: string;
     contributingEvents?: string[];
     fromAgent?: string;
+    // Per-target-group allowlist. When set, disallowed senders are
+    // downgraded from the bot pool to the main bot (with a *Sender:*
+    // prefix). Callers compute this from the registered group;
+    // `deliverSendMessage` stays a pure delivery primitive.
+    permittedSenders?: string[];
   },
   deps: Pick<IpcDeps, 'sendMessage' | 'sendWebAppButton'>,
   sourceGroup: string,
@@ -202,6 +221,30 @@ export async function deliverSendMessage(
       { chatJid: data.chatJid, sourceGroup },
       'IPC WebApp button sent',
     );
+    return;
+  }
+
+  // Enforce per-group sender allowlist. Disallowed senders skip the pool
+  // entirely and go out as a prefixed message from the main bot. This
+  // stops an agent in group A from firing a pinned pool bot (e.g. Freud)
+  // just because it picked that string as its sender in a group that
+  // isn't authorized to surface that persona.
+  if (
+    data.sender &&
+    data.permittedSenders !== undefined &&
+    !data.permittedSenders.includes(data.sender)
+  ) {
+    logger.warn(
+      {
+        chatJid: data.chatJid,
+        sourceGroup,
+        sender: data.sender,
+        permitted: data.permittedSenders,
+      },
+      'Sender not in group allowlist — downgrading to main-bot prefixed send',
+    );
+    const prefixed = `*${data.sender}:*\n${data.text}`;
+    await deps.sendMessage(data.chatJid, prefixed);
     return;
   }
 
@@ -432,6 +475,7 @@ export async function processIpcMessage(
           text: data.text,
           sender: data.sender,
           webAppUrl: data.webAppUrl,
+          permittedSenders: targetGroup?.permittedSenders,
         },
         deps,
         sourceGroup,
@@ -1459,12 +1503,42 @@ export async function processTaskIpc(
         }
       }
       if (typeof data.type === 'string' && data.type === 'dashboard_query') {
-        handled = await handleDashboardIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          DATA_DIR,
+        // C13: trust enforcement for agent callers. Read-only action;
+        // default trust should be autonomous.
+        const { group: dqBaseGroup, agent: dqAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
         );
+        let dqAllowed = true;
+        if (dqAgent) {
+          const d = data as Record<string, unknown>;
+          const trust = loadAgentTrust(path.join(AGENTS_DIR, dqAgent));
+          const trustDecision = checkTrustAndStage({
+            agentName: dqAgent,
+            groupFolder: dqBaseGroup,
+            actionType: 'dashboard_query',
+            summary:
+              typeof d.view === 'string' ? d.view.slice(0, 100) : '(query)',
+            target: 'dashboard',
+            payloadForStaging: {
+              type: 'dashboard_query',
+              requestId: d.requestId,
+              view: d.view,
+              params: d.params,
+            },
+            trust,
+          });
+          dqAllowed = trustDecision.allowed;
+        }
+        if (dqAllowed) {
+          handled = await handleDashboardIpc(
+            data as Record<string, unknown>,
+            sourceGroup,
+            isMain,
+            DATA_DIR,
+          );
+        } else {
+          handled = true;
+        }
       }
       if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
         // Build mount mappings from registered group config
@@ -1503,12 +1577,42 @@ export async function processTaskIpc(
         typeof data.type === 'string' &&
         data.type === 'kg_query'
       ) {
-        handled = await handleKgIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          DATA_DIR,
+        // C13: trust enforcement for agent callers. Read-only action;
+        // default trust should be autonomous.
+        const { group: kqBaseGroup, agent: kqAgent } = parseCompoundKey(
+          fsPathToCompoundKey(sourceGroup),
         );
+        let kqAllowed = true;
+        if (kqAgent) {
+          const d = data as Record<string, unknown>;
+          const trust = loadAgentTrust(path.join(AGENTS_DIR, kqAgent));
+          const trustDecision = checkTrustAndStage({
+            agentName: kqAgent,
+            groupFolder: kqBaseGroup,
+            actionType: 'kg_query',
+            summary:
+              typeof d.query === 'string' ? d.query.slice(0, 100) : '(query)',
+            target: 'knowledge-graph',
+            payloadForStaging: {
+              type: 'kg_query',
+              requestId: d.requestId,
+              query: d.query,
+              hops: d.hops,
+            },
+            trust,
+          });
+          kqAllowed = trustDecision.allowed;
+        }
+        if (kqAllowed) {
+          handled = await handleKgIpc(
+            data as Record<string, unknown>,
+            sourceGroup,
+            isMain,
+            DATA_DIR,
+          );
+        } else {
+          handled = true;
+        }
       }
       if (
         !handled &&
