@@ -66,5 +66,6 @@ agents-sdk-docs
 # Python venvs
 scripts/pageindex/venv/
 scripts/paperpile-wiki/venv/
+scripts/markitdown/venv/
 .claude/worktrees/
 **/__pycache__/
