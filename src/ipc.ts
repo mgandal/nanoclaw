@@ -1833,6 +1833,21 @@ export async function processTaskIpc(
       if (
         !handled &&
         typeof data.type === 'string' &&
+        data.type === 'crystallize_skill'
+      ) {
+        if (!isMain) {
+          logger.warn(
+            { sourceGroup },
+            'Non-main crystallize_skill IPC attempt blocked',
+          );
+          handled = true;
+        } else {
+          handled = handleCrystallizeSkillIpc(data, sourceGroup);
+        }
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
         data.type === 'skill_search'
       ) {
         handled = await handleSkillSearchIpc(data, sourceGroup);
@@ -2247,6 +2262,128 @@ function handleSaveSkillIpc(
     });
   }
 
+  return true;
+}
+
+/**
+ * Handle crystallize_skill IPC: persist a newly-generated "reusable recipe"
+ * skill under data/agents/{agent}/skills/crystallized/. Spec: docs/
+ * superpowers/specs/2026-04-18-skill-crystallization-design.md.
+ *
+ * The container sends:
+ *   - agent: whose skill dir to write to
+ *   - name: slug (kebab-case)
+ *   - description: one-paragraph Skill-tool match description
+ *   - source_task: what the user asked that produced this skill
+ *   - body: the SKILL.md body AFTER the frontmatter (Steps, Context hints, etc.)
+ *   - confidence: 1-10 agent self-report
+ *
+ * Handler stamps frontmatter (name, description, crystallized_at,
+ * source_task, confidence, invocation_count) and writes the full SKILL.md.
+ * Also appends a JSONL line to log.jsonl for observability.
+ */
+function handleCrystallizeSkillIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+): boolean {
+  const agent = typeof data.agent === 'string' ? data.agent : undefined;
+  const name = typeof data.name === 'string' ? data.name : undefined;
+  const description =
+    typeof data.description === 'string' ? data.description : undefined;
+  const sourceTask =
+    typeof data.source_task === 'string' ? data.source_task : undefined;
+  const body = typeof data.body === 'string' ? data.body : undefined;
+  const confidence =
+    typeof data.confidence === 'number' ? data.confidence : NaN;
+  // Test seam: let tests point the write at a tmp dir. Production omits
+  // this field and the default AGENTS_DIR is used.
+  const agentsRoot =
+    typeof data.agentsRoot === 'string' ? data.agentsRoot : AGENTS_DIR;
+  const requestId =
+    typeof data.requestId === 'string' ? data.requestId : undefined;
+
+  // Validate. agent + name go into paths, so use the same strict shape
+  // as agent-name validation elsewhere. description + body must be
+  // non-empty strings. confidence must be 1..10.
+  const agentRe = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+  const skillNameRe = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
+  if (
+    !agent ||
+    !agentRe.test(agent) ||
+    !name ||
+    !skillNameRe.test(name) ||
+    !description ||
+    !body ||
+    !sourceTask ||
+    !Number.isFinite(confidence) ||
+    confidence < 1 ||
+    confidence > 10
+  ) {
+    logger.warn(
+      { agent, name, sourceGroup, confidence },
+      'crystallize_skill IPC rejected: invalid payload',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: 'Invalid crystallize_skill payload.',
+    });
+    return true;
+  }
+
+  try {
+    const crystallizedDir = path.join(
+      agentsRoot,
+      agent,
+      'skills',
+      'crystallized',
+    );
+    const skillDir = path.join(crystallizedDir, name);
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    const nowIso = new Date().toISOString();
+    // Keep the description/source_task on single YAML lines. Quote with
+    // double quotes; escape any embedded " by JSON-stringifying.
+    const descYaml = JSON.stringify(description);
+    const taskYaml = JSON.stringify(sourceTask);
+    const frontmatter = [
+      '---',
+      `name: ${name}`,
+      `description: ${descYaml}`,
+      `crystallized_at: ${nowIso}`,
+      `source_task: ${taskYaml}`,
+      `confidence: ${confidence}`,
+      `invocation_count: 0`,
+      '---',
+      '',
+    ].join('\n');
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), frontmatter + body);
+
+    // Append to log.jsonl for observability / Phase 2 retros.
+    const logLine =
+      JSON.stringify({
+        ts: nowIso,
+        agent,
+        name,
+        source_task: sourceTask,
+        confidence,
+      }) + '\n';
+    fs.appendFileSync(path.join(crystallizedDir, 'log.jsonl'), logLine);
+
+    logger.info(
+      { agent, name, confidence, sourceGroup },
+      'Crystallized skill saved',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: true,
+      message: `Crystallized skill "${name}" saved for ${agent}.`,
+    });
+  } catch (err) {
+    logger.error({ err, agent, name }, 'crystallize_skill IPC error');
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
   return true;
 }
 

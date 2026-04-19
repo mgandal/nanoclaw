@@ -1042,6 +1042,199 @@ describe('save_skill', () => {
   });
 });
 
+// --- Skill crystallization: IPC crystallize_skill action ---
+
+describe('crystallize_skill', () => {
+  let tmpDir: string;
+  let agentsRoot: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-crystallize-test-'));
+    agentsRoot = path.join(tmpDir, 'data', 'agents');
+    // Pre-create an agent dir so the handler has a place to write into.
+    fs.mkdirSync(path.join(agentsRoot, 'claire'), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const validPayload = (overrides: Record<string, unknown> = {}) => ({
+    type: 'crystallize_skill',
+    agent: 'claire',
+    name: 'deadline-aggregation',
+    description:
+      'Aggregate upcoming grant/paper deadlines across state files, calendar, and Todoist.',
+    source_task: 'Mike asked for a status dashboard covering grants + deadlines',
+    body:
+      '## When to use\n\nWhen the user asks for deadline rollups.\n\n## Steps\n\n1. Read grants.md\n2. Call calendar_range\n',
+    confidence: 7,
+    agentsRoot,
+    ...overrides,
+  });
+
+  it('non-main caller cannot crystallize', async () => {
+    await processTaskIpc(
+      validPayload() as any,
+      'telegram_other',
+      false,
+      deps,
+    );
+    expect(
+      fs.existsSync(
+        path.join(
+          agentsRoot,
+          'claire',
+          'skills',
+          'crystallized',
+          'deadline-aggregation',
+          'SKILL.md',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('main-group caller writes SKILL.md with generated frontmatter', async () => {
+    await processTaskIpc(
+      validPayload() as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    const written = fs.readFileSync(
+      path.join(
+        agentsRoot,
+        'claire',
+        'skills',
+        'crystallized',
+        'deadline-aggregation',
+        'SKILL.md',
+      ),
+      'utf-8',
+    );
+    // Frontmatter contains the fields the spec describes.
+    expect(written).toMatch(/^---\n/);
+    expect(written).toContain('name: deadline-aggregation');
+    expect(written).toContain('description:');
+    expect(written).toContain(
+      'source_task: "Mike asked for a status dashboard covering grants + deadlines"',
+    );
+    expect(written).toContain('confidence: 7');
+    expect(written).toContain('invocation_count: 0');
+    expect(written).toMatch(/crystallized_at: \d{4}-\d{2}-\d{2}T/);
+    // Body follows frontmatter.
+    expect(written).toContain('## When to use');
+  });
+
+  it('appends one line to the crystallization log', async () => {
+    await processTaskIpc(
+      validPayload() as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    const log = fs.readFileSync(
+      path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'log.jsonl'),
+      'utf-8',
+    );
+    const lines = log.trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]);
+    expect(entry.name).toBe('deadline-aggregation');
+    expect(entry.confidence).toBe(7);
+    expect(entry.source_task).toBe(
+      'Mike asked for a status dashboard covering grants + deadlines',
+    );
+  });
+
+  it('rejects an invalid skill name (path-traversal shape)', async () => {
+    await processTaskIpc(
+      validPayload({ name: '../escape' }) as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    // Nothing should have been written under the claire agent dir.
+    const crystallizedDir = path.join(
+      agentsRoot,
+      'claire',
+      'skills',
+      'crystallized',
+    );
+    if (fs.existsSync(crystallizedDir)) {
+      expect(fs.readdirSync(crystallizedDir)).not.toContain('..');
+      expect(fs.readdirSync(crystallizedDir)).not.toContain('escape');
+    }
+  });
+
+  it('rejects an invalid agent name (path-traversal shape)', async () => {
+    await processTaskIpc(
+      validPayload({ agent: '../etc' }) as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    // agentsRoot should not have sprouted an ../etc entry.
+    expect(fs.readdirSync(agentsRoot)).toEqual(['claire']);
+  });
+
+  it('rejects a confidence score outside 1-10', async () => {
+    await processTaskIpc(
+      validPayload({ confidence: 15 }) as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(
+      fs.existsSync(
+        path.join(
+          agentsRoot,
+          'claire',
+          'skills',
+          'crystallized',
+          'deadline-aggregation',
+          'SKILL.md',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('is idempotent: re-crystallizing the same name overwrites and appends to log', async () => {
+    await processTaskIpc(
+      validPayload() as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    await processTaskIpc(
+      validPayload({ body: '## Updated\n' }) as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    const written = fs.readFileSync(
+      path.join(
+        agentsRoot,
+        'claire',
+        'skills',
+        'crystallized',
+        'deadline-aggregation',
+        'SKILL.md',
+      ),
+      'utf-8',
+    );
+    expect(written).toContain('## Updated');
+    const log = fs
+      .readFileSync(
+        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'log.jsonl'),
+        'utf-8',
+      )
+      .trim()
+      .split('\n');
+    expect(log).toHaveLength(2);
+  });
+});
+
 // --- 11. Malformed task data handling ---
 
 describe('malformed task data', () => {
