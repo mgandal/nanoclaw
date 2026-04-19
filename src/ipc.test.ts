@@ -2525,18 +2525,13 @@ describe('deploy_mini_app trust enforcement (C13)', () => {
     );
 
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(
-      listPendingActions({ groupFolder: 'telegram_other' }),
-    ).toHaveLength(1);
+    expect(listPendingActions({ groupFolder: 'telegram_other' })).toHaveLength(
+      1,
+    );
   });
 
   it('bypasses trust for non-agent callers', async () => {
-    await processTaskIpc(
-      deployData as any,
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc(deployData as any, 'telegram_main', true, deps);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
