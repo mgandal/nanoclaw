@@ -3,6 +3,7 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
+import { getBridgeToken } from './bridge-auth.js';
 import {
   AGENTS_DIR,
   DATA_DIR,
@@ -157,6 +158,52 @@ export function isFileCredentialLike(
     Math.min(contentSample.length, 65536),
   );
   return CREDENTIAL_CONTENT_PATTERNS.some((re) => re.test(sampleStr));
+}
+
+// C2: send_file extension allowlist for non-main groups. Default-deny by
+// extension. Main bypasses (operator tooling legitimately forwards arbitrary
+// files). The list covers formats agents typically produce (reports, images,
+// structured data, media) while excluding archive formats, raw data stores,
+// and executables that are exfil-shaped.
+const SEND_FILE_ALLOWED_EXTS = new Set([
+  '.pdf',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.md',
+  '.txt',
+  '.csv',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.html',
+  '.htm',
+  '.docx',
+  '.xlsx',
+  '.pptx',
+  '.mp3',
+  '.m4a',
+  '.wav',
+  '.mp4',
+  '.mov',
+  '.webm',
+  '.zip',
+]);
+
+/**
+ * Whitelist check for send_file from non-main groups. Main-group bypasses.
+ * Returns true if the extension is permitted; false for dotfiles,
+ * extensionless files, and anything outside the allowlist.
+ */
+export function isSendFileExtensionAllowed(filePath: string): boolean {
+  const name = path.basename(filePath);
+  if (name.startsWith('.')) return false;
+  const ext = path.extname(name).toLowerCase();
+  if (!ext) return false;
+  return SEND_FILE_ALLOWED_EXTS.has(ext);
 }
 
 /**
@@ -560,6 +607,16 @@ export async function processIpcMessage(
           'IPC send_file: file not found or path not resolvable',
         );
       } else {
+        // C2: extension allowlist for non-main. Fast reject before the
+        // content-sample credential check so we never open files we don't
+        // intend to send anyway (archives, data stores, executables).
+        if (!isMain && !isSendFileExtensionAllowed(hostFilePath)) {
+          logger.warn(
+            { sourceGroup, chatJid: data.chatJid, hostFilePath },
+            'IPC send_file rejected: extension not in allowlist',
+          );
+          return;
+        }
         // B2/B4: credential blocklist. Main-group bypasses (operator
         // tooling legitimately forwards tokens). Non-main checks both
         // filename and a content sample so rename-to-x.json doesn't
@@ -2425,7 +2482,10 @@ async function handleSkillSearchIpc(
   try {
     const response = await fetch('http://localhost:8181/mcp', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getBridgeToken()}`,
+      },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,

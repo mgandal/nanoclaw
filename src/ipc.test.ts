@@ -18,6 +18,7 @@ import {
   deliverSendMessage,
   handleSlackDmIpc,
   isSenderAllowedForPool,
+  isSendFileExtensionAllowed,
   IpcDeps,
 } from './ipc.js';
 import { DATA_DIR } from './config.js';
@@ -3781,6 +3782,204 @@ describe('send_file credential blocklist (B2/B4)', () => {
     } finally {
       fs.unlinkSync(hostFile);
     }
+  });
+});
+
+// --- C2: send_file extension allowlist for non-main ---
+
+describe('send_file extension allowlist (C2)', () => {
+  const GROUPS_ROOT = path.resolve(DATA_DIR, '..', 'groups');
+
+  function makeGroupFile(groupFolder: string, name: string, content: string) {
+    const groupDir = path.join(GROUPS_ROOT, groupFolder);
+    fs.mkdirSync(groupDir, { recursive: true });
+    const filePath = path.join(groupDir, name);
+    fs.writeFileSync(filePath, content);
+    return filePath;
+  }
+
+  afterEach(() => {
+    const testOtherDir = path.join(GROUPS_ROOT, 'telegram_other');
+    if (fs.existsSync(testOtherDir)) {
+      for (const f of [
+        'archive.zip',
+        'data.db',
+        'script.sh',
+        'noext',
+        '.hidden',
+        'report.pdf',
+      ]) {
+        try {
+          fs.unlinkSync(path.join(testOtherDir, f));
+        } catch {
+          /* not ours */
+        }
+      }
+    }
+  });
+
+  it('rejects .db from non-main (raw data store)', async () => {
+    makeGroupFile('telegram_other', 'data.db', 'SQLite format 3');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/data.db',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects .sh from non-main (executable)', async () => {
+    makeGroupFile('telegram_other', 'script.sh', '#!/bin/bash\necho hi');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/script.sh',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects extensionless file from non-main', async () => {
+    makeGroupFile('telegram_other', 'noext', 'contents');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/noext',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('rejects dotfile from non-main', async () => {
+    makeGroupFile('telegram_other', '.hidden', 'contents');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/.hidden',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).not.toHaveBeenCalled();
+  });
+
+  it('allows .pdf from non-main', async () => {
+    makeGroupFile('telegram_other', 'report.pdf', '%PDF-1.4 (fake)');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    await processIpcMessage(
+      {
+        type: 'send_file',
+        chatJid: 'tg:other456',
+        filePath: '/workspace/group/report.pdf',
+      },
+      'telegram_other',
+      false,
+      testDeps,
+    );
+
+    expect(sendFile).toHaveBeenCalled();
+  });
+
+  it('main bypasses the extension allowlist (operator tooling)', async () => {
+    const hostFile = path.join(os.tmpdir(), `nc-c2-main-${Date.now()}.db`);
+    fs.writeFileSync(hostFile, 'SQLite format 3');
+    const sendFile = vi.fn().mockResolvedValue(undefined);
+    const testDeps = { ...deps, sendFile };
+
+    try {
+      await processIpcMessage(
+        {
+          type: 'send_file',
+          chatJid: 'tg:main123',
+          filePath: hostFile,
+        },
+        'telegram_main',
+        true,
+        testDeps,
+      );
+
+      expect(sendFile).toHaveBeenCalled();
+    } finally {
+      fs.unlinkSync(hostFile);
+    }
+  });
+});
+
+describe('isSendFileExtensionAllowed', () => {
+  it('allows common agent-output extensions', () => {
+    for (const name of [
+      'report.pdf',
+      'image.png',
+      'slide.jpeg',
+      'notes.md',
+      'data.csv',
+      'records.json',
+      'page.html',
+      'sheet.xlsx',
+      'audio.m4a',
+      'clip.mp4',
+      'bundle.zip',
+    ]) {
+      expect(isSendFileExtensionAllowed(`/tmp/${name}`)).toBe(true);
+    }
+  });
+
+  it('rejects exfil-shaped extensions', () => {
+    for (const name of [
+      'store.db',
+      'index.sqlite',
+      'backup.tar',
+      'keys.pem',
+      'run.sh',
+      'code.py',
+      'installer.dmg',
+    ]) {
+      expect(isSendFileExtensionAllowed(`/tmp/${name}`)).toBe(false);
+    }
+  });
+
+  it('rejects extensionless and dotfiles', () => {
+    expect(isSendFileExtensionAllowed('/tmp/noext')).toBe(false);
+    expect(isSendFileExtensionAllowed('/tmp/.env')).toBe(false);
+    expect(isSendFileExtensionAllowed('/tmp/.hidden.md')).toBe(false);
+  });
+
+  it('extension match is case-insensitive', () => {
+    expect(isSendFileExtensionAllowed('/tmp/REPORT.PDF')).toBe(true);
+    expect(isSendFileExtensionAllowed('/tmp/Photo.JPG')).toBe(true);
   });
 });
 
