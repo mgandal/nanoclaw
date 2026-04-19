@@ -1474,8 +1474,28 @@ export async function processTaskIpc(
       const content = d.content as string;
       if (!content) break;
 
+      // C6: cap content (memory.md is read back into future context packets;
+      // an unbounded write is a cheap context-poisoning primitive) and
+      // validate section name (the section flows into a Markdown header and
+      // a constructed regex — keep it to word chars/spaces/dashes, <=80).
+      if (content.length > 64 * 1024) {
+        logger.warn(
+          { sourceGroup, size: content.length },
+          'write_agent_memory: content exceeds 64KB cap',
+        );
+        break;
+      }
+      const sectionRaw = d.section as string | undefined;
+      if (sectionRaw !== undefined && !/^[\w\s\-]{1,80}$/.test(sectionRaw)) {
+        logger.warn(
+          { sourceGroup, section: sectionRaw },
+          'write_agent_memory: invalid section name (must match /^[\\w\\s-]{1,80}$/)',
+        );
+        break;
+      }
+
       // Authorization: agent name must come from the authenticated compound
-      // directory (telegram_foo--einstein → einstein). Main group may
+      // directory (telegram_foo--einstein -> einstein). Main group may
       // additionally target a named agent via payload agent_name; non-main
       // non-compound groups must not — otherwise any group could overwrite
       // any agent's memory with arbitrary content (a prompt-injection primitive

@@ -43,6 +43,32 @@ if (!PROXY_BIND_HOST) {
   );
 }
 
+// C11: validate CREDENTIAL_PROXY_HOST at startup. 0.0.0.0 is permitted for
+// Apple Container v0.10 (which can't bind 192.168.64.1 directly) but logs a
+// warning since it exposes the proxy to LAN. Any other non-loopback,
+// non-bridge address is rejected — the token still gates access, but a
+// misconfiguration that binds publicly is almost always a mistake.
+{
+  const allowLoopback = /^127\./.test(PROXY_BIND_HOST);
+  const allowBridge = (() => {
+    const ifaces = os.networkInterfaces();
+    const bridge = ifaces['bridge100'] || ifaces['bridge0'];
+    const ip = bridge?.find((a) => a.family === 'IPv4')?.address;
+    return Boolean(ip && ip === PROXY_BIND_HOST);
+  })();
+  if (PROXY_BIND_HOST === '0.0.0.0') {
+    // Emit to stderr so it shows up in launchd stderr + any process wrapping.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[credential-proxy] CREDENTIAL_PROXY_HOST=0.0.0.0 — proxy exposed on all interfaces. Token-gated, but prefer 127.0.0.1 or the bridge IP where your runtime allows.`,
+    );
+  } else if (!allowLoopback && !allowBridge) {
+    throw new Error(
+      `CREDENTIAL_PROXY_HOST=${PROXY_BIND_HOST} is not 127.0.0.1, 0.0.0.0, or the detected bridge IP. Refusing to start — set to a loopback or bridge address, or 0.0.0.0 only if your container runtime demands it.`,
+    );
+  }
+}
+
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
   // On Linux, host.docker.internal isn't built-in — add it explicitly

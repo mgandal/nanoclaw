@@ -330,7 +330,11 @@ export async function indexPdf(
         [scriptPath, filePath],
         {
           env: {
-            PATH: process.env.PATH || '/usr/bin:/bin',
+            // C9: restrict PATH to the minimal system bins. pythonBin is
+            // already absolute so the subprocess itself doesn't need PATH
+            // lookup; keep a minimal PATH in case the adapter shells out
+            // (e.g. for a mime tool) but don't inherit user PATH.
+            PATH: '/usr/bin:/bin',
             HOME: process.env.HOME || '',
             ANTHROPIC_BASE_URL: `http://localhost:${CREDENTIAL_PROXY_PORT}/${proxyToken}`,
             ANTHROPIC_API_KEY: 'placeholder',

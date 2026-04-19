@@ -433,6 +433,12 @@ util-linux via Homebrew; mkdir atomicity is POSIX and zero-dependency.
 
 #### C6. `write_agent_memory` size + section-regex gaps
 
+**Status: resolved 2026-04-19.** `content` capped at 64 KB; `section`
+validated against `/^[\w\s-]{1,80}$/` before the section-upsert regex is
+built. Both land in the `write_agent_memory` case of `src/ipc.ts` ahead
+of the authorization + trust-enforcement checks. Regression tests in
+`src/audit-fixes.test.ts` under `write_agent_memory input validation (C6)`.
+
 - **Where:** `src/ipc.ts:1043-1060`.
 - **Risk:** no size cap on `content`; `section` is unvalidated so a crafted
   `section` value could bypass the section-upsert regex.
@@ -457,6 +463,11 @@ util-linux via Homebrew; mkdir atomicity is POSIX and zero-dependency.
 
 #### C9. pageindex subprocess PATH unrestricted
 
+**Status: resolved 2026-04-19.** `PATH` hardcoded to `/usr/bin:/bin` in
+the adapter's execFile env (`src/pageindex.ts:337`). `pythonBin` was
+already absolute via `adapterPath()`. Regression test in
+`src/audit-fixes.test.ts` (`pageindex subprocess PATH restriction (C9)`).
+
 - **Where:** `src/pageindex.ts:332-340`.
 - **Risk:** subprocess inherits the full launchd PATH — if `adapter.py` is
   ever compromised (malicious PDF → PyMuPDF RCE), PATH lookup lets it `exec`
@@ -473,6 +484,15 @@ util-linux via Homebrew; mkdir atomicity is POSIX and zero-dependency.
   per-container.
 
 #### C11. `CREDENTIAL_PROXY_HOST` not validated at startup
+
+**Status: resolved 2026-04-19.** Module-level validator added to
+`src/container-runtime.ts` directly after `PROXY_BIND_HOST` is read.
+`0.0.0.0` logs a stderr warning (required for Apple Container v0.10 per
+`.env` comment, so we can't refuse). Loopback (`127.*`) and the detected
+bridge IP are silently permitted. Any other value throws at startup,
+blocking daemon launch. Warning visible in `logs/nanoclaw.error.log`.
+Regression test in `src/audit-fixes.test.ts`
+(`CREDENTIAL_PROXY_HOST validation (C11)`).
 
 - **Where:** `src/container-runtime.ts:39-44`.
 - **Risk:** if a user sets `CREDENTIAL_PROXY_HOST=0.0.0.0`, the proxy accepts
@@ -536,6 +556,12 @@ files.
   processed keys with short TTL.
 
 #### C16. `gmail-sync-latest.json` 100-message dump mode 0644
+
+**Status: already resolved (predates 2026-04-19 triage).**
+`scripts/sync/gmail-sync.py:371` writes via `write_file_secure` with
+`mode=0o600`. On-disk file confirmed `-rw-------`. The finding was
+stale — the fix landed as part of B8. Flagged here only so future
+audits don't re-open it.
 
 - **Where:** `scripts/sync/gmail-sync.py:331-355`.
 - **Risk:** world-readable file with subjects/snippets of last 100 messages.

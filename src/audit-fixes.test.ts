@@ -795,3 +795,59 @@ describe('Apple Notes QMD integration', () => {
 // ─────────────────────────────────────────────────
 // SimpleMem ingest pipeline (apple-notes-ingest.py) was removed on 2026-04-06.
 // Apple Notes are now indexed directly via QMD (see test #27).
+
+// ─────────────────────────────────────────────────
+// 29. C6 — write_agent_memory size + section validation
+// ─────────────────────────────────────────────────
+describe('write_agent_memory input validation (C6)', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/ipc.ts'),
+    'utf-8',
+  );
+
+  it('caps content at 64KB', () => {
+    // A 64KB literal in source; the compare uses 64 * 1024.
+    expect(source).toMatch(/content\.length\s*>\s*64\s*\*\s*1024/);
+  });
+
+  it('validates section name against a tight regex', () => {
+    // The regex itself must appear verbatim — simple anchor for audit.
+    expect(source).toContain('/^[\\w\\s\\-]{1,80}$/');
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 30. C9 — pageindex subprocess must not inherit user PATH
+// ─────────────────────────────────────────────────
+describe('pageindex subprocess PATH restriction (C9)', () => {
+  it('PATH must be hardcoded to /usr/bin:/bin, not process.env.PATH', () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), 'src/pageindex.ts'),
+      'utf-8',
+    );
+    expect(source).toContain("PATH: '/usr/bin:/bin'");
+    // Regression guard: any `PATH: process.env.PATH` reintroduces the issue.
+    expect(source).not.toMatch(/PATH:\s*process\.env\.PATH/);
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 31. C11 — CREDENTIAL_PROXY_HOST startup validation
+// ─────────────────────────────────────────────────
+describe('CREDENTIAL_PROXY_HOST validation (C11)', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/container-runtime.ts'),
+    'utf-8',
+  );
+
+  it('warns when bind host is 0.0.0.0', () => {
+    expect(source).toContain("PROXY_BIND_HOST === '0.0.0.0'");
+    expect(source).toMatch(/console\.warn[\s\S]*0\.0\.0\.0/);
+  });
+
+  it('refuses non-loopback, non-bridge, non-0.0.0.0 addresses', () => {
+    // Presence of the throw gated by "not loopback AND not bridge" logic
+    expect(source).toMatch(/!allowLoopback\s*&&\s*!allowBridge/);
+    expect(source).toMatch(/throw new Error\([\s\S]*CREDENTIAL_PROXY_HOST/);
+  });
+});
