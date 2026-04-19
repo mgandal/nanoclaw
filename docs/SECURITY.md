@@ -98,9 +98,11 @@ still active:
   direct child of `data/agents/` (B5).
 - `publish_to_bus.summary` capped at 500 chars, `topic` at 100; the bus
   dispatcher XML-escapes and wraps every field in `<bus-message>` (B3).
-- Group `skills/` syncs *after* the destination is wiped, *before*
-  container skills, and rejects any skill whose frontmatter declares
-  `allowed-tools: Bash` (A2).
+- Skill layering (group → agent-crystallized → container) syncs
+  *after* the destination is wiped; the container layer always wins.
+  Both the group and agent-crystallized layers reject any skill whose
+  frontmatter declares `allowed-tools: Bash` (A2 + skill-
+  crystallization Phase 1, 2026-04-19).
 - Inbound email body and classification snippets are wrapped in
   `<untrusted_email_body>` fences at both ingest and retrieval (A3).
 - Agent `memory.md` Session Continuity and `hot.md` are wrapped in
