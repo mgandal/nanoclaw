@@ -13,6 +13,7 @@ import fs from 'fs';
 import http from 'http';
 import path from 'path';
 
+import { getBridgeToken } from './bridge-auth.js';
 import {
   AGENTS_DIR,
   CONTEXT_PACKET_MAX_SIZE,
@@ -88,7 +89,8 @@ async function queryQmdForContext(query: string): Promise<string> {
         clientInfo: { name: 'nanoclaw-context', version: '1.0' },
       },
     });
-    const initRes = await qmdRequest(initBody, {}, TIMEOUT_MS);
+    const authHeader = { Authorization: `Bearer ${getBridgeToken()}` };
+    const initRes = await qmdRequest(initBody, authHeader, TIMEOUT_MS);
     const sessionId = initRes.headers['mcp-session-id'] as string | undefined;
     if (!sessionId) {
       logger.debug('QMD: no Mcp-Session-Id in initialize response, skipping');
@@ -121,7 +123,7 @@ async function queryQmdForContext(query: string): Promise<string> {
     });
     const queryRes = await qmdRequest(
       queryBody,
-      { 'Mcp-Session-Id': sessionId },
+      { ...authHeader, 'Mcp-Session-Id': sessionId },
       TIMEOUT_MS,
     );
 
