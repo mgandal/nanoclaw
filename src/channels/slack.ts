@@ -134,7 +134,12 @@ export class SlackChannel implements Channel {
       const groups = this.opts.registeredGroups();
       if (!groups[jid]) return;
 
-      const isBotMessage = !!msg.bot_id || msg.user === this.botUserId;
+      // C4: is_from_me must be true only for this bot's own user id.
+      // is_bot_message stays broad (any bot, including peers in the pool).
+      // Session commands (/new, /compact) gate on is_from_me, so conflating
+      // these would let peer bots issue admin commands.
+      const isFromMe = !!this.botUserId && msg.user === this.botUserId;
+      const isBotMessage = !!msg.bot_id || isFromMe;
 
       let senderName: string;
       if (isBotMessage) {
@@ -167,7 +172,7 @@ export class SlackChannel implements Channel {
         sender_name: senderName,
         content,
         timestamp,
-        is_from_me: isBotMessage,
+        is_from_me: isFromMe,
         is_bot_message: isBotMessage,
       });
     });

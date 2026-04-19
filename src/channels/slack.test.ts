@@ -295,11 +295,12 @@ describe('SlackChannel', () => {
       });
       await triggerMessageEvent(event);
 
-      // Has bot_id so should be marked as bot message
+      // C4: bot_id without matching user is_bot_message=true but
+      // is_from_me=false — it's a peer bot, not this identity.
       expect(opts.onMessage).toHaveBeenCalledWith(
         'slack:C0123456789',
         expect.objectContaining({
-          is_from_me: true,
+          is_from_me: false,
           is_bot_message: true,
           sender_name: 'Jonesy',
         }),

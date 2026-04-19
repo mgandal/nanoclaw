@@ -3078,10 +3078,18 @@ describe('deploy_mini_app trust enforcement (C13)', () => {
     );
   });
 
-  it('bypasses trust for non-agent callers', async () => {
+  it('bypasses trust for non-agent callers from main group', async () => {
     await processTaskIpc(deployData as any, 'telegram_main', true, deps);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects non-agent callers from non-main groups (C1)', async () => {
+    // No agent component in sourceGroup => trust-enforcement doesn't fire.
+    // C1 fence catches this path for non-main groups.
+    await processTaskIpc(deployData as any, 'telegram_other', false, deps);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

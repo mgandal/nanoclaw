@@ -1610,6 +1610,15 @@ export async function processTaskIpc(
             trust,
           });
           dmAllowed = trustDecision.allowed;
+        } else if (!isMain) {
+          // C1: trust-enforcement is the primary gate for agent callers.
+          // Bare-group callers (no agent component) bypass that gate, so
+          // deny outright from non-main groups.
+          logger.warn(
+            { sourceGroup },
+            'deploy_mini_app rejected: non-main group, no agent component',
+          );
+          dmAllowed = false;
         }
         if (dmAllowed) {
           handled = await handleDeployMiniApp(
