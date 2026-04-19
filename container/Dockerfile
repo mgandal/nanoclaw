@@ -36,7 +36,9 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code @readwise/cli
+# @llamaindex/liteparse: local PDF parser with spatial extraction + Tesseract.js OCR
+# (exposed to agents via container/skills/liteparse/ — `lit` CLI)
+RUN npm install -g agent-browser @anthropic-ai/claude-code @readwise/cli @llamaindex/liteparse
 
 # Install blogwatcher CLI for RSS feed monitoring (built from source in stage above)
 COPY --from=blogwatcher-build /blogwatcher /usr/local/bin/blogwatcher
