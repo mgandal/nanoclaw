@@ -92,9 +92,15 @@ if [ $EC -ne 0 ]; then
     ERRORS=$((ERRORS + 1))
 fi
 
-# --- Step 4: Calendar sync (DISABLED — causes repeated email notifications) ---
+# --- Step 4: Slack message ingestion (DMs + channels → ~/.cache/slack-ingest/exported) ---
 echo ""
-echo "[4/10] Calendar sync... SKIPPED (disabled — causes repeated email notifications)"
+echo "[4/10] Slack ingest..."
+$PYTHON3 "$SCRIPT_DIR/slack-ingest.py" 2>&1 | tail -5
+EC=${PIPESTATUS[0]}
+if [ $EC -ne 0 ]; then
+    echo "[4/10] WARNING: Slack ingest had errors (exit $EC)"
+    ERRORS=$((ERRORS + 1))
+fi
 
 # --- Step 5: Apple Notes re-export to markdown ---
 echo ""
