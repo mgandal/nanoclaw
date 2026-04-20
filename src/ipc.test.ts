@@ -1066,21 +1066,16 @@ describe('crystallize_skill', () => {
     name: 'deadline-aggregation',
     description:
       'Aggregate upcoming grant/paper deadlines across state files, calendar, and Todoist.',
-    source_task: 'Mike asked for a status dashboard covering grants + deadlines',
-    body:
-      '## When to use\n\nWhen the user asks for deadline rollups.\n\n## Steps\n\n1. Read grants.md\n2. Call calendar_range\n',
+    source_task:
+      'Mike asked for a status dashboard covering grants + deadlines',
+    body: '## When to use\n\nWhen the user asks for deadline rollups.\n\n## Steps\n\n1. Read grants.md\n2. Call calendar_range\n',
     confidence: 7,
     agentsRoot,
     ...overrides,
   });
 
   it('non-main caller cannot crystallize', async () => {
-    await processTaskIpc(
-      validPayload() as any,
-      'telegram_other',
-      false,
-      deps,
-    );
+    await processTaskIpc(validPayload() as any, 'telegram_other', false, deps);
     expect(
       fs.existsSync(
         path.join(
@@ -1096,12 +1091,7 @@ describe('crystallize_skill', () => {
   });
 
   it('main-group caller writes SKILL.md with generated frontmatter', async () => {
-    await processTaskIpc(
-      validPayload() as any,
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc(validPayload() as any, 'telegram_main', true, deps);
     const written = fs.readFileSync(
       path.join(
         agentsRoot,
@@ -1128,12 +1118,7 @@ describe('crystallize_skill', () => {
   });
 
   it('appends one line to the crystallization log', async () => {
-    await processTaskIpc(
-      validPayload() as any,
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc(validPayload() as any, 'telegram_main', true, deps);
     const log = fs.readFileSync(
       path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'log.jsonl'),
       'utf-8',
@@ -1201,12 +1186,7 @@ describe('crystallize_skill', () => {
   });
 
   it('is idempotent: re-crystallizing the same name overwrites and appends to log', async () => {
-    await processTaskIpc(
-      validPayload() as any,
-      'telegram_main',
-      true,
-      deps,
-    );
+    await processTaskIpc(validPayload() as any, 'telegram_main', true, deps);
     await processTaskIpc(
       validPayload({ body: '## Updated\n' }) as any,
       'telegram_main',
