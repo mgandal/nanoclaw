@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'preact/hooks';
 import type { VaultNode } from '../types.js';
-import { renderMarkdown } from '../lib/render-markdown.js';
+// Lazy-loaded: renderMarkdown pulls in markdown-it + highlight.js, ~100 KB gzip.
+// Defer until a user actually visits a vault page to keep the home-route bundle lean.
 
 interface Props {
   slug: string;
@@ -33,6 +34,7 @@ export function VaultPage({ slug, tree, origin }: Props) {
           return;
         }
         const md = await res.text();
+        const { renderMarkdown } = await import('../lib/render-markdown.js');
         const html = renderMarkdown(md, tree);
         if (!cancelled) setState({ status: 'ready', html });
       } catch (err) {
