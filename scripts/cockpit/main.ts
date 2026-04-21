@@ -30,7 +30,10 @@ function checkPreconditions(): void {
     try {
       fs.readdirSync(wikiProbe);
     } catch (err) {
-      throw new Error(`Cannot read ${wikiProbe} (likely FDA issue). Grant Full Disk Access to /opt/homebrew/bin/bun. Underlying error: ${String(err)}`);
+      throw new Error(
+        `Cannot read ${wikiProbe} (likely FDA issue). Grant Full Disk Access to /opt/homebrew/bin/bun.`,
+        { cause: err },
+      );
     }
   }
   if (!R2_ENDPOINT || !R2_BUCKET || !R2_TOKEN) {
