@@ -1,4 +1,5 @@
-const TOP_HEADING_RE = /^##\s+Top\s+\d+\s*$/i;
+// Match "## Top N" with optional trailing words, e.g. "## Top 3 Priorities This Week".
+const TOP_HEADING_RE = /^##\s+Top\s+\d+\b/i;
 const NEXT_HEADING_RE = /^##\s+/;
 const NUMBERED_ITEM_RE = /^\d+\.\s+(.+)$/;
 

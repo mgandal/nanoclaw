@@ -38,4 +38,24 @@ describe('parsePriorities', () => {
     const md = '## Top 3\n1. First\nnote in between\n2. Second';
     expect(parsePriorities(md)).toEqual(['First', 'Second']);
   });
+
+  it('matches real current.md heading with trailing words', () => {
+    // The actual groups/global/state/current.md uses
+    //   ## Top 3 Priorities This Week
+    // not bare "## Top 3". Parser must handle both.
+    const md = [
+      '## Top 3 Priorities This Week',
+      '1. **scRBP paper cover letter + submission**',
+      '2. **LAI Genomics Sequencing Plan**',
+      '3. **Google.org scRBP — confirm submission**',
+      '',
+      '## Active Priorities',
+      '1. Should not appear',
+    ].join('\n');
+    expect(parsePriorities(md)).toEqual([
+      '**scRBP paper cover letter + submission**',
+      '**LAI Genomics Sequencing Plan**',
+      '**Google.org scRBP — confirm submission**',
+    ]);
+  });
 });
