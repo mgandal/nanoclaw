@@ -23,6 +23,11 @@ if [ -f "$LOG_FILE" ] && [ "$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)" -gt 
   tail -100 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
 fi
 
+# Sibling check: detect launchd-driven restart bursts that never reach the watchdog's own
+# circuit breaker (which only counts its own kicks). Runs in parallel to the health check
+# below — a burst can happen even when /health succeeds between respawns.
+"${NANOCLAW_DIR}/scripts/check-restart-burst.sh" || true
+
 # Health check
 if curl -sf --max-time 5 "$HEALTH_URL" >/dev/null 2>&1; then
   # Healthy — clear any restart tracking
@@ -83,7 +88,26 @@ log "Capturing diagnostics before restart..."
   echo ""
   echo "=== Process list ==="
   ps aux | grep -E "nanoclaw|bun.*index" | grep -v grep || echo "(no processes)"
+  echo ""
+  echo "=== Last 20 error log lines ==="
+  tail -20 "${NANOCLAW_DIR}/logs/nanoclaw.error.log" 2>/dev/null || echo "(no error log)"
 } >> "$LOG_FILE" 2>&1
+
+# Pre-restart build guard: if src/ is newer than dist/, the launchd-spawned
+# `bun dist/index.js` will load stale JS and SyntaxError-loop at ~6 respawns/min.
+# Rebuild before we kick; a failed build means the stale dist is still running,
+# which is less bad than a guaranteed restart loop. See scripts/check-restart-burst.sh.
+SRC_NEWEST=$(find "${NANOCLAW_DIR}/src" -name '*.ts' -not -path '*/node_modules/*' -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+DIST_NEWEST=$(find "${NANOCLAW_DIR}/dist" -name '*.js' -exec stat -f '%m' {} + 2>/dev/null | sort -rn | head -1)
+if [ -n "$SRC_NEWEST" ] && [ -n "$DIST_NEWEST" ] && [ "$SRC_NEWEST" -gt "$DIST_NEWEST" ]; then
+  DRIFT=$((SRC_NEWEST - DIST_NEWEST))
+  log "src newer than dist by ${DRIFT}s — rebuilding before kickstart"
+  if (cd "$NANOCLAW_DIR" && /Users/mgandal/.bun/bin/bun run build) >> "$LOG_FILE" 2>&1; then
+    log "build OK — proceeding with kickstart"
+  else
+    log "WARN: build failed — kicking anyway; stale dist may restart-loop"
+  fi
+fi
 
 # Restart NanoClaw
 log "Restarting NanoClaw via launchctl..."
