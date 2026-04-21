@@ -19,7 +19,7 @@ export function renderMarkdown(source: string, vaultTree: VaultNode): string {
     html: false,  // untrusted vault content; never allow raw HTML
     linkify: true,
     typographer: false,
-    highlight: (str, lang) => {
+    highlight: (str: string, lang: string): string => {
       if (lang && hljs.getLanguage(lang)) {
         try {
           return `<pre><code class="hljs language-${lang}">${hljs.highlight(str, { language: lang, ignoreIllegals: true }).value}</code></pre>`;
@@ -27,7 +27,7 @@ export function renderMarkdown(source: string, vaultTree: VaultNode): string {
           // fall through
         }
       }
-      return `<pre><code class="hljs">${md.utils.escapeHtml(str)}</code></pre>`;
+      return `<pre><code class="hljs">${escapeHtml(str)}</code></pre>`;
     },
   });
 
@@ -39,6 +39,15 @@ export function renderMarkdown(source: string, vaultTree: VaultNode): string {
     return `<details class="frontmatter"><summary>frontmatter</summary><pre>${escaped}</pre></details>\n${bodyHtml}`;
   }
   return bodyHtml;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function extractFrontmatter(source: string): { frontmatter: string | null; body: string } {
