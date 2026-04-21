@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Daily error audit for NanoClaw. Runs audit-telegram-errors.py at 9am ET,
+  1h after com.nanoclaw.task-health-monitor so they don't overlap into the
+  same CLAIRE inbox tick.
+
+  To install (only after user approval):
+    cp ops/com.nanoclaw.error-audit.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.nanoclaw.error-audit.plist
+
+  To uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.nanoclaw.error-audit.plist
+    rm ~/Library/LaunchAgents/com.nanoclaw.error-audit.plist
+
+  The script writes to logs/error-audit.log; inspect there for run history.
+  The script itself exits 2 when actionable issues exist, 0 otherwise —
+  downstream alert routing (wake CLAIRE / post to OPS_ALERT_FOLDER) should
+  read the JSON output rather than trigger on exit code alone, so that the
+  same report can be re-read by the /audit-errors slash command.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nanoclaw.error-audit</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3</string>
+    <string>/Users/mgandal/Agents/nanoclaw/scripts/audit-telegram-errors.py</string>
+  </array>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/mgandal</string>
+    <key>TZ</key>
+    <string>America/New_York</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/mgandal/Agents/nanoclaw</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/mgandal/Agents/nanoclaw/logs/error-audit.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/mgandal/Agents/nanoclaw/logs/error-audit.error.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

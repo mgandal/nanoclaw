@@ -44,6 +44,7 @@ scripts/sync/*.log
 scripts/sync/gmail-sync-state.json
 scripts/sync/gmail-sync-latest.json
 scripts/paperpile-wiki/pipeline.log
+scripts/state/*.json
 
 # Skill output and runtime state
 graphify-out/
