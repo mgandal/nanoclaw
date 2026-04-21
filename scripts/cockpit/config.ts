@@ -7,8 +7,9 @@ export const R2_BUCKET = process.env.COCKPIT_R2_BUCKET ?? '';
 export const R2_TOKEN = process.env.COCKPIT_R2_TOKEN ?? '';
 
 // Project root detection: script lives at scripts/cockpit/<file>.ts.
-// import.meta.dir is the directory of the current file under Bun.
-export const PROJECT_ROOT = path.resolve(import.meta.dir, '..', '..');
+// import.meta.dirname is the ES2024 / Node 20.11+ / Bun standard
+// (import.meta.dir is Bun-only and undefined under vitest's transform).
+export const PROJECT_ROOT = path.resolve(import.meta.dirname, '..', '..');
 
 export const SNAPSHOT_PATH = '/tmp/nanoclaw-snapshot.json';
 export const LAST_SNAPSHOT_PATH = '/tmp/nanoclaw-last-snapshot.json';
