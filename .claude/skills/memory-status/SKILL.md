@@ -211,6 +211,8 @@ List any issues found with actionable fix commands. Examples:
 - Docker container unhealthy: suggest `docker logs <name> --tail 50`
 - JWT token expiry approaching: warn with date
 
+**Calibration — don't chase transient ECONNREFUSED.** The bridge proxies (8184/8186/8188) log `upstream error: connect ECONNREFUSED` whenever a forwarded request arrives during the ~50-200ms window when the supergateway child restarts. Steady-state rate is **~4-10 events/hour per bridge** — this is NOT a service outage; it's a race between the proxy and the restarting child. Only recommend kickstart when the rate spikes sharply (e.g. 50+/hour for many hours) OR when `lsof -ti -sTCP:LISTEN -i :<upstream-port>` returns empty (the upstream is genuinely dead, not just momentarily unreachable). Recommending `launchctl kickstart -k` on a low-rate baseline is a placebo — 2026-04-20 diagnostic session confirmed the supergateways had never crashed despite ~120 ECONNREFUSED events over 28h.
+
 If everything is healthy, say so:
 > All 8 memory layers operational. No issues detected.
 ```
