@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "id": "expire-history-snapshots",
+      "enabled": true,
+      "conditions": {
+        "prefix": "snapshot-"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
+    }
+  ]
+}
