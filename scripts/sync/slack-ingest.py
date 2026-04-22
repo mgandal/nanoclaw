@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -77,8 +78,39 @@ def save_state(state: dict):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def mcp_call(method: str, params: dict, timeout: int = 30) -> dict:
-    """Invoke an MCP method and parse the SSE response."""
+# Transient HTTP errors we retry. Slack MCP 1.1.28 hangs and closes sockets
+# mid-response under concurrent cache rebuild — see Apr 20 incident.
+_RETRYABLE = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ReadTimeout,
+)
+
+MAX_RETRIES = 4  # 4 tries across ~15s before bouncing the MCP server
+MCP_LAUNCHD_LABEL = os.environ.get("SLACK_MCP_LAUNCHD_LABEL", "com.slack-mcp")
+
+
+def _bounce_mcp_server() -> bool:
+    """Restart Slack MCP via launchd. Returns True on success.
+
+    Only called after retries are exhausted — recovers from a fully wedged
+    server (Apr 20 failure mode: HTTP handler stuck, TCP accept still works).
+    """
+    uid = os.getuid()
+    cmd = ["launchctl", "kickstart", "-k", f"gui/{uid}/{MCP_LAUNCHD_LABEL}"]
+    try:
+        log.warning("Bouncing Slack MCP via: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True, capture_output=True, timeout=10)
+        # Give the server a few seconds to rebind and warm caches
+        time.sleep(5)
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+        log.error("Failed to bounce Slack MCP: %s", e)
+        return False
+
+
+def _single_mcp_call(method: str, params: dict, timeout: int) -> dict:
     body = {"jsonrpc": "2.0", "method": method, "params": params, "id": int(time.time() * 1000)}
     r = requests.post(
         SLACK_MCP_URL,
@@ -96,6 +128,36 @@ def mcp_call(method: str, params: dict, timeout: int = 30) -> dict:
     if not m:
         raise RuntimeError(f"Unexpected MCP response: {text[:200]}")
     return json.loads(m.group(1))
+
+
+def mcp_call(method: str, params: dict, timeout: int = 30) -> dict:
+    """Invoke an MCP method with retry + server-bounce self-healing.
+
+    Retry schedule: 1s, 2s, 4s (exponential). After MAX_RETRIES consecutive
+    transient failures, bounce the MCP server via launchd and try once more.
+    """
+    last_err: Exception | None = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            return _single_mcp_call(method, params, timeout)
+        except _RETRYABLE as e:
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                backoff = 2**attempt  # 1, 2, 4s
+                log.warning("MCP %s failed (attempt %d/%d): %s — retrying in %ds",
+                            method, attempt + 1, MAX_RETRIES, type(e).__name__, backoff)
+                time.sleep(backoff)
+
+    # All retries exhausted — try a server bounce + one final attempt
+    log.error("MCP %s exhausted %d retries; attempting server bounce", method, MAX_RETRIES)
+    if _bounce_mcp_server():
+        try:
+            return _single_mcp_call(method, params, timeout)
+        except _RETRYABLE as e:
+            last_err = e
+            log.error("MCP %s still failing after server bounce: %s", method, type(e).__name__)
+
+    raise last_err if last_err else RuntimeError(f"MCP {method} failed with unknown error")
 
 
 def parse_csv_result(result: dict) -> list[dict]:
