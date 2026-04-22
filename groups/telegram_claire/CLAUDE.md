@@ -61,11 +61,30 @@ Groups are in SQLite `registered_groups` table. Fields: `jid`, `name`, `folder` 
 
 Use `target_group_jid` with the group's JID in `schedule_task`. The task runs in that group's context.
 
+## Guard Scripts (Durable Rule)
+
+The `script` field of a `scheduled_tasks` row is a **guard** — it runs on the host shell (`/bin/bash -c` via task-scheduler.ts), NOT inside the container. Any file paths referenced in a guard script must be HOST paths (`/Users/mgandal/...`), never container paths (`/workspace/...`). Guards that reference `/workspace/...` always fail with ENOENT and cause silent skipped runs. If a guard needs to call a Python script that itself runs inside the container, the guard-level invocation is still host-side — only the *agent* runs in the container afterward. This has been misdiagnosed twice; do not re-invert it.
+
 ## Skill-First Workflow
 
 No one-off work. When Mike asks for something recurring: (1) Do it manually on 3-10 items, (2) Show output and get approval, (3) Write `SKILL.md`, (4) Schedule if recurring, (5) Monitor first runs.
 
 **MECE:** One owner skill per task type — extend, don't duplicate. **The test:** If Mike asks twice, you failed.
+
+## Alert Routing
+
+Operational and security alerts route to **OPS-claw** (`tg:-5217849280`), not this channel. Use `mcp__nanoclaw__send_message` with `target_group_jid="tg:-5217849280"`.
+
+Classes that belong in OPS-claw:
+- Google Workspace / Gmail / OAuth auth failures and token-expiry pings (from the sync pipeline or Hermes inbox monitor)
+- Google account security notifications (new device, new OAuth grant to third-party apps like rclone, Drive access events)
+- Infrastructure health failures (QMD, Honcho, Hindsight, Ollama, Apple Notes / Todoist / Calendar MCPs)
+- Memory canary / integrity failures
+- NanoClaw container / service restarts, sync job errors
+
+Route to CLAIRE (this channel) only if the alert requires Mike's immediate human action and has no automatic remediation path — e.g., a confirmed unauthorized account access, a hard deadline about to slip.
+
+When in doubt: send to OPS-claw. Mike monitors OPS-claw for noise and promotes items here manually.
 
 ## Morning Briefing
 

@@ -32,6 +32,7 @@ Last updated: 2026-04-13
 - 2026-04-13: Agent architecture Phase 2 merged — portable agents + unified memory infra
 - 2026-04-12: CLINIC-claw root cause — text-output path doesn't deliver to Telegram in persistent sessions; fix: mandate send_message
 - 2026-04-12: Self-update task approach — schedule in target group's own context (writable)
+- 2026-04-21: Google/OAuth/security alerts (auth failures, token expiry, rclone-style grant notifications) route to OPS-claw (`tg:-5217849280`), not CLAIRE. rclone OAuth grants are user-authorized and expected — don't alarm
 - 2026-04-12: eval-repo always routes to OPS-claw (not CODE-claw)
 - 2026-04-12: Vault contact template → compiled_truth + timeline format
 - 2026-04-11: CLAUDE.md agent names updated: Jennifer→Marvin, Franklin→COO
