@@ -73,7 +73,7 @@ No one-off work. When Mike asks for something recurring: (1) Do it manually on 3
 
 ## Alert Routing
 
-Operational and security alerts route to **OPS-claw** (`tg:-5217849280`), not this channel. Use `mcp__nanoclaw__send_message` with `target_group_jid="tg:-5217849280"`.
+Operational and security alerts route to **OPS-claw** (`tg:-1003829244894`), not this channel. Use `mcp__nanoclaw__send_message` with `target_group_jid="tg:-1003829244894"`.
 
 Classes that belong in OPS-claw:
 - Google Workspace / Gmail / OAuth auth failures and token-expiry pings (from the sync pipeline or Hermes inbox monitor)

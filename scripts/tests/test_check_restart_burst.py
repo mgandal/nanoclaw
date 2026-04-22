@@ -23,7 +23,7 @@ SCRIPT = REPO / "scripts" / "check-restart-burst.sh"
 
 # A chat ID that the mock will treat as "migrated". Our fake Telegram API
 # responds with 400 + migrate_to_chat_id pointing at MIGRATED_CHAT_ID.
-STALE_CHAT_ID = "-5217849280"
+STALE_CHAT_ID = "-1003829244894"
 MIGRATED_CHAT_ID = "-1003829244894"
 UNRELATED_CHAT_ID = "-5000000000"  # for "plain failure, no migration" test
 

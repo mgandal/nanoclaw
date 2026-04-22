@@ -8,7 +8,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 PYTHON3="/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3"
 CHECKER="$PROJECT_DIR/groups/telegram_claire/memory_guardian/integrity_checker.py"
 IPC_DIR="$PROJECT_DIR/data/ipc/telegram_ops-claw/messages"
-OPS_JID="tg:-5217849280"
+OPS_JID="tg:-1003829244894"
 
 # Point integrity checker at host-side groups directory
 export MEMORY_GUARDIAN_GROUPS_DIR="$PROJECT_DIR/groups"

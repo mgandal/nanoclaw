@@ -22,7 +22,7 @@ SKILL_PATH = REPO / "container" / "skills" / "mgandal-cc-inbox" / "SKILL.md"
 CLASSIFIER_PATH = REPO / "scripts" / "lib" / "mgandal_cc_classify.py"
 DB_PATH = REPO / "store" / "messages.db"
 
-OPS_CLAW_JID = "tg:-5217849280"
+OPS_CLAW_JID = "tg:-1003829244894"
 EXPECTED_TASK_ID_PREFIX = "mgandal-cc-inbox"
 EXPECTED_CRON = "30,0 9-17 * * 1-5"
 
@@ -50,7 +50,7 @@ def test_skill_documents_ops_claw_routing():
         pytest.skip("skill file missing")
     text = SKILL_PATH.read_text()
     # Must explicitly route to OPS-claw, not CLAIRE.
-    assert "OPS-claw" in text or "-5217849280" in text, (
+    assert "OPS-claw" in text or "-1003829244894" in text, (
         "SKILL.md must document routing to OPS-claw (per Claire group CLAUDE.md)."
     )
 

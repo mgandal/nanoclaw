@@ -8,7 +8,7 @@ allowed-tools: Bash(python3:*), Read, mcp__gmail__search_emails, mcp__gmail__rea
 
 Mike BCCs emails from his Penn Outlook to **mgandal+cc@gmail.com** so NanoClaw can process them (Penn Outlook blocks auto-forwarding rules — BCC is the only path).
 
-**Routing rule (hard):** report output and any error/auth-failure message goes to OPS-claw (`tg:-5217849280`), never the DM or CLAIRE. Operational noise belongs in OPS-claw per Claire's group CLAUDE.md.
+**Routing rule (hard):** report output and any error/auth-failure message goes to OPS-claw (`tg:-1003829244894`), never the DM or CLAIRE. Operational noise belongs in OPS-claw per Claire's group CLAUDE.md.
 
 ## When
 
@@ -92,7 +92,7 @@ Only if at least one email was processed or flagged for review:
 
 ```
 mcp__nanoclaw__send_message(
-  target_group_jid="tg:-5217849280",
+  target_group_jid="tg:-1003829244894",
   text="...report..."
 )
 ```
