@@ -33,19 +33,20 @@ Backups taken before every edit: `~/.hermes/cron/jobs.json.bak-*`, `~/.hermes/ch
 
 Regression test: `test_phase1_retirement.py` — asserts each NanoClaw equivalent ran in last 14d.
 
-### Phase 2 — ported
+### Phase 2 — superseded by pre-existing task (port deleted)
 
-| Hermes job | Retired state | NanoClaw port |
+| Hermes job | Retired state | NanoClaw coverage |
 |---|---|---|
-| `hermes-inbox-monitor` | **enabled=true** (pending verification) | `mgandal-cc-inbox` scheduled_task (OPS-claw, `30,0 9-17 * * 1-5`) |
+| `hermes-inbox-monitor` | enabled=false | Pre-existing `task-1776290962534-widv4w` (CLAIRE, `0,30 9-17 * * 1-5`) — already processed `+hermes`/`+marvin` with A/B/C/D classifier before migration started |
 
-Port artifacts:
-- Skill: `container/skills/mgandal-cc-inbox/SKILL.md`
-- Python pre-classifier: `scripts/lib/mgandal_cc_classify.py`
-- Schedule row: `scheduled_tasks.id = 'mgandal-cc-inbox'`
-- Tests: `test_phase2_mgandal_cc_inbox.py` (9 tests covering skill file, frontmatter, OPS-claw routing, DB registration, classifier labels)
+**Post-migration correction (2026-04-22):** initial migration created a new `mgandal-cc-inbox` skill + task targeting `+cc`. Discovered during gap-fix survey that `task-1776290962534-widv4w` was already a complete, working inbox processor for `+hermes`+`+marvin`, and the `+cc` alias receives ~1 email/month (dead traffic). The new port was redundant and has been deleted:
 
-**Retirement gate:** do NOT set `hermes-inbox-monitor.enabled = false` until at least one natural cron tick of `mgandal-cc-inbox` has landed successfully in OPS-claw (or posted an `❗ INBOX-CC auth failure:` marker, which proves the wire-up works). Gate lives in task #5 of the original TodoWrite list.
+- Removed: `container/skills/mgandal-cc-inbox/` (skill)
+- Removed: `scripts/lib/mgandal_cc_classify.py` (Python classifier)
+- Removed: `scripts/tests/migration/test_phase2_mgandal_cc_inbox.py` (9 tests)
+- Removed: `scheduled_tasks` row `mgandal-cc-inbox`
+
+Hermes's `hermes-inbox-monitor` retirement stands — its replacement is the pre-existing CLAIRE task, not the port I built. Net result: zero inbox-processing regression, one less redundant skill in the tree.
 
 ### Phase 3 — retired with coverage equivalence
 
@@ -63,7 +64,7 @@ Regression tests: `test_phase3_honcho_health.py` + `test_phase3_memory_daily_ops
 |---|---|---|
 | 1. Health & recovery | Docker/Ollama/Hindsight/QMD probes + auto-restart | `task-1776026695750-3ayk1i` (OPS-claw, daily 11am — probe only, no auto-restart) |
 | 2a. Slack ingest | Pull recent monitored channels | `slack-morning-digest-1776622600` (CLAIRE, `30 7 * * 1-5`) |
-| 2b. Email ingest | `mgandal+hermes@gmail.com` → calendar/tasks | `mgandal-cc-inbox` (OPS-claw, every 30 min 9:30-17:30 wkdy) — address changed to `mgandal+cc@gmail.com` |
+| 2b. Email ingest | `mgandal+hermes@gmail.com` → calendar/tasks | `task-1776290962534-widv4w` (CLAIRE, `0,30 9-17 * * 1-5`) — pre-existing, processes `+hermes`+`+marvin` with A/B/C/D classifier, guarded by `scripts/gmail-plus-monitor.py` |
 | 2c. External sources | Paperpile, Twitter bookmarks, Apple Notes | Sync launchd `com.nanoclaw.sync` every 4h (`scripts/sync/sync-all.sh`) |
 | 3. Memory sync | SimpleMem + Cognee ingest | `task-1776026695765-w23mk8` — stale SimpleMem references, see gaps |
 | 4. Task management | Todoist sync, close completed, flag overdue | `task-1776735101092-u2lq23` daily task-health check (OPS-claw, noon) |
@@ -103,11 +104,11 @@ All migration tests are in `scripts/tests/migration/` and run with `pytest`:
 
 ```
 test_phase1_retirement.py            4 tests — NanoClaw dupes ran recently
-test_phase2_mgandal_cc_inbox.py      9 tests — skill + schedule + classifier
 test_phase3_honcho_health.py         4 tests — NanoClaw covers Honcho + dialectic
 test_phase3_memory_daily_ops.py      6 tests — daily-ops decomposition coverage
+test_gap1_memory_canary.py           3 tests — memory-integrity prompt uses Hindsight, not SimpleMem
                                     ─────
-                                    23 tests (all green as of 2026-04-21)
+                                    17 tests (all green as of 2026-04-22)
 ```
 
 Run everything: `cd ~/Agents/nanoclaw && python3 -m pytest scripts/tests/migration/ -v`

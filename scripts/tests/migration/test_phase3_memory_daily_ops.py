@@ -65,10 +65,11 @@ def test_stage2_data_ingestion_covered(conn):
     """
     slack = _active(conn, "id='slack-morning-digest-1776622600'")
     assert slack, "Missing slack-morning-digest task (daily-ops Stage 2a)"
-    inbox = _active(conn, "id='mgandal-cc-inbox'")
+    # Pre-existing +hermes/+marvin processor (discovered during gap survey —
+    # mgandal-cc-inbox was a redundant duplicate and has been deleted).
+    inbox = _active(conn, "id='task-1776290962534-widv4w'")
     assert inbox, (
-        "Missing mgandal-cc-inbox task (daily-ops Stage 2b — email ingestion). "
-        "Phase 2 port must land before retiring daily-ops-pipeline."
+        "Missing gmail-plus-monitor task (daily-ops Stage 2b — email ingestion)."
     )
 
 
