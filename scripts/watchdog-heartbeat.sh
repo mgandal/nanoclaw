@@ -5,6 +5,23 @@
 set -euo pipefail
 
 NANOCLAW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Single source of truth for the health port:
+#   1. explicit env var NANOCLAW_HEALTH_PORT wins
+#   2. otherwise read NANOCLAW_HEALTH_PORT from .env
+#   3. otherwise derive from CREDENTIAL_PROXY_PORT+1 (matches src/config.ts default)
+#   4. otherwise fall back to 3002 (pre-OneCLI default, 3001+1)
+# Must agree with src/config.ts :: NANOCLAW_HEALTH_PORT.
+if [ -z "${NANOCLAW_HEALTH_PORT:-}" ] && [ -f "${NANOCLAW_DIR}/.env" ]; then
+  # grep returns 1 when no match; keep pipefail happy with `|| true`.
+  ENV_HEALTH=$(grep -E '^NANOCLAW_HEALTH_PORT=' "${NANOCLAW_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "' || true)
+  ENV_CRED=$(grep -E '^CREDENTIAL_PROXY_PORT=' "${NANOCLAW_DIR}/.env" 2>/dev/null | cut -d= -f2 | tr -d ' "' || true)
+  if [ -n "$ENV_HEALTH" ]; then
+    NANOCLAW_HEALTH_PORT="$ENV_HEALTH"
+  elif [ -n "$ENV_CRED" ]; then
+    NANOCLAW_HEALTH_PORT=$((ENV_CRED + 1))
+  fi
+fi
 HEALTH_PORT="${NANOCLAW_HEALTH_PORT:-3002}"
 HEALTH_URL="http://127.0.0.1:${HEALTH_PORT}/health"
 LOG_FILE="${NANOCLAW_DIR}/logs/watchdog-heartbeat.log"
@@ -22,6 +39,17 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"; }
 if [ -f "$LOG_FILE" ] && [ "$(stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)" -gt "$MAX_LOG_SIZE" ]; then
   tail -100 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
 fi
+
+# Rotate NanoClaw's launchd-owned logs. These files have an open FD held by the main
+# process (StandardOutPath / StandardErrorPath), so we must truncate in place — NOT mv.
+# Keeps last ~500 lines to preserve recent context for debugging.
+for NC_LOG in "${NANOCLAW_DIR}/logs/nanoclaw.log" "${NANOCLAW_DIR}/logs/nanoclaw.error.log"; do
+  if [ -f "$NC_LOG" ] && [ "$(stat -f%z "$NC_LOG" 2>/dev/null || echo 0)" -gt "$MAX_LOG_SIZE" ]; then
+    tail -500 "$NC_LOG" > "${NC_LOG}.tmp" 2>/dev/null \
+      && cat "${NC_LOG}.tmp" > "$NC_LOG" \
+      && rm -f "${NC_LOG}.tmp"
+  fi
+done
 
 # Sibling check: detect launchd-driven restart bursts that never reach the watchdog's own
 # circuit breaker (which only counts its own kicks). Runs in parallel to the health check
