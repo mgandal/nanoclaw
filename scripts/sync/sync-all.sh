@@ -215,7 +215,11 @@ echo "=========================================="
 for logf in "$LOG_FILE" "$LAUNCHD_STDOUT_LOG" "$LAUNCHD_STDERR_LOG"; do
     [ -f "$logf" ] || continue
     SIZE=$(stat -f%z "$logf" 2>/dev/null || stat -c%s "$logf" 2>/dev/null)
-    if [ "$SIZE" -gt 1048576 ] 2>/dev/null; then
+    # Guard against empty $SIZE — stat failure on both macOS and Linux
+    # otherwise fires a `[: integer expression expected` stderr. The
+    # `2>/dev/null` on the test suppresses that but the exit code still
+    # follows the error path, so the rotation is skipped silently.
+    if [ -n "$SIZE" ] && [ "$SIZE" -gt 1048576 ] 2>/dev/null; then
         tail -5000 "$logf" > "$logf.tmp" && mv "$logf.tmp" "$logf"
         chmod 0600 "$logf" 2>/dev/null || true
     fi

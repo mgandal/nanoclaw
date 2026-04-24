@@ -142,7 +142,10 @@ def _prose_project_edges(
         return []
     seen: set[str] = set()
     edges: list[dict] = []
-    for proj in known_projects:
+    # Sort for deterministic edge emission order — otherwise set iteration
+    # is hash-randomized and run-to-run churn surfaces as changing edge
+    # order in the DB (no functional impact but noisy diffs/logs).
+    for proj in sorted(known_projects):
         proj_stripped = proj.strip()
         if not proj_stripped:
             continue
@@ -173,6 +176,7 @@ def _prose_project_edges(
 def parse_contact(
     text: str,
     source_doc: str,
+    *,
     known_projects: set[str] | frozenset[str] | None = None,
 ) -> dict | None:
     """Parse a contact markdown file into a person entity.

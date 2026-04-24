@@ -75,6 +75,25 @@ def parse_read_output(raw: str) -> dict:
     return parsed
 
 
+def _kill_and_reap(proc: subprocess.Popen) -> None:
+    """Kill the subprocess and reap it within 1 s so it does not zombie.
+
+    C17 review followup: every `proc.kill()` callsite in `_run_exchange`
+    must be followed by a bounded `proc.wait()` to actually reap the
+    SIGKILL'd child. Without this, killed processes linger until
+    Python's GC runs `__del__` (seconds to minutes later), and under
+    launchd's 4-hour cron cadence that drift is real.
+    """
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=1.0)
+    except Exception:
+        pass
+
+
 def _run_exchange(args: list[str], timeout: int = 30) -> str:
     """Run exchange-mail.sh with args. Returns stdout or empty string on failure.
 
@@ -108,7 +127,7 @@ def _run_exchange(args: list[str], timeout: int = 30) -> str:
                 log.warning(
                     "exchange-mail.sh %s timed out after %ds", args[0], timeout
                 )
-                proc.kill()
+                _kill_and_reap(proc)
                 return ""
             chunk = proc.stdout.read(read_size) if proc.stdout else b""
             if not chunk:
@@ -121,7 +140,7 @@ def _run_exchange(args: list[str], timeout: int = 30) -> str:
                     args[0],
                     EXCHANGE_STDOUT_MAX_BYTES,
                 )
-                proc.kill()
+                _kill_and_reap(proc)
                 break
             buf.extend(chunk)
 
@@ -132,7 +151,7 @@ def _run_exchange(args: list[str], timeout: int = 30) -> str:
         try:
             rc = proc.wait(timeout=max(1.0, deadline - time.time()))
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _kill_and_reap(proc)
             log.warning(
                 "exchange-mail.sh %s wait timeout after stdout drain", args[0]
             )
@@ -155,10 +174,7 @@ def _run_exchange(args: list[str], timeout: int = 30) -> str:
     except Exception as e:
         log.warning("exchange-mail.sh %s error: %s", args[0], e)
         if proc and proc.poll() is None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            _kill_and_reap(proc)
         return ""
     finally:
         # Best-effort close of std streams; Popen does not close them on GC
