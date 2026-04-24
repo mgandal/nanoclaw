@@ -190,4 +190,145 @@ describe('BusWatcher', () => {
       expect.arrayContaining([expect.objectContaining({ from: 'simon' })]),
     );
   });
+
+  // ─────────────────────────────────────────────────
+  // C15: idempotency — dispatch-failure + restore must not re-fire side effects
+  // ─────────────────────────────────────────────────
+  //
+  // Today: dispatch throws → .processing → .json restore → next poll re-reads
+  // the same message and calls dispatch again. Any side effects that ran
+  // before the throw fire twice.
+  //
+  // Fix: track dispatched message ids in an in-memory Map<id, expireMs>. Mark
+  // at the moment of the dispatch() call, so the restored .json is recognized
+  // as a repeat on the next poll and moved to _stale/ instead of being
+  // re-dispatched.
+
+  it('C15: restore-then-repoll does not re-dispatch the same id', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--einstein');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'msg-aaa.json'),
+      JSON.stringify({
+        id: 'unique-c15-1',
+        from: 'simon',
+        topic: 't',
+        timestamp: 't',
+      }),
+    );
+
+    // First poll: dispatch throws → message restored to .json
+    const failOnce = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('partial side effect then boom'))
+      .mockResolvedValue(undefined);
+    const watcher = new BusWatcher(tmpDir, failOnce);
+    await watcher.poll();
+    expect(failOnce).toHaveBeenCalledTimes(1);
+    // Restored
+    expect(fs.existsSync(path.join(dir, 'msg-aaa.json'))).toBe(true);
+
+    // Second poll: must NOT call dispatch again with this id
+    await watcher.poll();
+    expect(failOnce).toHaveBeenCalledTimes(1);
+
+    // The file must not be left in the recipient dir spinning.
+    // It should be moved to _stale/ under agents/.
+    expect(fs.existsSync(path.join(dir, 'msg-aaa.json'))).toBe(false);
+    const staleDir = path.join(agentsDir, '_stale');
+    expect(fs.existsSync(staleDir)).toBe(true);
+    const staleFiles = fs.readdirSync(staleDir);
+    expect(staleFiles.length).toBeGreaterThan(0);
+  });
+
+  it('C15: different message ids are not deduplicated', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--einstein');
+    fs.mkdirSync(dir, { recursive: true });
+    // First message fails
+    fs.writeFileSync(
+      path.join(dir, 'a.json'),
+      JSON.stringify({
+        id: 'c15-msg-A',
+        from: 'simon',
+        topic: 't',
+        timestamp: 't',
+      }),
+    );
+
+    const firstFail = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue(undefined);
+    const watcher = new BusWatcher(tmpDir, firstFail);
+    await watcher.poll();
+    expect(firstFail).toHaveBeenCalledTimes(1);
+
+    // A new message (different id) arrives
+    fs.writeFileSync(
+      path.join(dir, 'b.json'),
+      JSON.stringify({
+        id: 'c15-msg-B',
+        from: 'simon',
+        topic: 't',
+        timestamp: 't',
+      }),
+    );
+
+    await watcher.poll();
+    // The new message should dispatch; the old one should NOT.
+    expect(firstFail).toHaveBeenCalledTimes(2);
+    const lastCallArgs = firstFail.mock.calls[firstFail.mock.calls.length - 1];
+    const dispatched = lastCallArgs[1] as Array<{ id: string }>;
+    const ids = dispatched.map((m) => m.id);
+    expect(ids).toContain('c15-msg-B');
+    expect(ids).not.toContain('c15-msg-A');
+  });
+
+  it('C15: messages without an id are still dispatched (no-op dedup)', async () => {
+    // Old or hand-written bus files may lack id. Dedup should degrade
+    // gracefully rather than drop the message.
+    const dir = path.join(agentsDir, 'telegram_test--einstein');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'noid.json'),
+      JSON.stringify({ from: 'simon', topic: 't', timestamp: 't' }),
+    );
+
+    const watcher = new BusWatcher(tmpDir, mockDispatch);
+    await watcher.poll();
+    expect(mockDispatch).toHaveBeenCalled();
+  });
+
+  it('C15: TTL expiry allows re-dispatch after grace window', async () => {
+    const dir = path.join(agentsDir, 'telegram_test--einstein');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'ttl.json'),
+      JSON.stringify({
+        id: 'c15-ttl-1',
+        from: 'simon',
+        topic: 't',
+        timestamp: 't',
+      }),
+    );
+
+    // Tiny TTL so we can test expiry without a long sleep.
+    const dispatch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValue(undefined);
+    const watcher = new BusWatcher(tmpDir, dispatch, { dedupTtlMs: 10 });
+
+    // Attempt 1: dispatch fails, id marked, file restored to .json.
+    await watcher.poll();
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    // Wait past the TTL. The restored .json is still in the recipient dir;
+    // the next poll will sweep the id out of the dedup map, re-claim, and
+    // dispatch successfully.
+    await new Promise((r) => setTimeout(r, 30));
+    await watcher.poll();
+
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
 });
