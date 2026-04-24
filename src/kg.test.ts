@@ -50,7 +50,14 @@ function seedMiniGraph(db: Database): void {
     "INSERT INTO edges (id, source_id, target_id, relation, evidence, source_doc, confidence, created_by, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, 1.0, 'test', ?, datetime('now'))",
   );
 
-  ins.run('e-rachel', 'Rachel Smith', 'person', 'contacts/rachel.md', 1.0, 'main');
+  ins.run(
+    'e-rachel',
+    'Rachel Smith',
+    'person',
+    'contacts/rachel.md',
+    1.0,
+    'main',
+  );
   ins.run('e-braingo', 'BrainGO', 'project', 'state/projects.md', 1.0, 'main');
   ins.run('e-apa', 'APA', 'project', 'state/projects.md', 1.0, 'main');
   ins.run('e-grant', 'R01-MH137578', 'grant', 'state/grants.md', 1.0, 'main');
@@ -132,7 +139,10 @@ beforeEach(() => {
 
 describe('queryKg', () => {
   it('returns matched entities and their 1-hop neighbors by default', () => {
-    const result = queryKg(dbPath, { query: 'Rachel Smith' });
+    const result = queryKg(dbPath, {
+      query: 'Rachel Smith',
+      callerIsMain: true,
+    });
     expect(result.success).toBe(true);
     expect(result.matched).toHaveLength(1);
     expect(result.matched[0].canonical_name).toBe('Rachel Smith');
@@ -143,7 +153,10 @@ describe('queryKg', () => {
   });
 
   it('matches by alias, not just canonical name', () => {
-    const result = queryKg(dbPath, { query: 'Smith, Rachel' });
+    const result = queryKg(dbPath, {
+      query: 'Smith, Rachel',
+      callerIsMain: true,
+    });
     expect(result.matched).toHaveLength(1);
     expect(result.matched[0].canonical_name).toBe('Rachel Smith');
   });
@@ -157,21 +170,33 @@ describe('queryKg', () => {
   });
 
   it('hops=0 returns matched only, no neighbors', () => {
-    const result = queryKg(dbPath, { query: 'Rachel Smith', hops: 0 });
+    const result = queryKg(dbPath, {
+      query: 'Rachel Smith',
+      hops: 0,
+      callerIsMain: true,
+    });
     expect(result.matched).toHaveLength(1);
     expect(result.neighbors).toEqual([]);
     expect(result.edges).toEqual([]);
   });
 
   it('hops=2 reaches 2-hop neighbors', () => {
-    const result = queryKg(dbPath, { query: 'Rachel Smith', hops: 2 });
+    const result = queryKg(dbPath, {
+      query: 'Rachel Smith',
+      hops: 2,
+      callerIsMain: true,
+    });
     const names = new Set(result.neighbors.map((n) => n.canonical_name));
     expect(names.has('R01-MH137578')).toBe(true);
     expect(names.has('Miao Tang')).toBe(true);
   });
 
   it('caps hops at 3 (defensive)', () => {
-    const result = queryKg(dbPath, { query: 'Rachel Smith', hops: 99 });
+    const result = queryKg(dbPath, {
+      query: 'Rachel Smith',
+      hops: 99,
+      callerIsMain: true,
+    });
     expect(result.success).toBe(true);
   });
 
@@ -179,6 +204,7 @@ describe('queryKg', () => {
     const result = queryKg(dbPath, {
       query: 'Rachel Smith',
       relation_type: 'authored',
+      callerIsMain: true,
     });
     const relations = new Set(result.edges.map((e) => e.relation));
     expect(relations).toEqual(new Set(['authored']));
@@ -194,7 +220,11 @@ describe('queryKg', () => {
   });
 
   it('respects match limit', () => {
-    const result = queryKg(dbPath, { query: 'Smith', limit: 1 });
+    const result = queryKg(dbPath, {
+      query: 'Smith',
+      limit: 1,
+      callerIsMain: true,
+    });
     expect(result.matched.length).toBeLessThanOrEqual(1);
   });
 
@@ -202,6 +232,7 @@ describe('queryKg', () => {
     const result = queryKg(dbPath, {
       query: 'R01-MH137578',
       hops: 2,
+      callerIsMain: true,
     });
     const names = new Set(result.neighbors.map((n) => n.canonical_name));
     expect(names.has('APA')).toBe(true);
@@ -216,7 +247,10 @@ describe('queryKg', () => {
   });
 
   it('entity confidence preserved in output', () => {
-    const result = queryKg(dbPath, { query: 'Miao Tang' });
+    const result = queryKg(dbPath, {
+      query: 'Miao Tang',
+      callerIsMain: true,
+    });
     expect(result.matched[0].confidence).toBe(0.7);
   });
 
@@ -229,7 +263,13 @@ describe('queryKg', () => {
       const al = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
       ins.run('e-mo-main', 'MainOnly', 'topic', 'state/a.md', 'main');
       ins.run('e-mo-pub', 'MainOnly', 'topic', 'state/b.md', 'public');
-      ins.run('e-mo-lab', 'MainOnly', 'topic', 'state/c.md', 'telegram_lab-claw');
+      ins.run(
+        'e-mo-lab',
+        'MainOnly',
+        'topic',
+        'state/c.md',
+        'telegram_lab-claw',
+      );
       al.run('MainOnly', 'topic', 'e-mo-main');
       al.run('MainOnly', 'topic', 'e-mo-pub');
       al.run('MainOnly', 'topic', 'e-mo-lab');
@@ -257,7 +297,13 @@ describe('queryKg', () => {
       ins.run('e-sh-main', 'Shared', 'topic', 'state/a.md', 'main');
       ins.run('e-sh-pub', 'Shared', 'topic', 'state/b.md', 'public');
       ins.run('e-sh-lab', 'Shared', 'topic', 'state/c.md', 'telegram_lab-claw');
-      ins.run('e-sh-code', 'Shared', 'topic', 'state/d.md', 'telegram_code-claw');
+      ins.run(
+        'e-sh-code',
+        'Shared',
+        'topic',
+        'state/d.md',
+        'telegram_code-claw',
+      );
       al.run('Shared', 'topic', 'e-sh-main');
       al.run('Shared', 'topic', 'e-sh-pub');
       al.run('Shared', 'topic', 'e-sh-lab');

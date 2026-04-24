@@ -58,7 +58,9 @@ function seedMiniGraph(db: Database, entities?: SeedEntity[]): void {
   const insertEntity = db.prepare(
     "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, 1.0, ?, datetime('now'), datetime('now'))",
   );
-  const insertAlias = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
+  const insertAlias = db.prepare(
+    "INSERT INTO aliases VALUES (?, ?, ?, 'test')",
+  );
   for (const row of rows) {
     insertEntity.run(
       row.id,
