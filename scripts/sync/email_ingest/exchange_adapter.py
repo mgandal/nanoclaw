@@ -16,6 +16,14 @@ TARGET_MAILBOXES = ["Inbox", "Sent Items"]
 INTERNAL_DOMAINS = {"upenn.edu", "chop.edu", "pennmedicine.upenn.edu"}
 DEFAULT_BATCH_LIMIT = 100
 
+# C17: hard cap on bytes read from exchange-mail.sh stdout. A misbehaving
+# Mail bridge or corrupted mailbox could produce an arbitrarily large JSON
+# response; subprocess.run(capture_output=True) would buffer all of it in
+# memory before json.loads allocated its own copy on top. 16 MB is more
+# than the largest realistic search result (500 message stubs × a few KB
+# each) and well under the memory budget.
+EXCHANGE_STDOUT_MAX_BYTES = 16 * 1024 * 1024
+
 
 def compute_since_days(epoch: int) -> int:
     """Convert epoch to days-ago for exchange-mail.sh --since flag."""
@@ -24,47 +32,146 @@ def compute_since_days(epoch: int) -> int:
 
 
 def parse_search_output(raw: str) -> list[dict]:
-    """Parse JSON array from exchange-mail.sh search output."""
+    """Parse JSON array from exchange-mail.sh search output.
+
+    C17: schema-validate. Top-level must be a list; non-dict items are
+    dropped. A bridge returning an object or scalar (e.g. an error
+    envelope) is not silently treated as a message list.
+    """
     if not raw or not raw.strip():
         return []
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         log.warning("Failed to parse Exchange search output")
         return []
+    if not isinstance(parsed, list):
+        log.warning(
+            "Exchange search output is not a list (got %s); dropping",
+            type(parsed).__name__,
+        )
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
 
 
 def parse_read_output(raw: str) -> dict:
-    """Parse JSON object from exchange-mail.sh read output."""
+    """Parse JSON object from exchange-mail.sh read output.
+
+    C17: schema-validate. Top-level must be a dict.
+    """
     if not raw or not raw.strip():
         return {}
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError:
         log.warning("Failed to parse Exchange read output")
         return {}
+    if not isinstance(parsed, dict):
+        log.warning(
+            "Exchange read output is not a dict (got %s); dropping",
+            type(parsed).__name__,
+        )
+        return {}
+    return parsed
 
 
 def _run_exchange(args: list[str], timeout: int = 30) -> str:
-    """Run exchange-mail.sh with args. Returns stdout or empty string on failure."""
+    """Run exchange-mail.sh with args. Returns stdout or empty string on failure.
+
+    C17: stdout is read in bounded chunks via Popen, not buffered
+    wholesale by subprocess.run(capture_output=True). If the output
+    exceeds EXCHANGE_STDOUT_MAX_BYTES the subprocess is killed and an
+    empty string is returned — no partial JSON reaches the parser.
+    """
     if not EXCHANGE_SCRIPT.exists():
         log.error("exchange-mail.sh not found at %s", EXCHANGE_SCRIPT)
         return ""
+
+    proc = None
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["bash", str(EXCHANGE_SCRIPT)] + args,
-            capture_output=True, text=True, timeout=timeout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        if result.returncode != 0:
-            log.warning("exchange-mail.sh %s failed: %s", args[0], result.stderr[:200])
-            return ""
-        return result.stdout
-    except subprocess.TimeoutExpired:
-        log.warning("exchange-mail.sh %s timed out after %ds", args[0], timeout)
+    except Exception as e:
+        log.warning("exchange-mail.sh %s spawn error: %s", args[0], e)
         return ""
+
+    deadline = time.time() + timeout
+    buf = bytearray()
+    truncated = False
+    read_size = 64 * 1024  # 64 KB chunks
+    try:
+        while True:
+            if time.time() > deadline:
+                log.warning(
+                    "exchange-mail.sh %s timed out after %ds", args[0], timeout
+                )
+                proc.kill()
+                return ""
+            chunk = proc.stdout.read(read_size) if proc.stdout else b""
+            if not chunk:
+                break
+            if len(buf) + len(chunk) > EXCHANGE_STDOUT_MAX_BYTES:
+                # Hard cap hit — treat as malformed bridge output.
+                truncated = True
+                log.warning(
+                    "exchange-mail.sh %s stdout exceeded %d bytes; killing",
+                    args[0],
+                    EXCHANGE_STDOUT_MAX_BYTES,
+                )
+                proc.kill()
+                break
+            buf.extend(chunk)
+
+        if truncated:
+            return ""
+
+        # Drain any remaining stderr for the warning log.
+        try:
+            rc = proc.wait(timeout=max(1.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            log.warning(
+                "exchange-mail.sh %s wait timeout after stdout drain", args[0]
+            )
+            return ""
+
+        if rc != 0:
+            err = b""
+            try:
+                err = proc.stderr.read() if proc.stderr else b""
+            except Exception:
+                pass
+            log.warning(
+                "exchange-mail.sh %s failed: %s",
+                args[0],
+                err[:200].decode("utf-8", errors="replace"),
+            )
+            return ""
+
+        return buf.decode("utf-8", errors="replace")
     except Exception as e:
         log.warning("exchange-mail.sh %s error: %s", args[0], e)
+        if proc and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
         return ""
+    finally:
+        # Best-effort close of std streams; Popen does not close them on GC
+        # until the process is reaped.
+        for stream in (
+            getattr(proc, "stdout", None),
+            getattr(proc, "stderr", None),
+        ):
+            if stream is not None:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
 
 def _normalize_exchange_email(stub: dict, full: dict) -> NormalizedEmail:
