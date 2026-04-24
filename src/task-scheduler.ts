@@ -31,6 +31,7 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { appendAlert, getUnresolvedAlerts } from './system-alerts.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -116,10 +117,33 @@ export interface SchedulerDependencies {
 }
 
 const GUARD_TIMEOUT_MS = 15_000;
+const GUARD_ALERT_DEDUPE_MS = 6 * 60 * 60 * 1000; // 6h
+
+/**
+ * Return an unresolved guard alert for this task that was written within
+ * the dedupe window. Used so that a failing guard doesn't spam an alert on
+ * every cron tick — one is enough until someone resolves it or the cooldown
+ * expires.
+ */
+function getUnresolvedGuardAlertFor(taskId: string) {
+  const now = Date.now();
+  return getUnresolvedAlerts().find(
+    (a) =>
+      a.service === `guard:${taskId}` &&
+      now - new Date(a.timestamp).getTime() < GUARD_ALERT_DEDUPE_MS,
+  );
+}
 
 export interface GuardResult {
   shouldRun: boolean;
   reason?: string;
+  /**
+   * Classification for alerting:
+   *  - 'normal'   — guard returned exit 1 (legitimate skip, quiet)
+   *  - 'abnormal' — exit 2+, ENOENT/EACCES, timeout, non-exit crash (alert)
+   *  - 'ok'       — exit 0, agent should run
+   */
+  kind: 'normal' | 'abnormal' | 'ok';
 }
 
 /**
@@ -130,7 +154,7 @@ export function runGuardScript(
   script: string | null | undefined,
   timeoutMs: number = GUARD_TIMEOUT_MS,
 ): Promise<GuardResult> {
-  if (!script) return Promise.resolve({ shouldRun: true });
+  if (!script) return Promise.resolve({ shouldRun: true, kind: 'ok' });
 
   // A1 audit trail: every guard-script execution is a host shell run. Log
   // the (truncated) script content so an operator can inspect post-hoc.
@@ -149,6 +173,7 @@ export function runGuardScript(
           if (error.killed) {
             resolve({
               shouldRun: true,
+              kind: 'abnormal',
               reason: `Guard timed out after ${timeoutMs}ms`,
             });
           } else if (
@@ -158,18 +183,23 @@ export function runGuardScript(
           ) {
             resolve({
               shouldRun: true,
+              kind: 'abnormal',
               reason: `Guard script error: ${error.message}`,
             });
           } else {
             const code = (error as any).code ?? 'unknown';
             const output = (stdout || stderr || '').trim();
+            // Exit 1 = legitimate "no work to do" per the guard contract.
+            // Exit 2+ / non-numeric = guard itself is broken → alert.
+            const kind = code === 1 ? 'normal' : 'abnormal';
             resolve({
               shouldRun: false,
+              kind,
               reason: `Guard exit code ${code}: ${output}`,
             });
           }
         } else {
-          resolve({ shouldRun: true });
+          resolve({ shouldRun: true, kind: 'ok' });
         }
       },
     );
@@ -234,9 +264,31 @@ async function runTask(
   // --- Guard script pre-check ---
   if (task.script) {
     const guard = await runGuardScript(task.script);
+
+    // Alert on abnormal guard behavior (crash, timeout, ENOENT, exit 2+).
+    // Dedupe: check if an unresolved alert for this task already exists
+    // within the last 6h to avoid spamming on every 30-min cron tick.
+    if (guard.kind === 'abnormal') {
+      try {
+        const existing = getUnresolvedGuardAlertFor(task.id);
+        if (!existing) {
+          appendAlert({
+            timestamp: new Date().toISOString(),
+            service: `guard:${task.id}`,
+            message: `Guard script failed for task ${task.id} (${task.group_folder}): ${guard.reason}`,
+            fixInstructions:
+              'Inspect the script column in scheduled_tasks and run it manually. ' +
+              'Guard must return exit 0 (wake agent), exit 1 (skip), or be fixed.',
+          });
+        }
+      } catch (err) {
+        logger.warn({ err, taskId: task.id }, 'Failed to append guard alert');
+      }
+    }
+
     if (!guard.shouldRun) {
       logger.info(
-        { taskId: task.id, reason: guard.reason },
+        { taskId: task.id, reason: guard.reason, kind: guard.kind },
         'Task skipped by guard script',
       );
       logTaskRun({

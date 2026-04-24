@@ -16,6 +16,7 @@ import {
   checkAlerts,
   checkStaleTasks,
   computeNextRun,
+  runGuardScript,
   startSchedulerLoop,
 } from './task-scheduler.js';
 import type { SchedulerDependencies } from './task-scheduler.js';
@@ -1145,6 +1146,45 @@ describe('edge cases — concurrent execution and guards', () => {
     expect(enqueuedTaskIds).toContain('multi-task-1');
     expect(enqueuedTaskIds).toContain('multi-task-2');
     expect(enqueueTask).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('runGuardScript — exit-code classification', () => {
+  it('exit 0 → shouldRun=true, kind=ok', async () => {
+    const r = await runGuardScript('exit 0');
+    expect(r.shouldRun).toBe(true);
+    expect(r.kind).toBe('ok');
+  });
+
+  it('exit 1 → shouldRun=false, kind=normal (legitimate skip)', async () => {
+    const r = await runGuardScript('exit 1');
+    expect(r.shouldRun).toBe(false);
+    expect(r.kind).toBe('normal');
+    expect(r.reason).toMatch(/exit code 1/);
+  });
+
+  it('exit 2 → shouldRun=false, kind=abnormal (guard is broken)', async () => {
+    const r = await runGuardScript('exit 2');
+    expect(r.shouldRun).toBe(false);
+    expect(r.kind).toBe('abnormal');
+    expect(r.reason).toMatch(/exit code 2/);
+  });
+
+  it('script crash (python missing file) → abnormal', async () => {
+    const r = await runGuardScript('python3 /no/such/file.py');
+    expect(r.kind).toBe('abnormal');
+  });
+
+  it('command not found (127) → shouldRun=true, abnormal', async () => {
+    const r = await runGuardScript('definitely-not-a-real-command-xyz123');
+    expect(r.shouldRun).toBe(true);
+    expect(r.kind).toBe('abnormal');
+  });
+
+  it('no script → shouldRun=true, kind=ok', async () => {
+    const r = await runGuardScript(null);
+    expect(r.shouldRun).toBe(true);
+    expect(r.kind).toBe('ok');
   });
 });
 

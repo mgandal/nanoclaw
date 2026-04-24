@@ -22,6 +22,7 @@ import {
   HEALTH_MONITOR_INTERVAL,
   IDLE_TIMEOUT,
   MAX_CONTAINER_SPAWNS_PER_HOUR,
+  NANOCLAW_HEALTH_PORT,
   MAX_ERRORS_PER_HOUR,
   MAX_MESSAGES_PER_PROMPT,
   MOUNT_ALLOWLIST_PATH,
@@ -70,6 +71,7 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  recoverRunningTasks,
   setRegisteredGroup,
   setRouterState,
   getSessionTimestamps,
@@ -1555,9 +1557,11 @@ async function main(): Promise<void> {
       res.end();
     }
   });
-  const HEALTH_PORT = CREDENTIAL_PROXY_PORT + 1;
-  healthServer.listen(HEALTH_PORT, '127.0.0.1', () => {
-    logger.info({ port: HEALTH_PORT }, 'Health endpoint started');
+  healthServer.listen(NANOCLAW_HEALTH_PORT, '127.0.0.1', () => {
+    logger.info(
+      { port: NANOCLAW_HEALTH_PORT },
+      'Health endpoint started (watchdog checks NANOCLAW_HEALTH_PORT)',
+    );
   });
 
   // Event loop liveness: if the loop is blocked >30s, exit and let launchd restart
@@ -1590,6 +1594,23 @@ async function main(): Promise<void> {
     proactiveHandle?.stop();
     // 2. Stop accepting new work (signals containers to wind down)
     await queue.shutdown(15000);
+    // 2a. Flip any tasks stuck in 'running' back to 'active'. If a task was
+    // mid-execution and SIGTERM'd, its updateTaskAfterRun may not have fired
+    // — without this, the task remains invisible to getDueTasks on restart
+    // until the startup recovery runs. (Startup also calls recoverRunningTasks,
+    // so this is defense-in-depth against a race where the shutdown window
+    // is longer than the next scheduler poll.)
+    try {
+      const recovered = recoverRunningTasks();
+      if (recovered > 0) {
+        logger.info(
+          { recovered },
+          'Shutdown: recovered running tasks to active',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Shutdown: recoverRunningTasks failed');
+    }
     // 3. Now close proxy and channels (containers are done)
     proxyServer.close();
     for (const ch of channels) await ch.disconnect();

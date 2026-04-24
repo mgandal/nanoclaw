@@ -32,7 +32,7 @@ SOFT_RE = re.compile(r"\b(failed|FAILED|not configured|could not|cannot find|no 
 WARN_PREFIX_RE = re.compile(r"^WARNING:", re.IGNORECASE)
 
 # False-positive guards: these patterns mean "intentional skip / managed condition", not a real failure
-SKIP_RE = re.compile(r"^Skipped:\s+Guard|silent failure — no message|silent exit as instructed|SimpleMem (decommissioned|unavailable|not available)|Quiet period", re.IGNORECASE)
+SKIP_RE = re.compile(r"^Skipped:\s+Guard exit code 1\b|silent failure — no message|silent exit as instructed|SimpleMem (decommissioned|unavailable|not available)|Quiet period", re.IGNORECASE)
 
 
 def parse_iso(s: str) -> datetime | None:
@@ -154,22 +154,46 @@ def classify(row: sqlite3.Row, now: datetime) -> tuple[str, str] | None:
     return None
 
 
+STUCK_RUNNING_THRESHOLD = timedelta(hours=1)
+
+
+def check_stuck_running(row: sqlite3.Row, now: datetime) -> tuple[str, str] | None:
+    """Return ('STUCK', reason) if this task has been in 'running' for >1h.
+
+    A healthy run completes in seconds to minutes. Rows stuck in 'running'
+    indicate markTaskRunning fired but updateTaskAfterRun did not — usually
+    because the process was SIGTERM'd mid-run (see recoverRunningTasks in
+    src/db.ts which is supposed to flip these back at startup).
+    """
+    if row["status"] != "running":
+        return None
+    last_run = parse_iso(row["last_run"])
+    if not last_run:
+        return ("STUCK", "status=running with no last_run")
+    elapsed = now - last_run
+    if elapsed > STUCK_RUNNING_THRESHOLD:
+        hours = int(elapsed.total_seconds() / 3600)
+        return ("STUCK", f"status=running for {hours}h (expected <1h)")
+    return None
+
+
 def main():
     now = datetime.now(timezone.utc)
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
+    # Also surface 'running' — a stuck task is invisible otherwise.
     rows = conn.execute(
         """
         SELECT id, group_folder, schedule_type, schedule_value, status,
                last_run, last_result, created_at
         FROM scheduled_tasks
-        WHERE status = 'active'
+        WHERE status IN ('active', 'running')
         """
     ).fetchall()
 
     issues = []
     for row in rows:
-        verdict = classify(row, now)
+        verdict = check_stuck_running(row, now) if row["status"] == "running" else classify(row, now)
         if verdict:
             severity, reason = verdict
             snippet = (row["last_result"] or "")[:160].replace("\n", " ")
@@ -183,11 +207,14 @@ def main():
                 "schedule": row["schedule_value"],
             })
 
+    def _severity_rank(s: str) -> int:
+        return {"HARD": 0, "STUCK": 1, "STALE": 2, "NEVER": 3}.get(s, 4)
+
     out = {
         "checked_at": now.isoformat(),
         "active_tasks": len(rows),
         "issue_count": len(issues),
-        "issues": sorted(issues, key=lambda i: (0 if i["severity"] == "HARD" else 1 if i["severity"] == "STALE" else 2, i["id"])),
+        "issues": sorted(issues, key=lambda i: (_severity_rank(i["severity"]), i["id"])),
     }
     print(json.dumps(out, indent=2))
     return 2 if issues else 0

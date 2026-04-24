@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'CREDENTIAL_PROXY_PORT',
+  'NANOCLAW_HEALTH_PORT',
   'OLLAMA_ADMIN_TOOLS',
   'OLLAMA_DEFAULT_MODEL',
   'TELEGRAM_BOT_POOL',
@@ -72,6 +73,15 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
   process.env.CREDENTIAL_PROXY_PORT ||
     envConfig.CREDENTIAL_PROXY_PORT ||
     '3001',
+  10,
+);
+// Health endpoint port. Derives from CREDENTIAL_PROXY_PORT+1 by default so
+// the two never collide; override via NANOCLAW_HEALTH_PORT if you need an
+// explicit value (must match scripts/watchdog-heartbeat.sh NANOCLAW_HEALTH_PORT).
+export const NANOCLAW_HEALTH_PORT = parseInt(
+  process.env.NANOCLAW_HEALTH_PORT ||
+    envConfig.NANOCLAW_HEALTH_PORT ||
+    String(CREDENTIAL_PROXY_PORT + 1),
   10,
 );
 export const ONECLI_URL =

@@ -130,3 +130,95 @@ class TestClassifyStale:
         verdict = mod.classify(row, now)
         assert verdict is not None
         assert verdict[0] == "NEVER"
+
+
+class TestGuardSkipClassification:
+    """Regression: exit-1 guard-skip (normal "no work") must stay silent,
+    but exit-2+ / crash guard results must classify as HARD. Before the
+    2026-04-20 fix, SKIP_RE swallowed *all* "Skipped: Guard" results,
+    so a broken guard looked identical to a normal skip for 5 days."""
+
+    def _row(self, last_result, schedule_value="0,30 9-17 * * 1-5"):
+        now = datetime(2026, 4, 20, 14, 0, tzinfo=timezone.utc)
+        last_run = now - timedelta(minutes=5)
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE t (id, group_folder, schedule_type, schedule_value, status, last_run, last_result, created_at)"
+        )
+        conn.execute(
+            "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("t1", "g", "cron", schedule_value, "active",
+             last_run.isoformat(), last_result, "2026-01-01T00:00:00+00:00"),
+        )
+        return conn.execute("SELECT * FROM t").fetchone(), now
+
+    def test_exit_1_skip_is_silent(self, mod):
+        row, now = self._row("Skipped: Guard exit code 1: No unread messages")
+        assert mod.classify(row, now) is None
+
+    def test_exit_2_skip_is_hard(self, mod):
+        row, now = self._row(
+            "Skipped: Guard exit code 2: python3: can't open file '/workspace/...'"
+        )
+        verdict = mod.classify(row, now)
+        assert verdict is not None
+        assert verdict[0] == "HARD"
+
+    def test_exit_42_skip_is_hard(self, mod):
+        # Synthetic crash — confirms we flag any non-1 exit code
+        row, now = self._row("Skipped: Guard exit code 42: something else")
+        verdict = mod.classify(row, now)
+        assert verdict is not None
+        assert verdict[0] == "HARD"
+
+    def test_exit_137_kill_is_not_flagged(self, mod):
+        # 137 = SIGKILL. HARD_RE explicitly excludes it (orphan-cleanup kills)
+        row, now = self._row("Skipped: Guard exit code 137: killed")
+        assert mod.classify(row, now) is None
+
+
+class TestStuckRunning:
+    """Regression: tasks stuck in status='running' after a SIGTERM were
+    invisible to the old health check (which filtered status='active').
+    Now they surface as STUCK."""
+
+    def _row(self, status, last_run):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE t (id, group_folder, schedule_type, schedule_value, status, last_run, last_result, created_at)"
+        )
+        conn.execute(
+            "INSERT INTO t VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("t1", "g", "cron", "0 * * * *", status,
+             last_run.isoformat() if last_run else None,
+             "", "2026-01-01T00:00:00+00:00"),
+        )
+        return conn.execute("SELECT * FROM t").fetchone()
+
+    def test_running_for_5min_is_ok(self, mod):
+        now = datetime(2026, 4, 20, 14, 0, tzinfo=timezone.utc)
+        row = self._row("running", now - timedelta(minutes=5))
+        assert mod.check_stuck_running(row, now) is None
+
+    def test_running_for_2h_is_stuck(self, mod):
+        now = datetime(2026, 4, 20, 14, 0, tzinfo=timezone.utc)
+        row = self._row("running", now - timedelta(hours=2))
+        verdict = mod.check_stuck_running(row, now)
+        assert verdict is not None
+        assert verdict[0] == "STUCK"
+        assert "2h" in verdict[1]
+
+    def test_running_no_last_run_is_stuck(self, mod):
+        now = datetime(2026, 4, 20, 14, 0, tzinfo=timezone.utc)
+        row = self._row("running", None)
+        verdict = mod.check_stuck_running(row, now)
+        assert verdict is not None
+        assert verdict[0] == "STUCK"
+
+    def test_active_row_returns_none(self, mod):
+        # check_stuck_running only fires on status='running'
+        now = datetime(2026, 4, 20, 14, 0, tzinfo=timezone.utc)
+        row = self._row("active", now - timedelta(hours=10))
+        assert mod.check_stuck_running(row, now) is None
