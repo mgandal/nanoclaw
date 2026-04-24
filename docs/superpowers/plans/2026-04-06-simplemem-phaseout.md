@@ -1,6 +1,6 @@
 # SimpleMem Phase-Out Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED 2026-04-06.** SimpleMem removed; Honcho stack running in Docker (api-1, deriver-1, database-1, redis-1) shared with Hermes at `~/.hermes/honcho/`. Workspace "nanoclaw", Ollama phi4-mini + nomic-embed-text, 4 MCP tools (`honcho_profile`, `honcho_search`, `honcho_context`, `honcho_conclude`) wired into the agent runner. No `simplemem*` files remain in `src/`. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Remove SimpleMem, add Honcho user-modeling layer, keep Hindsight + QMD unchanged.
 

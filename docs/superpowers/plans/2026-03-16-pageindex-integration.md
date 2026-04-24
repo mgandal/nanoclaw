@@ -1,6 +1,6 @@
 # PageIndex Integration Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** `src/pageindex.ts` (10K) + `src/pageindex-ipc.ts` (4K) live; Python adapter at `scripts/pageindex/adapter.py` runs Claude API via credential proxy. Auto-indexes Telegram PDFs >20 pages; tree JSON cached in vault `.pageindex/` dirs. Test files comprehensive (`pageindex.test.ts` 18K, `pageindex-ipc.test.ts` 10K). Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Add hierarchical PDF indexing so agents can navigate long documents by section instead of receiving truncated flat text.
 

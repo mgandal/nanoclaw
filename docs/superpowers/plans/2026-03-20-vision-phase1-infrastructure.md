@@ -1,6 +1,6 @@
 # Vision Phase 1: Infrastructure Foundation
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** Three foundation components live: `src/context-assembler.ts` (19K, precomputed context injection), `src/health-monitor.ts` (15K, system health monitor), `src/message-bus.ts` (7K, inter-agent message bus). All have hardening fixes layered in (e.g., context-assembler `wrapAgentXml`, message-bus C15 dedup `350918a8`). Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Build the three infrastructure components that every subsequent vision phase depends on: precomputed context injection (eliminates cold starts), the system health monitor (prevents runaway costs), and the inter-agent message bus (enables agent coordination without human routing).
 

@@ -1,6 +1,6 @@
 # Replace Letta with QMD Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED 2026-03-14.** QMD installed and running: BM25 + vector embeddings + LLM reranking, HTTP daemon on 8181, launchd `com.qmd-server` (8182) + `com.qmd-proxy` (8181→8182). Container MCP endpoint: `http://host.containers.internal:8181/mcp`. `container/skills/qmd/SKILL.md` documents agent usage. No Letta references remain. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Remove unused Letta memory integration and replace it with QMD local semantic search over markdown files.
 

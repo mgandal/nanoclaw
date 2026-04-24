@@ -1,5 +1,7 @@
 # C3 + C20 — KG Group Provenance and Scoped Queries Implementation Plan
 
+> **Status: SHIPPED 2026-04-24.** All eleven tasks executed across commits `89915c45` (schema) → `bf247d6e` (live DB migrate) → `890f9ad3` (stamp visibility on ingest) → `389ed7a0` (test helper) → `dc04dd32` (red tests) → `f654df11` (queryKg visibility filter) → `80c29a3f` (cross-group isolation E2E) → `9f633629` (state_freshness pinning) → `4ec15dee` (spec annotation). Audit findings C3 and C20 closed in `docs/superpowers/specs/2026-04-18-hardening-audit-design.md`. Open `- [ ]` boxes below were never updated retroactively but the underlying work is complete — see commit pointers above for evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `visibility` column to `entities` and `edges` in `store/knowledge-graph.db` stamped at ingest time, scope `kg_query` results by caller group in `src/kg.ts`, and confirm-or-refute the `state_freshness` concern in `src/dashboard-ipc.ts`, so that a non-main agent can no longer read KG data sourced from private lab content.

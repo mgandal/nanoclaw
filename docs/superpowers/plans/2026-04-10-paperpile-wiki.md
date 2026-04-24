@@ -1,6 +1,6 @@
 # Paperpile Wiki Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED (built, not yet bootstrapped).** Pipeline modules live at `scripts/paperpile/` (`bibtex_parser.py`, `clusterer.py`, `cross_linker.py`). 5,716 papers → SPECTER2 embeddings → 49 BERTopic clusters → Claude synthesis pipeline runs end-to-end; awaiting bootstrap into the live wiki. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Build a Python pipeline that auto-synthesizes ~5,700 academic papers into a navigable Obsidian wiki with QMD-indexed topic pages.
 

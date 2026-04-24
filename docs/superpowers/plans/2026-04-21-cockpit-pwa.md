@@ -1,5 +1,7 @@
 # Cockpit PWA Implementation Plan (Plan C)
 
+> **Status: SHIPPED.** All scaffolding, libs, components, and tests are in place; `bun run test` reports 71/71 passing across 17 files. Files match this plan's File Structure section (only delta: entrypoint is `src/main.tsx` rather than `src/main.ts` — correct given JSX usage). Open `- [ ]` boxes below were never updated retroactively. Remaining work is deployment (Cloudflare Pages + Access policy) which is tracked under Plan B's deploy task.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship the static PWA that renders the JSON snapshot from Plan A (via the Worker from Plan B) into seven mobile-friendly surfaces plus a vault tree browser and page reader. Enforce the performance budget locally via `vite build` bundle size check.

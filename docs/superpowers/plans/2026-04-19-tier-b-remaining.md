@@ -1,5 +1,7 @@
 # Hardening Tier B — Remaining Findings Implementation Plan
 
+> **Status: SHIPPED 2026-04-19.** All 9 tasks landed: B7 `/app/src` read-only mount (`src/container-runner.ts:425`), B9 `sync-all.sh` flock guard (`f414d849`), BX2 email export `write_file_secure` 0600 (`scripts/sync/email_ingest/exporter.py:284`), BX1 bus-message `wrapAgentXml` (`src/context-assembler.ts`), B3-iii bus-watcher `from` verification (`src/bus-watcher.ts`), B2+B4 `send_file` credential blocklist (`src/ipc.ts:142,198`), B1 client bridge bearer injection (`894cd3ef`). The B1 *server*-side enforcement is tracked in its own plan (`2026-04-19-b1-server-enforcement.md`, also SHIPPED). `/workspace/ipc/` submount tightening (B3 sub-item iv) deferred as redesign-level. Open `- [ ]` boxes never updated retroactively.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the remaining Tier B findings from the 2026-04-18 hardening audit that were not addressed by Tier A (shipped 2026-04-18) or C13 (shipped 2026-04-19). Defense-in-depth class — each requires prerequisite compromise to exploit today, but leaving them open means any future regression in a Tier A control fails-open instead of fails-closed.

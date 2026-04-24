@@ -1,5 +1,7 @@
 # Tier B — Trust-Enforcement Coverage (C13) Implementation Plan
 
+> **Status: SHIPPED 2026-04-19.** `checkTrustAndStage` helper extracted (`3ce9f204`); 15 active call-sites in `src/ipc.ts` cover `send_message`, `send_slack_dm`, `schedule_task`, `publish_to_bus`, `knowledge_publish`, `write_agent_memory`, `write_agent_state`, `deploy_mini_app`, `kg_query`, `dashboard_query`, `update_task`, `pause_task`, `resume_task`, `cancel_task`. Task 7 (`save_skill`) intentionally skipped per plan. C13 closed in `docs/superpowers/specs/2026-04-18-hardening-audit-design.md`. Open `- [ ]` boxes never updated retroactively.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Extend `checkTrust` enforcement from the two IPC actions that have it today (`send_message`, `send_slack_dm`) to every IPC action that produces a privileged side effect, so that `trust.yaml` policies are actually honored at runtime instead of silently ignored.

@@ -1,6 +1,6 @@
 # npm to Bun Migration — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** `bun.lock` (149K) is canonical, all `bun run` scripts work (`bun run dev`, `bun run build`, `bun --bun vitest run`), launchd plist invokes `/opt/homebrew/bin/bun`. Project CLAUDE.md treats `bun` as primary. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Migrate NanoClaw's host-side runtime from Node.js/npm to Bun for faster startup, better runtime performance, and faster dependency management.
 

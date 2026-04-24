@@ -1,5 +1,7 @@
 # B1 Server-Side Bearer Enforcement Implementation Plan
 
+> **Status: SHIPPED 2026-04-19.** All 4 MCP bridges (QMD, Apple Notes, Todoist, Calendar) enforcing bearer auth. Commits: `0eb3577f` (token writer to `~/.cache/nanoclaw/bridge-token`), `ee65f250` (`scripts/bridges/shared-auth.mjs`), `14977fb4` (`proxy-template.mjs`), `221789c5` (`install-proxy-updates.sh`), `fccc9c2d` (QMD proxy with bearer + resilience). Pre-B1 proxies preserved as `.pre-b1` for rollback. Init-GET 401s in proxy logs are benign (supergateway probes before the bearer is set).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the other half of B1. The client side shipped 2026-04-19: containers receive `NANOCLAW_BRIDGE_TOKEN` and forward `Authorization: Bearer <token>` on every HTTP call to host-side MCP bridges. This plan makes those bridges reject calls that lack a valid bearer.

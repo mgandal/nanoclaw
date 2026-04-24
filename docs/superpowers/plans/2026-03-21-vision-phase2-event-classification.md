@@ -1,6 +1,6 @@
 # Phase 2: Event-Driven Classification Layer
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** `src/event-router.ts` (13K) + `src/classification-prompts.ts` (6K) live. Hardening fixes layered in: C12 Ollama-output sanitization (`5eca656f`), C12b urgentTopics haystack matching (`15379cc6`). Email + calendar event classification flows through Ollama before Claude. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Replace 8-hour polling with event-driven perception. Raw events (emails, calendar changes) flow through local Ollama classification before reaching Claude. Reduces daily token usage from ~450K to ~60-100K while improving responsiveness from hours to seconds.
 

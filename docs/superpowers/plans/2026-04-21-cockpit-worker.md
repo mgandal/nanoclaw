@@ -1,5 +1,7 @@
 # Cockpit Worker + R2 + Access Implementation Plan (Plan B)
 
+> **Status: SHIPPED (code).** All worker code, tests, wrangler config, R2 lifecycle JSON, and deploy README are present. `bun run test` reports 20/20 passing; `tsc --noEmit` clean. Open `- [ ]` boxes were never updated retroactively. **REMAINING WORK: deploy steps that require Cloudflare account access** — `wrangler r2 bucket create nanoclaw-cockpit`, `wrangler r2 bucket lifecycle put`, the Access policy in the CF dashboard, and `wrangler deploy`. These are documented in `cockpit-worker/README.md` and must be run interactively by the user.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship the read-only Cloudflare Worker that validates Cloudflare Access JWTs and proxies `GET` requests to the private R2 bucket populated by Plan A's snapshot builder. Also ship the R2 lifecycle rule for history expiry and a deployment README for the Access policy + R2 bucket + Worker.

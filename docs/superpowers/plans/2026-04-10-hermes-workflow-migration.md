@@ -1,6 +1,6 @@
 # Hermes → NanoClaw Workflow Migration Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED 2026-04-21.** 10/11 Hermes cron jobs retired to NanoClaw scheduled tasks (`d50ebeaa` migrates Phases 1-4 with TDD). Hermes itself NOT deleted; `~/.hermes/honcho/` remains bind-mounted into the shared Docker workspace — do not move. Canonical migration manifest at `scripts/tests/migration/MIGRATION.md`. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Transfer 5 non-redundant Hermes recurring workflows to NanoClaw, sync state files, and add a paperpile-sync launchd job — making NanoClaw self-sufficient for all daily operations.
 

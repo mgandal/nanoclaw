@@ -1,6 +1,6 @@
 # Plan: Single-Source-of-Truth Task Table
 
-**Status:** draft, awaiting Mike's approval
+**Status:** SHIPPED 2026-04-24. Phase A landed in `f05d80ef` (tasks table + migration), Phase B in `449311b4` (IPC tools, digest integration, archival), follow-up `256f00bb` (todo.md/lab-todos.md archived). 29/29 unit tests + 5/5 E2E scenarios pass.
 **Author:** Claude (with mgandal)
 **Created:** 2026-04-24
 **Related:**
