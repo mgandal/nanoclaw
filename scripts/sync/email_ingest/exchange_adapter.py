@@ -116,7 +116,7 @@ class ExchangeAdapter:
                 "--since", str(since_days),
                 "--limit", "500",
                 "--mailbox", mailbox,
-            ], timeout=120)
+            ], timeout=600)
             stubs = parse_search_output(raw)
             for s in stubs:
                 s["_mailbox"] = mailbox
@@ -130,7 +130,7 @@ class ExchangeAdapter:
         # Fetch full body for each
         emails = []
         for stub in new_stubs:
-            raw = _run_exchange(["read", stub["id"]], timeout=90)
+            raw = _run_exchange(["read", stub["id"]], timeout=180)
             full = parse_read_output(raw)
             if not full:
                 log.warning("Failed to read Exchange message %s", stub.get("id"))

@@ -38,44 +38,8 @@ warn() {
 echo "Sync Health Check: $(date)"
 echo "──────────────────────────────────"
 
-# 1. SimpleMem reachable
-SM_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8200/ 2>/dev/null)
-if [ "$SM_STATUS" != "000" ]; then
-    check "SimpleMem reachable (port 8200)" "" 0
-else
-    check "SimpleMem reachable (port 8200)" "connection refused" 1
-fi
-
-# 2. SimpleMem MCP initialize works
-SM_INIT=$($PYTHON3 -c "
-import json, sys
-from urllib.parse import parse_qs, urlparse
-import requests
-
-with open('$NANOCLAW_DIR/.env') as f:
-    for line in f:
-        if line.startswith('SIMPLEMEM_URL='):
-            url = line.strip().split('=', 1)[1]
-            break
-    else:
-        print('SIMPLEMEM_URL not in .env'); sys.exit(1)
-
-parsed = urlparse(url)
-token = parse_qs(parsed.query).get('token', [''])[0]
-base_url = f'{parsed.scheme}://{parsed.hostname}:{parsed.port}/mcp/message'
-headers = {'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}
-resp = requests.post(base_url, headers=headers, json={
-    'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
-    'params': {'protocolVersion': '2024-11-05', 'capabilities': {},
-               'clientInfo': {'name': 'health-check', 'version': '1.0'}}
-}, timeout=10)
-data = resp.json()
-if 'result' in data:
-    print('OK: ' + data['result'].get('serverInfo', {}).get('name', '?'))
-else:
-    print('ERROR: ' + json.dumps(data)[:100]); sys.exit(1)
-" 2>&1)
-check "SimpleMem MCP initialize" "$SM_INIT" $?
+# SimpleMem checks removed 2026-04-20 — SimpleMem was decommissioned and
+# replaced by Honcho. The persistent FAILs were confusing real health signals.
 
 # 3. QMD reachable (any HTTP response means the daemon is up)
 QMD_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8181/mcp -X POST -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
@@ -93,19 +57,34 @@ else
     check "QMD embed (sqlite-vec)" "" 0
 fi
 
+# 3c. Ollama has required models (phi4-mini, nomic-embed-text)
+# email-ingest.py uses phi4-mini for classification; QMD embed uses nomic-embed-text.
+# A fresh ollama install or an accidental ~/.ollama wipe silently breaks both.
+OLLAMA_TAGS=$(curl -sf --max-time 5 http://localhost:11434/api/tags 2>/dev/null || echo "")
+if [ -z "$OLLAMA_TAGS" ]; then
+    check "Ollama reachable (port 11434)" "daemon not reachable" 1
+else
+    check "Ollama reachable (port 11434)" "" 0
+    for MODEL in phi4-mini nomic-embed-text; do
+        if echo "$OLLAMA_TAGS" | grep -q "\"name\":\"${MODEL}:"; then
+            check "Ollama model: $MODEL" "" 0
+        else
+            check "Ollama model: $MODEL" "not installed — run: ollama pull $MODEL" 1
+        fi
+    done
+fi
+
 # 4. Gmail credentials valid
 GMAIL_CHECK=$($PYTHON3 -c "
 import json, sys
-from google.oauth2.credentials import Credentials
-cred_path = '/Users/mgandal/.google_workspace_mcp/credentials/mgandal@gmail.com.json'
-try:
-    creds = Credentials.from_authorized_user_file(cred_path)
-    if creds.expired:
-        print('token expired (will auto-refresh)')
-    else:
-        print('OK')
-except Exception as e:
-    print(str(e)); sys.exit(1)
+import sys
+sys.path.insert(0, '$NANOCLAW_DIR/scripts/sync')
+from email_ingest.gmail_adapter import GmailAdapter
+g = GmailAdapter()
+if g.connect():
+    print('OK via gmail_adapter fallback chain')
+else:
+    print('no working credentials in fallback chain'); sys.exit(1)
 " 2>&1)
 check "Gmail credentials (mgandal)" "$GMAIL_CHECK" $?
 

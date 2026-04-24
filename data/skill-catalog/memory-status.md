@@ -14,31 +14,45 @@ Run all checks below and compile into a single report. Execute health checks and
 
 For each MCP service, run a curl health check and record: status (up/down), HTTP status code, and response time.
 
-Run these **in parallel**:
+Run these **in parallel**. For bridge services (Apple Notes / Todoist / Calendar) the public port is a *proxy* in front of a *supergateway* upstream — probe **both** so a dead upstream can't hide behind a healthy proxy-level 401.
 
 ```bash
 # QMD (port 8181, proxied from 8182)
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8181/health
 
-# SimpleMem (port 8200)
+# SimpleMem (port 8200) — expected DOWN, replaced by Honcho 2026-04-06
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8200/api/health
 
-# Hindsight (port 8889)
+# Honcho (Docker, port 8010). /openapi.json is a reliable 200 endpoint; /v1/workspaces returns 404 and /health doesn't exist.
+time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8010/openapi.json
+
+# Hindsight (proxy on 8889 → worker on 8888). 200 on /mcp/hermes/ only proves the proxy is up.
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://127.0.0.1:8889/mcp/hermes/
+lsof -ti -sTCP:LISTEN -i :8888 >/dev/null && echo "Hindsight worker 8888: UP" || echo "Hindsight worker 8888: DEAD"
 
-# Apple Notes (port 8184)
+# Apple Notes — proxy 8184, supergateway upstream 8183
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8184/mcp
+lsof -ti -sTCP:LISTEN -i :8183 >/dev/null && echo "Apple Notes upstream 8183: UP" || echo "Apple Notes upstream 8183: DEAD"
 
-# Todoist (port 8186)
+# Todoist — proxy 8186, supergateway upstream 8185
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8186/mcp
+lsof -ti -sTCP:LISTEN -i :8185 >/dev/null && echo "Todoist upstream 8185: UP" || echo "Todoist upstream 8185: DEAD"
+
+# Calendar — proxy 8188, supergateway upstream 8187
+time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8188/mcp
+lsof -ti -sTCP:LISTEN -i :8187 >/dev/null && echo "Calendar upstream 8187: UP" || echo "Calendar upstream 8187: DEAD"
 ```
+
+A 401 from a bridge proxy is **healthy** (bearer-auth enforced per the B1 bridge enforcement work) — but only when paired with an `UP` on its upstream port. If upstream is DEAD, kickstart the launchd service (see Recommendations).
 
 Also check Docker containers and launchd services:
 ```bash
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>&1
-launchctl print gui/$(id -u)/com.qmd 2>&1 | head -6
+launchctl print gui/$(id -u)/com.qmd-server 2>&1 | head -6
+launchctl print gui/$(id -u)/com.qmd-proxy 2>&1 | head -6
 launchctl print gui/$(id -u)/com.apple-notes-mcp 2>&1 | head -6
 launchctl print gui/$(id -u)/com.todoist-mcp 2>&1 | head -6
+launchctl print gui/$(id -u)/com.calendar-mcp 2>&1 | head -6
 ```
 
 ## Phase 2: MCP Service Stats
@@ -200,6 +214,8 @@ List any issues found with actionable fix commands. Examples:
 - Docker container unhealthy: suggest `docker logs <name> --tail 50`
 - JWT token expiry approaching: warn with date
 
+**Calibration — don't chase transient ECONNREFUSED.** The bridge proxies (8184/8186/8188) log `upstream error: connect ECONNREFUSED` whenever a forwarded request arrives during the ~50-200ms window when the supergateway child restarts. Steady-state rate is **~4-10 events/hour per bridge** — this is NOT a service outage; it's a race between the proxy and the restarting child. Only recommend kickstart when the rate spikes sharply (e.g. 50+/hour for many hours) OR when `lsof -ti -sTCP:LISTEN -i :<upstream-port>` returns empty (the upstream is genuinely dead, not just momentarily unreachable). Recommending `launchctl kickstart -k` on a low-rate baseline is a placebo — 2026-04-20 diagnostic session confirmed the supergateways had never crashed despite ~120 ECONNREFUSED events over 28h.
+
 If everything is healthy, say so:
 > All 8 memory layers operational. No issues detected.
 ```
@@ -207,10 +223,12 @@ If everything is healthy, say so:
 ## Reference: Known Quirks
 
 - **QMD proxy**: port 8181 is a TCP proxy to 8182. If proxy fails but QMD is up, check `~/.cache/qmd/proxy.mjs`
-- **SimpleMem health**: use `/api/health` not the MCP SSE URL (SSE hangs on GET)
-- **SimpleMem JWT**: token in SIMPLEMEM_URL has an expiry — check `exp` claim
+- **Bridge proxy / upstream split (Apple Notes / Todoist / Calendar)**: the public port (8184/8186/8188) is a proxy that enforces bearer-auth, with a supergateway upstream on a separate port (8183/8185/8187). A bare `curl` returns **401** from the proxy *even when the upstream is dead* — so the proxy-level check is a necessary-but-not-sufficient signal. Always pair it with `lsof -ti :<upstream>` to confirm the upstream is listening. Seen 2026-04-20: Todoist + Calendar upstreams had died; proxies still returned 401; `launchctl kickstart -k gui/$(id -u)/com.{todoist,calendar}-mcp` brought them back.
+- **SimpleMem health**: use `/api/health` not the MCP SSE URL (SSE hangs on GET). NOTE: SimpleMem was replaced by Honcho on 2026-04-06 — expect DOWN.
+- **SimpleMem JWT**: token in SIMPLEMEM_URL has an expiry — check `exp` claim (moot post-Honcho)
+- **Honcho health endpoint**: no `/health` route; `/v1/workspaces` returns 404 and `/v3/workspaces/list` returns 405. Use `/openapi.json` (reliable 200) or trust `docker ps` `(healthy)` which comes from Honcho's own internal probe
 - **QMD embed under Bun**: `$BUN_INSTALL` env var causes `qmd embed` to run under Bun, which lacks sqlite-vec. Run under Node instead: `node /Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js embed`
 - **Hindsight not in health monitor**: it is NOT in the `mcpEndpoints` array in `src/index.ts` — only checked by this skill
 - **Apple Container**: containers are ephemeral, spun up per-message. `container list` showing nothing is normal when idle
 - **Vault `.pageindex/`**: created lazily per-directory when PDFs are indexed via Telegram auto-trigger or IPC. Absence is normal — only flag if a specific PDF was expected to be indexed
-- **Hindsight**: runs as a native Node process, NOT a Docker container. Use `lsof -i :8889` to find PID, not `docker logs`
+- **Hindsight**: Python worker (`hindsight-api --host 127.0.0.1 --port 8888`, logs to `/tmp/hindsight.log`) fronted by a resilient Node proxy (`~/.cache/hindsight-proxy/proxy-resilient.mjs` on 0.0.0.0:8889). `lsof -i :8889` returns the **proxy** PID, not the worker. For the worker use `lsof -i :8888` or `pgrep -fl hindsight-api`. A 200 on the proxy URL does not prove the worker is alive — send a JSON-RPC `initialize` to confirm end-to-end reachability.
