@@ -17,6 +17,8 @@ export interface KgQueryInput {
   hops?: number;
   limit?: number;
   from_entity_id?: string;
+  callerGroup?: string;
+  callerIsMain?: boolean;
 }
 
 export interface KgEntity {
@@ -54,6 +56,31 @@ function normalizeLimit(n: number | undefined): number {
 }
 
 /**
+ * Build a visibility WHERE clause fragment for entity/edge SELECTs. Main
+ * callers see everything (no filter). Non-main callers see rows whose
+ * visibility is 'public' or equal to their own group_folder. Callers with
+ * no context at all (neither callerIsMain nor callerGroup) are denied by
+ * pinning visibility to a sentinel-impossible value — this is a fail-safe
+ * that catches forgotten plumbing at call sites.
+ */
+function visibilityClause(
+  column: string,
+  input: KgQueryInput,
+): { clause: string; params: string[] } {
+  if (input.callerIsMain) return { clause: '', params: [] };
+  if (!input.callerGroup) {
+    // Fail-safe: no caller context -> return only a sentinel-impossible value.
+    // IPC call sites always supply callerGroup; direct in-process
+    // callers must opt in explicitly.
+    return { clause: `AND ${column} = ?`, params: ['__none__'] };
+  }
+  return {
+    clause: `AND ${column} IN (?, ?)`,
+    params: ['public', input.callerGroup],
+  };
+}
+
+/**
  * Find matched entities by canonical name (exact) or alias match (scoped by
  * entity_type if provided). Case-insensitive on alias lookup.
  */
@@ -63,11 +90,13 @@ function findMatched(
   limit: number,
 ): KgEntity[] {
   if (input.from_entity_id) {
+    const vis = visibilityClause('visibility', input);
     const row = db
       .prepare(
-        'SELECT id, canonical_name, type, confidence, source_doc FROM entities WHERE id = ?',
+        `SELECT id, canonical_name, type, confidence, source_doc FROM entities
+         WHERE id = ? ${vis.clause}`,
       )
-      .get(input.from_entity_id) as KgEntity | undefined;
+      .get(input.from_entity_id, ...vis.params) as KgEntity | undefined;
     return row ? [row] : [];
   }
 
@@ -78,6 +107,8 @@ function findMatched(
   const typeClause = input.entity_type ? 'AND e.type = ?' : '';
   if (input.entity_type) params.push(input.entity_type);
 
+  const vis = visibilityClause('e.visibility', input);
+
   // Union of exact canonical match + alias match, scoped by type filter.
   const sql = `
     SELECT DISTINCT e.id, e.canonical_name, e.type, e.confidence, e.source_doc
@@ -87,9 +118,12 @@ function findMatched(
       OR e.id IN (SELECT entity_id FROM aliases WHERE alias = ?)
     )
     ${typeClause}
+    ${vis.clause}
     LIMIT ?
   `;
-  const all = db.prepare(sql).all(q, q, ...params, limit) as KgEntity[];
+  const all = db
+    .prepare(sql)
+    .all(q, q, ...params, ...vis.params, limit) as KgEntity[];
   return all;
 }
 
@@ -101,7 +135,8 @@ function traverse(
   db: Database,
   seedIds: string[],
   maxHops: number,
-  relationFilter?: string,
+  relationFilter: string | undefined,
+  input: KgQueryInput,
 ): { neighbors: KgEntity[]; edges: KgEdge[] } {
   if (seedIds.length === 0 || maxHops === 0) {
     return { neighbors: [], edges: [] };
@@ -115,13 +150,16 @@ function traverse(
   const relClause = relationFilter ? 'AND relation = ?' : '';
   const relParam: string[] = relationFilter ? [relationFilter] : [];
 
+  const edgeVis = visibilityClause('visibility', input);
+  const entityVis = visibilityClause('visibility', input);
+
   const forward = db.prepare(
     `SELECT source_id, target_id, relation, evidence FROM edges
-     WHERE source_id IN (SELECT value FROM json_each(?)) ${relClause}`,
+     WHERE source_id IN (SELECT value FROM json_each(?)) ${relClause} ${edgeVis.clause}`,
   );
   const reverse = db.prepare(
     `SELECT source_id, target_id, relation, evidence FROM edges
-     WHERE target_id IN (SELECT value FROM json_each(?)) ${relClause}`,
+     WHERE target_id IN (SELECT value FROM json_each(?)) ${relClause} ${edgeVis.clause}`,
   );
 
   for (let hop = 0; hop < maxHops; hop++) {
@@ -129,7 +167,11 @@ function traverse(
     const frontierJson = JSON.stringify([...frontier]);
     const nextFrontier = new Set<string>();
 
-    for (const row of forward.all(frontierJson, ...relParam) as KgEdge[]) {
+    for (const row of forward.all(
+      frontierJson,
+      ...relParam,
+      ...edgeVis.params,
+    ) as KgEdge[]) {
       collectedEdges.push(row);
       if (!visited.has(row.target_id)) {
         visited.add(row.target_id);
@@ -137,7 +179,11 @@ function traverse(
         nextFrontier.add(row.target_id);
       }
     }
-    for (const row of reverse.all(frontierJson, ...relParam) as KgEdge[]) {
+    for (const row of reverse.all(
+      frontierJson,
+      ...relParam,
+      ...edgeVis.params,
+    ) as KgEdge[]) {
       collectedEdges.push(row);
       if (!visited.has(row.source_id)) {
         visited.add(row.source_id);
@@ -154,9 +200,9 @@ function traverse(
     neighbors = db
       .prepare(
         `SELECT id, canonical_name, type, confidence, source_doc FROM entities
-         WHERE id IN (SELECT value FROM json_each(?))`,
+         WHERE id IN (SELECT value FROM json_each(?)) ${entityVis.clause}`,
       )
-      .all(idJson) as KgEntity[];
+      .all(idJson, ...entityVis.params) as KgEntity[];
   }
 
   // Deduplicate edges by id tuple (source,target,relation).
@@ -195,6 +241,7 @@ export function queryKg(dbPath: string, input: KgQueryInput): KgQueryResult {
       seedIds,
       hops,
       input.relation_type,
+      input,
     );
     return {
       success: true,

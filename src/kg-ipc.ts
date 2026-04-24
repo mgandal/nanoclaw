@@ -19,7 +19,7 @@ export const DEFAULT_KG_DB_PATH = path.join(
 export async function handleKgIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
-  _isMain: boolean,
+  isMain: boolean,
   dataDir: string,
   dbPath: string = DEFAULT_KG_DB_PATH,
 ): Promise<boolean> {
@@ -62,6 +62,8 @@ export async function handleKgIpc(
     hops: data.hops as number | undefined,
     limit: data.limit as number | undefined,
     from_entity_id: fromEntityId,
+    callerGroup: sourceGroup,
+    callerIsMain: isMain,
   };
 
   try {
