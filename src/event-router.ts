@@ -108,6 +108,43 @@ const DEFAULT_CLASSIFICATION: Classification = {
 
 const DEFAULT_OLLAMA_TIMEOUT_MS = 15_000;
 
+// ─── C12: Sanitize Ollama-derived classification fields ──────────────────────
+//
+// Ollama classifies attacker-controlled email bodies. The returned `topic`
+// and `summary` then flow into urgentTopics matching (routing), bus message
+// payloads (downstream prompts), and system alerts. Treat Ollama output as
+// adversarial: bound length, strip structural tokens (XML tags, control
+// chars, markdown headers), and collapse whitespace for `summary`.
+//
+// Sanitizing at the parse boundary means every consumer reads an
+// already-bounded string — no need to re-implement caps everywhere.
+
+export const CLASSIFICATION_TOPIC_MAX_LEN = 80;
+export const CLASSIFICATION_SUMMARY_MAX_LEN = 500;
+
+export function sanitizeClassificationText(
+  value: unknown,
+  mode: 'topic' | 'summary',
+): string {
+  if (typeof value !== 'string') return '';
+  // eslint-disable-next-line no-control-regex
+  let s = value.replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '');
+  // Strip XML/HTML tags wholesale — attackers use them to inject pseudo
+  // agent/system prompts in downstream contexts.
+  s = s.replace(/<[^>]*>/g, '');
+  if (mode === 'topic') {
+    // Topic is a short categorical label — restrict to word chars, hyphens,
+    // colons, spaces. This also strips `#`, `*`, `---`, quotes.
+    s = s.replace(/[^\w\-:\s]/g, '');
+    s = s.replace(/\s+/g, ' ').trim();
+    return s.slice(0, CLASSIFICATION_TOPIC_MAX_LEN);
+  }
+  // Summary — allow natural punctuation but collapse all whitespace
+  // (including newlines) to a single space.
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.slice(0, CLASSIFICATION_SUMMARY_MAX_LEN);
+}
+
 // ─── EventRouter ──────────────────────────────────────────────────────────────
 
 export class EventRouter {
@@ -291,13 +328,25 @@ export class EventRouter {
 
       const parsed = JSON.parse(jsonMatch[0]) as Partial<Classification>;
 
+      // C12: treat Ollama `topic` and `summary` as adversarial. Clamp
+      // length, strip XML/control chars, collapse whitespace — so every
+      // downstream consumer (urgentTopics matching, bus payloads, logs,
+      // alerts) reads an already-bounded string.
+      const rawTopic =
+        typeof parsed.topic === 'string' ? parsed.topic : 'unknown';
+      const rawSummary =
+        typeof parsed.summary === 'string' ? parsed.summary : 'No summary';
+      const topic =
+        sanitizeClassificationText(rawTopic, 'topic') || 'unknown';
+      const summary =
+        sanitizeClassificationText(rawSummary, 'summary') || 'No summary';
+
       return {
         importance:
           typeof parsed.importance === 'number' ? parsed.importance : 0.5,
         urgency: typeof parsed.urgency === 'number' ? parsed.urgency : 0.5,
-        topic: typeof parsed.topic === 'string' ? parsed.topic : 'unknown',
-        summary:
-          typeof parsed.summary === 'string' ? parsed.summary : 'No summary',
+        topic,
+        summary,
         suggestedRouting: this.isValidRouting(parsed.suggestedRouting)
           ? parsed.suggestedRouting
           : 'notify',

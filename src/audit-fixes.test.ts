@@ -851,3 +851,35 @@ describe('CREDENTIAL_PROXY_HOST validation (C11)', () => {
     expect(source).toMatch(/throw new Error\([\s\S]*CREDENTIAL_PROXY_HOST/);
   });
 });
+
+// ─────────────────────────────────────────────────
+// 32. C12 — sanitize Ollama classification at parse boundary
+// ─────────────────────────────────────────────────
+describe('Ollama classification sanitization (C12)', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/event-router.ts'),
+    'utf-8',
+  );
+
+  it('exports sanitizeClassificationText and length caps', () => {
+    expect(source).toContain('export function sanitizeClassificationText');
+    expect(source).toContain('CLASSIFICATION_TOPIC_MAX_LEN');
+    expect(source).toContain('CLASSIFICATION_SUMMARY_MAX_LEN');
+  });
+
+  it('parseClassification calls sanitizeClassificationText', () => {
+    // Regression guard: if someone refactors parseClassification and drops
+    // the sanitizer, the grep will catch it. Match the method definition
+    // (not the call site) by anchoring on `private parseClassification(`.
+    const defMatch = source.match(
+      /private parseClassification\([\s\S]*?^  }/m,
+    );
+    expect(defMatch).not.toBeNull();
+    const parseBlock = defMatch![0];
+    expect(parseBlock).toContain('sanitizeClassificationText');
+    expect(parseBlock).toMatch(/sanitizeClassificationText\([^,]+,\s*'topic'\)/);
+    expect(parseBlock).toMatch(
+      /sanitizeClassificationText\([^,]+,\s*'summary'\)/,
+    );
+  });
+});
