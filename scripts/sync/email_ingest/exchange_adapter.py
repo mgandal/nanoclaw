@@ -3,6 +3,7 @@
 import json
 import logging
 import math
+import select
 import subprocess
 import time
 from pathlib import Path
@@ -123,13 +124,27 @@ def _run_exchange(args: list[str], timeout: int = 30) -> str:
     read_size = 64 * 1024  # 64 KB chunks
     try:
         while True:
-            if time.time() > deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
                 log.warning(
                     "exchange-mail.sh %s timed out after %ds", args[0], timeout
                 )
                 _kill_and_reap(proc)
                 return ""
-            chunk = proc.stdout.read(read_size) if proc.stdout else b""
+
+            # C17 followup: bound the read on the deadline. The old
+            # `proc.stdout.read(64KB)` blocks until bytes arrive OR EOF,
+            # so a child that opens stdout and hangs without writing
+            # would wedge the ingest forever. select() yields readiness
+            # at the deadline, letting the loop re-check `remaining <= 0`.
+            if not proc.stdout:
+                break
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not ready:
+                # Timeout fired — loop head will enforce deadline.
+                continue
+
+            chunk = proc.stdout.read(read_size)
             if not chunk:
                 break
             if len(buf) + len(chunk) > EXCHANGE_STDOUT_MAX_BYTES:

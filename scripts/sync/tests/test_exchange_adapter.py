@@ -133,17 +133,57 @@ def test_parse_read_output_accepts_dict():
     assert parse_read_output(raw)["id"] == "msg1"
 
 
+def _preloaded_pipe(data: bytes):
+    """Build a real OS pipe that yields `data` then EOF.
+
+    Returns a file object wrapping the read fd. Because it is a real fd,
+    `select.select()` in the production path works correctly — fixes the
+    breakage of duck-typed fake readers when `_run_exchange` gained a
+    select() call in the hanging-child followup.
+
+    For payloads larger than the OS pipe buffer (~64 KB on macOS), a
+    daemon writer thread feeds the pipe while the consumer drains. The
+    thread closes the write end once all bytes are delivered, signalling
+    EOF.
+    """
+    import os
+    import threading
+    read_fd, write_fd = os.pipe()
+    if not data:
+        os.close(write_fd)
+        return os.fdopen(read_fd, "rb", buffering=0)
+
+    def _feed():
+        try:
+            os.write(write_fd, data)
+        except BrokenPipeError:
+            pass  # consumer closed early (e.g., cap exceeded + kill)
+        finally:
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+
+    threading.Thread(target=_feed, daemon=True).start()
+    return os.fdopen(read_fd, "rb", buffering=0)
+
+
+def _empty_pipe():
+    """Build a real OS pipe that is empty and already EOF'd."""
+    return _preloaded_pipe(b"")
+
+
 def test_exchange_stdout_cap_truncates_oversize_output():
     """`_run_exchange` must bound stdout to EXCHANGE_STDOUT_MAX_BYTES and
     return "" for anything bigger. Simulates a runaway bridge."""
     from email_ingest import exchange_adapter as mod
-    # Build a fake Popen that spits out more than the cap
+    # Build a fake Popen whose stdout is a real pipe preloaded with >cap bytes.
     oversize = b"X" * (EXCHANGE_STDOUT_MAX_BYTES + 1024)
 
     class FakePopen:
         def __init__(self, *args, **kwargs):
-            self.stdout = _FakeReader(oversize)
-            self.stderr = _FakeReader(b"")
+            self.stdout = _preloaded_pipe(oversize)
+            self.stderr = _empty_pipe()
             self.pid = 99999
             self._killed = False
             self._terminated = False
@@ -159,25 +199,6 @@ def test_exchange_stdout_cap_truncates_oversize_output():
 
         def poll(self):
             return None
-
-    class _FakeReader:
-        def __init__(self, buf):
-            self._buf = buf
-            self._pos = 0
-
-        def read(self, n=-1):
-            if self._pos >= len(self._buf):
-                return b""
-            if n < 0 or n > len(self._buf) - self._pos:
-                chunk = self._buf[self._pos:]
-                self._pos = len(self._buf)
-            else:
-                chunk = self._buf[self._pos:self._pos + n]
-                self._pos += n
-            return chunk
-
-        def close(self):
-            pass
 
     fake_script = MagicMock()
     fake_script.exists.return_value = True
@@ -195,8 +216,8 @@ def test_exchange_stdout_cap_passes_small_output():
 
     class FakePopen:
         def __init__(self, *args, **kwargs):
-            self.stdout = _FakeReader(small_json)
-            self.stderr = _FakeReader(b"")
+            self.stdout = _preloaded_pipe(small_json)
+            self.stderr = _empty_pipe()
             self.pid = 99999
 
         def wait(self, timeout=None):
@@ -211,24 +232,76 @@ def test_exchange_stdout_cap_passes_small_output():
         def poll(self):
             return 0
 
-    class _FakeReader:
-        def __init__(self, buf):
-            self._buf = buf
-            self._pos = 0
-
-        def read(self, n=-1):
-            if self._pos >= len(self._buf):
-                return b""
-            chunk = self._buf[self._pos:]
-            self._pos = len(self._buf)
-            return chunk
-
-        def close(self):
-            pass
-
     fake_script = MagicMock()
     fake_script.exists.return_value = True
     with patch.object(mod, "EXCHANGE_SCRIPT", fake_script), \
          patch.object(mod.subprocess, "Popen", FakePopen):
         out = mod._run_exchange(["search", "--since", "1"], timeout=5)
     assert out == small_json.decode("utf-8")
+
+
+# ─────────────────────────────────────────────────
+# C17 followup: hanging-child deadline enforcement via select.select
+# ─────────────────────────────────────────────────
+#
+# Prior fix (commit b2a875f3) guarded against runaway STDOUT volume but
+# NOT against a child that opens stdout, writes nothing, and hangs. The
+# old `proc.stdout.read(64KB)` blocks forever in that scenario because
+# the deadline check only runs between reads. Fix: use
+# `select.select([stdout], [], [], remaining)` so the read is actually
+# bounded by the deadline.
+
+
+def test_c17_hanging_child_triggers_deadline():
+    """A child that opens stdout but never writes must NOT wedge the
+    adapter past its timeout. `_run_exchange` should kill + return ""."""
+    import os
+    import time as time_mod
+    from email_ingest import exchange_adapter as mod
+
+    # Real os.pipe(): write end stays open (simulates a child still
+    # running, stdout open), read end gets no bytes. select() will
+    # block on this fd until the deadline fires, then the loop kills.
+    read_fd, write_fd = os.pipe()
+    reader = os.fdopen(read_fd, "rb", buffering=0)
+
+    class HangingPopen:
+        def __init__(self, *args, **kwargs):
+            self.stdout = reader
+            self.stderr = _empty_pipe()
+            self.pid = 77777
+            self._killed = False
+
+        def wait(self, timeout=None):
+            # If we get here without a kill first, the test is broken.
+            if not self._killed:
+                raise AssertionError(
+                    "wait() called before kill() — deadline not enforced"
+                )
+            return -9
+
+        def kill(self):
+            self._killed = True
+
+        def poll(self):
+            return -9 if self._killed else None
+
+    fake_script = MagicMock()
+    fake_script.exists.return_value = True
+    # Tight timeout so the test runs fast.
+    start = time_mod.time()
+    try:
+        with patch.object(mod, "EXCHANGE_SCRIPT", fake_script), \
+             patch.object(mod.subprocess, "Popen", HangingPopen):
+            out = mod._run_exchange(["search", "--since", "1"], timeout=1)
+        elapsed = time_mod.time() - start
+        # Returned empty string (kill happened) and did not wedge forever.
+        assert out == ""
+        # Deadline enforcement: must finish near the 1-s timeout, not
+        # indefinitely. Allow generous slack (3 s) for CI scheduler jitter.
+        assert elapsed < 3.0, f"deadline not enforced: elapsed={elapsed:.2f}s"
+    finally:
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass

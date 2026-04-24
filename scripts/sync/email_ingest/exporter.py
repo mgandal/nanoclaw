@@ -19,13 +19,38 @@ import yaml
 _HINDSIGHT_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "192.168.64.1"})
 
 
+def _effective_allowed_hosts() -> frozenset[str]:
+    """Baseline allowlist plus any hosts listed in HINDSIGHT_ALLOWED_HOSTS.
+
+    C18 followup: the baseline frozenset is defensible but brittle if the
+    Apple Container bridge IP drifts (or a second bridge gets added).
+    `HINDSIGHT_ALLOWED_HOSTS=<host1>,<host2>,...` in the env is ADDITIVE —
+    it extends the baseline; it cannot subtract from it. Empty tokens
+    are ignored.
+
+    Read at call time so operators can flip the env without restarting
+    long-running Python services (not a concern for the sync cron, which
+    is short-lived, but cheap to support and future-proof).
+    """
+    extra = os.environ.get("HINDSIGHT_ALLOWED_HOSTS", "")
+    if not extra:
+        return _HINDSIGHT_ALLOWED_HOSTS
+    extra_hosts = {tok.strip() for tok in extra.split(",") if tok.strip()}
+    if not extra_hosts:
+        return _HINDSIGHT_ALLOWED_HOSTS
+    return _HINDSIGHT_ALLOWED_HOSTS | extra_hosts
+
+
 def hindsight_url_is_safe(url: Optional[str]) -> bool:
     """Return True iff `url` is safe to POST email content to.
 
     C18 defense — reject anything that could exfiltrate:
     - non-http schemes (https, file, ftp, etc.)
     - missing scheme (urlparse quirks)
-    - remote hosts (anything not in _HINDSIGHT_ALLOWED_HOSTS)
+    - remote hosts (anything not in the effective allowlist)
+
+    The effective allowlist is `_HINDSIGHT_ALLOWED_HOSTS` plus any hosts
+    in the `HINDSIGHT_ALLOWED_HOSTS` env var (see `_effective_allowed_hosts`).
     """
     if not url or not isinstance(url, str):
         return False
@@ -37,7 +62,7 @@ def hindsight_url_is_safe(url: Optional[str]) -> bool:
         return False
     if not parsed.hostname:
         return False
-    return parsed.hostname in _HINDSIGHT_ALLOWED_HOSTS
+    return parsed.hostname in _effective_allowed_hosts()
 
 
 def _hindsight_auth_headers() -> dict:
@@ -277,7 +302,7 @@ def retain_in_hindsight(
         log.warning(
             "Skipping Hindsight retain: unsafe URL %r (allowed hosts: %s)",
             hindsight_url,
-            sorted(_HINDSIGHT_ALLOWED_HOSTS),
+            sorted(_effective_allowed_hosts()),
         )
         return
     try:

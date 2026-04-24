@@ -350,3 +350,74 @@ def test_retain_in_hindsight_no_bearer_when_env_unset():
         kwargs = mock_req.post.call_args.kwargs
         headers = kwargs.get("headers") or {}
         assert "Authorization" not in headers
+
+
+# ─────────────────────────────────────────────────
+# C18 followup: HINDSIGHT_ALLOWED_HOSTS env override
+# ─────────────────────────────────────────────────
+#
+# The baseline allowlist {localhost, 127.0.0.1, 192.168.64.1} is
+# defensible but brittle if the Apple Container bridge IP ever drifts.
+# Additive env override lets an operator extend the allowlist (e.g.
+# to a new bridge IP) without a code change. The env is
+# ADDITIVE — never reduces the baseline.
+
+
+def test_c18_allowed_hosts_env_adds_new_host():
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    env["HINDSIGHT_ALLOWED_HOSTS"] = "192.168.65.1"
+    with patch.dict(os.environ, env, clear=True):
+        assert hindsight_url_is_safe("http://192.168.65.1:8889") is True
+
+
+def test_c18_allowed_hosts_env_supports_comma_separated_list():
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    env["HINDSIGHT_ALLOWED_HOSTS"] = "10.0.0.5,172.16.1.1, 192.168.99.99"
+    with patch.dict(os.environ, env, clear=True):
+        assert hindsight_url_is_safe("http://10.0.0.5:8889") is True
+        assert hindsight_url_is_safe("http://172.16.1.1:8889") is True
+        # Whitespace in the list is tolerated.
+        assert hindsight_url_is_safe("http://192.168.99.99:8889") is True
+
+
+def test_c18_allowed_hosts_env_does_not_remove_baseline():
+    """Setting the env var must NOT drop the built-in loopback hosts —
+    the env is additive, never subtractive."""
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    env["HINDSIGHT_ALLOWED_HOSTS"] = "192.168.65.1"
+    with patch.dict(os.environ, env, clear=True):
+        assert hindsight_url_is_safe("http://localhost:8889") is True
+        assert hindsight_url_is_safe("http://127.0.0.1:8889") is True
+        assert hindsight_url_is_safe("http://192.168.64.1:8889") is True
+
+
+def test_c18_allowed_hosts_env_unset_falls_back_to_baseline():
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    with patch.dict(os.environ, env, clear=True):
+        assert hindsight_url_is_safe("http://localhost:8889") is True
+        assert hindsight_url_is_safe("http://attacker.com:8889") is False
+
+
+def test_c18_allowed_hosts_env_empty_or_whitespace_ignored():
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    env["HINDSIGHT_ALLOWED_HOSTS"] = "  ,,  ,"
+    with patch.dict(os.environ, env, clear=True):
+        # Empty/whitespace tokens don't accidentally grant access
+        assert hindsight_url_is_safe("http://attacker.com:8889") is False
+        # Baseline still works
+        assert hindsight_url_is_safe("http://localhost:8889") is True
+
+
+def test_c18_allowed_hosts_env_still_enforces_http_scheme():
+    """Adding a host via env must NOT override the scheme check —
+    `https://added-host` is still rejected (we only serve plain HTTP)."""
+    import os
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_ALLOWED_HOSTS"}
+    env["HINDSIGHT_ALLOWED_HOSTS"] = "192.168.65.1"
+    with patch.dict(os.environ, env, clear=True):
+        assert hindsight_url_is_safe("https://192.168.65.1:8889") is False
