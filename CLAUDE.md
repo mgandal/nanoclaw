@@ -4,6 +4,10 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Primary languages: TypeScript (main), Python (Cognee/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), Cognee (memory/KG), Todoist API, Slack/Telegram bots, Docker services, Ollama for local LLMs.
 
+## Response Length
+
+Keep responses to the user very concise — they overtake the user's window size otherwise. No tables, headers, or insight blocks unless explicitly requested. Short sentences, direct answers, skip the recap.
+
 ## Testing Policy
 
 ALWAYS run tests and verify fixes before declaring them done. Run the relevant test suite (`bun test` or targeted `bun --bun vitest run src/foo.test.ts`) or manually verify the fix works before committing or moving on. Never ship code without confirming it works. Use test-first (TDD) methodology when fixing bugs.
