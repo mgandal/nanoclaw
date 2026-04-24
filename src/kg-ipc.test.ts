@@ -199,4 +199,68 @@ describe('handleKgIpc', () => {
     );
     expect(fs.existsSync(p)).toBe(true);
   });
+
+  it('non-main caller cannot read main-visibility entities via IPC', async () => {
+    fs.rmSync(dbPath, { force: true });
+    const db = new Database(dbPath);
+    try {
+      seedMiniGraph(db, [
+        {
+          id: 'private-paper',
+          canonical_name: 'PrivateGrant2025',
+          type: 'grant',
+          visibility: 'main',
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+    const r = await handleKgIpc(
+      {
+        type: 'kg_query',
+        requestId: 'req-nonmain-1',
+        query: 'PrivateGrant2025',
+      },
+      'telegram_lab-claw',
+      false,
+      dataDir,
+      dbPath,
+    );
+    expect(r).toBe(true);
+    const result = readResult('telegram_lab-claw', 'req-nonmain-1') as any;
+    expect(result.success).toBe(true);
+    expect(result.matched).toEqual([]);
+  });
+
+  it('main caller reads the same main-visibility entity fine', async () => {
+    fs.rmSync(dbPath, { force: true });
+    const db = new Database(dbPath);
+    try {
+      seedMiniGraph(db, [
+        {
+          id: 'private-paper',
+          canonical_name: 'PrivateGrant2025',
+          type: 'grant',
+          visibility: 'main',
+        },
+      ]);
+    } finally {
+      db.close();
+    }
+    const r = await handleKgIpc(
+      {
+        type: 'kg_query',
+        requestId: 'req-main-1',
+        query: 'PrivateGrant2025',
+      },
+      'telegram_claire',
+      true,
+      dataDir,
+      dbPath,
+    );
+    expect(r).toBe(true);
+    const result = readResult('telegram_claire', 'req-main-1') as any;
+    expect(result.success).toBe(true);
+    expect(result.matched.map((m: any) => m.id)).toEqual(['private-paper']);
+  });
 });
