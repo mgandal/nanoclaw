@@ -10,7 +10,18 @@ let tmpDir: string;
 let dataDir: string;
 let dbPath: string;
 
-function seedMiniGraph(db: Database): void {
+interface SeedEntity {
+  id: string;
+  canonical_name: string;
+  type: string;
+  visibility?: string;
+}
+
+const DEFAULT_SEED_ENTITIES: SeedEntity[] = [
+  { id: 'e1', canonical_name: 'Rachel Smith', type: 'person' },
+];
+
+function seedMiniGraph(db: Database, entities?: SeedEntity[]): void {
   db.exec(`
     CREATE TABLE entities (
       id TEXT PRIMARY KEY,
@@ -19,6 +30,7 @@ function seedMiniGraph(db: Database): void {
       metadata TEXT,
       source_doc TEXT,
       confidence REAL NOT NULL DEFAULT 1.0,
+      visibility TEXT NOT NULL DEFAULT 'main',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -37,18 +49,26 @@ function seedMiniGraph(db: Database): void {
       evidence TEXT,
       source_doc TEXT,
       confidence REAL NOT NULL DEFAULT 1.0,
+      visibility TEXT NOT NULL DEFAULT 'main',
       created_by TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
   `);
-  db.prepare(
-    "INSERT INTO entities VALUES (?, ?, ?, '{}', ?, 1.0, datetime('now'), datetime('now'))",
-  ).run('e1', 'Rachel Smith', 'person', 'rachel.md');
-  db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')").run(
-    'Rachel Smith',
-    'person',
-    'e1',
+  const rows = entities ?? DEFAULT_SEED_ENTITIES;
+  const insertEntity = db.prepare(
+    "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, 1.0, ?, datetime('now'), datetime('now'))",
   );
+  const insertAlias = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
+  for (const row of rows) {
+    insertEntity.run(
+      row.id,
+      row.canonical_name,
+      row.type,
+      `${row.id}.md`,
+      row.visibility ?? 'main',
+    );
+    insertAlias.run(row.canonical_name, row.type, row.id);
+  }
 }
 
 function readResult(groupFolder: string, requestId: string): unknown {
