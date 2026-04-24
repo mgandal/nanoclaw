@@ -17,6 +17,7 @@ function seedMiniGraph(db: Database): void {
       metadata TEXT,
       source_doc TEXT,
       confidence REAL NOT NULL DEFAULT 1.0,
+      visibility TEXT NOT NULL DEFAULT 'main',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -36,30 +37,32 @@ function seedMiniGraph(db: Database): void {
       source_doc TEXT,
       confidence REAL NOT NULL DEFAULT 1.0,
       created_by TEXT NOT NULL,
+      visibility TEXT NOT NULL DEFAULT 'main',
       created_at TEXT NOT NULL
     );
   `);
 
   const ins = db.prepare(
-    "INSERT INTO entities VALUES (?, ?, ?, '{}', ?, ?, datetime('now'), datetime('now'))",
+    "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?, ?, datetime('now'), datetime('now'))",
   );
   const al = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
   const ed = db.prepare(
-    "INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?, 1.0, 'test', datetime('now'))",
+    "INSERT INTO edges (id, source_id, target_id, relation, evidence, source_doc, confidence, created_by, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, 1.0, 'test', ?, datetime('now'))",
   );
 
-  ins.run('e-rachel', 'Rachel Smith', 'person', 'contacts/rachel.md', 1.0);
-  ins.run('e-braingo', 'BrainGO', 'project', 'state/projects.md', 1.0);
-  ins.run('e-apa', 'APA', 'project', 'state/projects.md', 1.0);
-  ins.run('e-grant', 'R01-MH137578', 'grant', 'state/grants.md', 1.0);
+  ins.run('e-rachel', 'Rachel Smith', 'person', 'contacts/rachel.md', 1.0, 'main');
+  ins.run('e-braingo', 'BrainGO', 'project', 'state/projects.md', 1.0, 'main');
+  ins.run('e-apa', 'APA', 'project', 'state/projects.md', 1.0, 'main');
+  ins.run('e-grant', 'R01-MH137578', 'grant', 'state/grants.md', 1.0, 'main');
   ins.run(
     'e-paper',
     'Smith 2026 (Nature)',
     'paper',
     'wiki/papers/smith.md',
     1.0,
+    'main',
   );
-  ins.run('e-miao', 'Miao Tang', 'person', 'contacts/miao.md', 0.7);
+  ins.run('e-miao', 'Miao Tang', 'person', 'contacts/miao.md', 0.7, 'main');
 
   al.run('Rachel Smith', 'person', 'e-rachel');
   al.run('Smith, Rachel', 'person', 'e-rachel');
@@ -76,6 +79,7 @@ function seedMiniGraph(db: Database): void {
     'member_of',
     'projects[]',
     'contacts/rachel.md',
+    'main',
   );
   ed.run(
     'ed-2',
@@ -84,6 +88,7 @@ function seedMiniGraph(db: Database): void {
     'member_of',
     'projects[]',
     'contacts/rachel.md',
+    'main',
   );
   ed.run(
     'ed-3',
@@ -92,6 +97,7 @@ function seedMiniGraph(db: Database): void {
     'authored',
     'first_author',
     'wiki/papers/smith.md',
+    'main',
   );
   ed.run(
     'ed-4',
@@ -100,6 +106,7 @@ function seedMiniGraph(db: Database): void {
     'funds_project',
     'grant line',
     'state/projects.md',
+    'main',
   );
   ed.run(
     'ed-5',
@@ -108,6 +115,7 @@ function seedMiniGraph(db: Database): void {
     'member_of',
     'projects[]',
     'contacts/miao.md',
+    'main',
   );
 }
 
@@ -210,5 +218,117 @@ describe('queryKg', () => {
   it('entity confidence preserved in output', () => {
     const result = queryKg(dbPath, { query: 'Miao Tang' });
     expect(result.matched[0].confidence).toBe(0.7);
+  });
+
+  it('main caller sees main + public + any group entities', () => {
+    const db = new Database(dbPath);
+    try {
+      const ins = db.prepare(
+        "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, 1.0, ?, datetime('now'), datetime('now'))",
+      );
+      const al = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
+      ins.run('e-mo-main', 'MainOnly', 'topic', 'state/a.md', 'main');
+      ins.run('e-mo-pub', 'MainOnly', 'topic', 'state/b.md', 'public');
+      ins.run('e-mo-lab', 'MainOnly', 'topic', 'state/c.md', 'telegram_lab-claw');
+      al.run('MainOnly', 'topic', 'e-mo-main');
+      al.run('MainOnly', 'topic', 'e-mo-pub');
+      al.run('MainOnly', 'topic', 'e-mo-lab');
+    } finally {
+      db.close();
+    }
+    const result = queryKg(dbPath, {
+      query: 'MainOnly',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
+    const ids = new Set(result.matched.map((m) => m.id));
+    expect(ids.has('e-mo-main')).toBe(true);
+    expect(ids.has('e-mo-pub')).toBe(true);
+    expect(ids.has('e-mo-lab')).toBe(true);
+  });
+
+  it('non-main caller sees only public + own-group entities (no main)', () => {
+    const db = new Database(dbPath);
+    try {
+      const ins = db.prepare(
+        "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, 1.0, ?, datetime('now'), datetime('now'))",
+      );
+      const al = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
+      ins.run('e-sh-main', 'Shared', 'topic', 'state/a.md', 'main');
+      ins.run('e-sh-pub', 'Shared', 'topic', 'state/b.md', 'public');
+      ins.run('e-sh-lab', 'Shared', 'topic', 'state/c.md', 'telegram_lab-claw');
+      ins.run('e-sh-code', 'Shared', 'topic', 'state/d.md', 'telegram_code-claw');
+      al.run('Shared', 'topic', 'e-sh-main');
+      al.run('Shared', 'topic', 'e-sh-pub');
+      al.run('Shared', 'topic', 'e-sh-lab');
+      al.run('Shared', 'topic', 'e-sh-code');
+    } finally {
+      db.close();
+    }
+    const result = queryKg(dbPath, {
+      query: 'Shared',
+      callerGroup: 'telegram_lab-claw',
+      callerIsMain: false,
+    });
+    const ids = new Set(result.matched.map((m) => m.id));
+    expect(ids.has('e-sh-pub')).toBe(true);
+    expect(ids.has('e-sh-lab')).toBe(true);
+    expect(ids.has('e-sh-main')).toBe(false);
+    expect(ids.has('e-sh-code')).toBe(false);
+  });
+
+  it('neighbor traversal respects visibility', () => {
+    const db = new Database(dbPath);
+    try {
+      const ins = db.prepare(
+        "INSERT INTO entities (id, canonical_name, type, metadata, source_doc, confidence, visibility, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, 1.0, ?, datetime('now'), datetime('now'))",
+      );
+      const al = db.prepare("INSERT INTO aliases VALUES (?, ?, ?, 'test')");
+      const ed = db.prepare(
+        "INSERT INTO edges (id, source_id, target_id, relation, evidence, source_doc, confidence, created_by, visibility, created_at) VALUES (?, ?, ?, ?, ?, ?, 1.0, 'test', ?, datetime('now'))",
+      );
+      ins.run('e-seed', 'seed', 'topic', 'state/seed.md', 'public');
+      ins.run('e-reach', 'reachable', 'topic', 'state/reach.md', 'public');
+      ins.run('e-hidden', 'hidden', 'topic', 'state/hidden.md', 'main');
+      al.run('seed', 'topic', 'e-seed');
+      al.run('reachable', 'topic', 'e-reach');
+      al.run('hidden', 'topic', 'e-hidden');
+      ed.run(
+        'ed-pub',
+        'e-seed',
+        'e-reach',
+        'relates_to',
+        'pub-ev',
+        'state/seed.md',
+        'public',
+      );
+      ed.run(
+        'ed-main',
+        'e-seed',
+        'e-hidden',
+        'relates_to',
+        'main-ev',
+        'state/seed.md',
+        'main',
+      );
+    } finally {
+      db.close();
+    }
+    const result = queryKg(dbPath, {
+      query: 'seed',
+      hops: 1,
+      callerGroup: 'telegram_lab-claw',
+      callerIsMain: false,
+    });
+    const neighborNames = new Set(
+      result.neighbors.map((n) => n.canonical_name),
+    );
+    expect(neighborNames.has('reachable')).toBe(true);
+    expect(neighborNames.has('hidden')).toBe(false);
+    const edgeKeys = new Set(
+      result.edges.map((e) => `${e.source_id}->${e.target_id}`),
+    );
+    expect(edgeKeys.has('e-seed->e-reach')).toBe(true);
+    expect(edgeKeys.has('e-seed->e-hidden')).toBe(false);
   });
 });
