@@ -48,6 +48,17 @@ SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 STATE_DIR_REL = Path("groups/global/state")
 
 
+def classify_visibility(source_doc: str | None) -> str:
+    """Return the visibility tag for a given source_doc path.
+
+    Current policy: every existing source directory is main-only.
+    This function is the single extension point — when an ingester
+    wants to mark content public or group-scoped, extend this
+    classifier, do not sprinkle calls at insert sites.
+    """
+    return "main"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -228,8 +239,8 @@ def write_to_db(db_path: Path, entities: list[dict], edges: list[dict]) -> dict:
                     """
                     INSERT INTO entities
                         (id, canonical_name, type, metadata, source_doc,
-                         confidence, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         confidence, visibility, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         entity_id,
@@ -238,6 +249,7 @@ def write_to_db(db_path: Path, entities: list[dict], edges: list[dict]) -> dict:
                         json.dumps(ent.get("metadata") or {}),
                         ent.get("source_doc"),
                         float(ent.get("confidence", 1.0)),
+                        classify_visibility(ent.get("source_doc")),
                         now,
                         now,
                     ),
@@ -287,8 +299,8 @@ def write_to_db(db_path: Path, entities: list[dict], edges: list[dict]) -> dict:
                 """
                 INSERT INTO edges
                     (id, source_id, target_id, relation, evidence, source_doc,
-                     confidence, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     confidence, visibility, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -298,6 +310,7 @@ def write_to_db(db_path: Path, entities: list[dict], edges: list[dict]) -> dict:
                     edge.get("evidence"),
                     edge.get("source_doc"),
                     1.0,
+                    classify_visibility(edge.get("source_doc")),
                     "bulk_ingest",
                     now,
                 ),
