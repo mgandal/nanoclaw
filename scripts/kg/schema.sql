@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS entities (
   metadata        TEXT,                     -- JSON blob
   source_doc      TEXT,                     -- vault path (or state file) that created this entity
   confidence      REAL NOT NULL DEFAULT 1.0,
+  visibility      TEXT NOT NULL DEFAULT 'main',  -- main|public|<group_folder>
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL
 );
@@ -31,6 +32,7 @@ CREATE TABLE IF NOT EXISTS edges (
   source_doc      TEXT,
   confidence      REAL NOT NULL DEFAULT 1.0,
   created_by      TEXT NOT NULL,            -- bulk_ingest|ollama|claude|agent:{group}|user
+  visibility      TEXT NOT NULL DEFAULT 'main',  -- main|public|<group_folder>
   created_at      TEXT NOT NULL
 );
 
@@ -52,3 +54,5 @@ CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 CREATE INDEX IF NOT EXISTS idx_review_pending ON review_queue(resolution) WHERE resolution IS NULL;
+CREATE INDEX IF NOT EXISTS idx_entities_visibility ON entities(visibility);
+CREATE INDEX IF NOT EXISTS idx_edges_visibility    ON edges(visibility);
