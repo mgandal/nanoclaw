@@ -336,8 +336,7 @@ export class EventRouter {
         typeof parsed.topic === 'string' ? parsed.topic : 'unknown';
       const rawSummary =
         typeof parsed.summary === 'string' ? parsed.summary : 'No summary';
-      const topic =
-        sanitizeClassificationText(rawTopic, 'topic') || 'unknown';
+      const topic = sanitizeClassificationText(rawTopic, 'topic') || 'unknown';
       const summary =
         sanitizeClassificationText(rawSummary, 'summary') || 'No summary';
 

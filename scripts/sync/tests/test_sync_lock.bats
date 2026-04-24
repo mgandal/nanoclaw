@@ -52,3 +52,31 @@ teardown() {
   [[ "$output" == *"HALT_AFTER_LOCK"* ]]
   [[ "$output" == *"Stale lock"* ]]
 }
+
+# ──────────────────────────────────────────────────────────────────────
+# C8: sync-area logs must be mode 0600 (they contain credential paths
+# and tracebacks). Source-level checks guard the chmod loop and the
+# extended rotation block — behavioural coverage would require a test
+# seam past HALT_AFTER_LOCK, which is more scaffolding than the fix
+# warrants.
+# ──────────────────────────────────────────────────────────────────────
+
+@test "C8: chmod loop covers all known sync-area log files" {
+  run grep -E 'chmod 0600' "$SCRIPT_PATH"
+  [ "$status" -eq 0 ]
+  # All five files must appear in the chmod targets.
+  grep -q 'LOG_FILE' "$SCRIPT_PATH"
+  grep -q 'LAUNCHD_STDOUT_LOG' "$SCRIPT_PATH"
+  grep -q 'LAUNCHD_STDERR_LOG' "$SCRIPT_PATH"
+  grep -q 'claude-ingest.log' "$SCRIPT_PATH"
+  grep -q 'telegram-ingest.log' "$SCRIPT_PATH"
+}
+
+@test "C8: trim block rotates launchd-stdout.log and launchd-stderr.log" {
+  # Regression guard: the original trim only touched LOG_FILE. The
+  # launchd logs are the ones that actually grew unbounded (launchd
+  # captured output independently of the in-script tee).
+  run grep -c 'LAUNCHD_STDOUT_LOG\|LAUNCHD_STDERR_LOG' "$SCRIPT_PATH"
+  [ "$status" -eq 0 ]
+  [ "$output" -ge 2 ]
+}

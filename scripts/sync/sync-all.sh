@@ -48,6 +48,19 @@ if [ "${HALT_AFTER_LOCK:-}" = "1" ]; then
   exit 0
 fi
 
+# C8: sync logs contain credential paths + tracebacks; mode them 0600
+# before we start appending. touch + chmod is idempotent and keeps the
+# existing file across runs. Cover all three live logs + two orphans
+# (claude-ingest / telegram-ingest) that no writer in-repo references
+# today but are world-readable on disk.
+LAUNCHD_STDOUT_LOG="$SCRIPT_DIR/launchd-stdout.log"
+LAUNCHD_STDERR_LOG="$SCRIPT_DIR/launchd-stderr.log"
+for f in "$LOG_FILE" "$LAUNCHD_STDOUT_LOG" "$LAUNCHD_STDERR_LOG" \
+         "$SCRIPT_DIR/claude-ingest.log" "$SCRIPT_DIR/telegram-ingest.log"; do
+  [ -e "$f" ] || touch "$f"
+  chmod 0600 "$f" 2>/dev/null || true
+done
+
 # Redirect all output to log (and stdout for launchd)
 exec > >(tee -a "$LOG_FILE") 2>&1
 
@@ -194,12 +207,18 @@ echo "=========================================="
 echo "SYNC COMPLETE: $(date) (errors: $ERRORS)"
 echo "=========================================="
 
-# Trim log file if over 1MB
-if [ -f "$LOG_FILE" ]; then
-    SIZE=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null)
+# C8: trim ALL live sync-area logs if over 1 MB, not just sync.log.
+# launchd-stdout.log was previously unrotated — it grew to 1 MB+ and held
+# duplicate copies of every `tee`-captured line plus anything written
+# before the exec redirect on line 59. Same 5000-line tail + 0600 chmod
+# for every file so a rotation does not reset permissions to umask.
+for logf in "$LOG_FILE" "$LAUNCHD_STDOUT_LOG" "$LAUNCHD_STDERR_LOG"; do
+    [ -f "$logf" ] || continue
+    SIZE=$(stat -f%z "$logf" 2>/dev/null || stat -c%s "$logf" 2>/dev/null)
     if [ "$SIZE" -gt 1048576 ] 2>/dev/null; then
-        tail -5000 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+        tail -5000 "$logf" > "$logf.tmp" && mv "$logf.tmp" "$logf"
+        chmod 0600 "$logf" 2>/dev/null || true
     fi
-fi
+done
 
 exit $ERRORS
