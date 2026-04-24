@@ -57,27 +57,62 @@ async function extractDocxText(filePath: string): Promise<string> {
 }
 
 /**
- * Download a Telegram file to a temp path, extract text, and clean up.
- * Returns extracted text or null if extraction fails.
+ * Save a binary attachment to the group's vault `00-inbox/` if the group has
+ * a writable mount configured. No-op for groups without a vault mount.
+ * Returns the saved path on success, null otherwise.
  */
-async function extractDocumentText(
+function saveToVaultInbox(
+  group: RegisteredGroup | undefined,
+  buf: Buffer,
+  fileName: string,
+): string | null {
+  const mounts = group?.containerConfig?.additionalMounts;
+  if (!mounts) return null;
+  for (const m of mounts) {
+    if (m.readonly) continue;
+    if (!fs.existsSync(m.hostPath)) continue;
+    const inboxDir = path.join(m.hostPath, '00-inbox');
+    try {
+      fs.mkdirSync(inboxDir, { recursive: true });
+      const dest = path.join(inboxDir, fileName);
+      fs.writeFileSync(dest, buf);
+      return dest;
+    } catch (err) {
+      logger.warn(
+        { fileName, inboxDir, err },
+        'Failed to save attachment to vault inbox',
+      );
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Download a Telegram document, extract text if possible, and return both the
+ * raw buffer and extracted text. Buffer is returned even when no extractor is
+ * registered for the extension, so callers can still persist the binary.
+ */
+async function downloadAndExtractDocument(
   fileUrl: string,
   fileName: string,
-): Promise<string | null> {
+): Promise<{ buf: Buffer; text: string | null } | null> {
+  const resp = await fetch(fileUrl);
+  if (!resp.ok) return null;
+  const buf = Buffer.from(await resp.arrayBuffer());
+
   const ext = fileName.includes('.')
     ? fileName.slice(fileName.lastIndexOf('.')).toLowerCase()
     : '';
   const extractor = EXTRACTABLE_EXTS[ext];
-  if (!extractor) return null;
+  if (!extractor) return { buf, text: null };
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-doc-'));
   const tmpFile = path.join(tmpDir, fileName);
   try {
-    const resp = await fetch(fileUrl);
-    if (!resp.ok) return null;
-    const buf = Buffer.from(await resp.arrayBuffer());
     fs.writeFileSync(tmpFile, buf);
-    return await extractor(tmpFile);
+    const text = await extractor(tmpFile);
+    return { buf, text };
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -617,8 +652,12 @@ export class TelegramChannel implements Channel {
         }
       }
 
-      // Try extracting text from binary documents (PDF, DOCX, etc.)
-      if (doc?.file_id && EXTRACTABLE_EXTS[ext]) {
+      const chatJid = `tg:${ctx.chat.id}`;
+      const group = this.opts.registeredGroups()[chatJid];
+
+      // Binary documents: save to vault inbox (if group has one) and try to
+      // extract text. PDFs get special handling (auto-indexing when long).
+      if (doc?.file_id) {
         // Special handling for PDFs: auto-index long documents
         if (ext === '.pdf') {
           const tmpDir = fs.mkdtempSync(
@@ -642,20 +681,9 @@ export class TelegramChannel implements Channel {
               await ctx.api.sendChatAction(ctx.chat.id, 'typing');
               const hash = computeFileHash(buf);
 
-              // Determine vault dir from group's additionalMounts config
-              const chatJid = `tg:${ctx.chat.id}`;
-              const group = this.opts.registeredGroups()[chatJid];
-              let vaultDir: string | undefined;
-              let inboxDir: string | undefined;
-              if (group?.containerConfig?.additionalMounts) {
-                for (const m of group.containerConfig.additionalMounts) {
-                  if (fs.existsSync(m.hostPath)) {
-                    inboxDir = path.join(m.hostPath, '00-inbox');
-                    vaultDir = inboxDir;
-                    break;
-                  }
-                }
-              }
+              // Resolve vault inbox (used by indexPdf for tree storage too)
+              const saved = saveToVaultInbox(group, buf, name);
+              const vaultDir = saved ? path.dirname(saved) : undefined;
 
               const result = await indexPdf(tmpFile, name, {
                 vaultDir,
@@ -664,18 +692,11 @@ export class TelegramChannel implements Channel {
               });
 
               if (result.success && result.tree) {
-                // Save PDF to vault 00-inbox/
-                if (inboxDir) {
-                  try {
-                    fs.mkdirSync(inboxDir, { recursive: true });
-                    fs.writeFileSync(path.join(inboxDir, name), buf);
-                    logger.info({ name, inboxDir }, 'PDF saved to vault inbox');
-                  } catch (saveErr) {
-                    logger.warn(
-                      { name, err: saveErr },
-                      'Failed to save PDF to vault inbox',
-                    );
-                  }
+                if (saved) {
+                  logger.info(
+                    { name, path: saved },
+                    'PDF saved to vault inbox',
+                  );
                 }
                 storeNonText(
                   ctx,
@@ -705,7 +726,8 @@ export class TelegramChannel implements Channel {
               }
             }
 
-            // Short PDF (≤20 pages) — use existing extraction flow
+            // Short PDF (≤20 pages) — save to vault, then extract
+            saveToVaultInbox(group, buf, name);
             try {
               const extracted = await extractPdfText(tmpFile);
               if (extracted && extracted.trim().length > 0) {
@@ -737,30 +759,46 @@ export class TelegramChannel implements Channel {
           return;
         }
 
-        // Non-PDF extractable documents (DOCX, etc.)
+        // Non-PDF binary: save the file to the vault inbox (if any) and try
+        // text extraction if we have an extractor for this extension.
+        // Files like .pptx/.xlsx have no host-side extractor — they land in
+        // 00-inbox/ so the in-container agent can read them with its own skill.
         try {
           const file = await ctx.api.getFile(doc.file_id);
           const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
-          const extracted = await extractDocumentText(url, name);
-          if (extracted && extracted.trim().length > 0) {
-            const maxChars = 50_000;
-            const truncated =
-              extracted.length > maxChars
-                ? extracted.slice(0, maxChars) +
-                  `\n\n[Truncated — ${extracted.length} chars total]`
-                : extracted;
-            storeNonText(ctx, `[Document: ${name}]\n\n${truncated}`);
-            logger.info(
-              { name, chars: extracted.length },
-              'Telegram document extracted',
-            );
-            return;
+          const result = await downloadAndExtractDocument(url, name);
+          if (result) {
+            const saved = saveToVaultInbox(group, result.buf, name);
+            if (saved) {
+              logger.info(
+                { name, path: saved },
+                'Telegram document saved to vault inbox',
+              );
+            }
+            if (result.text && result.text.trim().length > 0) {
+              const maxChars = 50_000;
+              const truncated =
+                result.text.length > maxChars
+                  ? result.text.slice(0, maxChars) +
+                    `\n\n[Truncated — ${result.text.length} chars total]`
+                  : result.text;
+              const prefix = saved
+                ? `[Document: ${name} — saved to 00-inbox/]`
+                : `[Document: ${name}]`;
+              storeNonText(ctx, `${prefix}\n\n${truncated}`);
+              logger.info(
+                { name, chars: result.text.length },
+                'Telegram document extracted',
+              );
+              return;
+            }
+            if (saved) {
+              storeNonText(ctx, `[Document: ${name} — saved to 00-inbox/]`);
+              return;
+            }
           }
         } catch (err) {
-          logger.warn(
-            { name, err },
-            'Failed to extract Telegram document text',
-          );
+          logger.warn({ name, err }, 'Failed to handle Telegram document');
         }
       }
 

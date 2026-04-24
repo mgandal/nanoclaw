@@ -646,6 +646,120 @@ describe('TelegramChannel', () => {
 
       expect(opts.onMessage).not.toHaveBeenCalled();
     });
+
+    it('saves .pptx binary to vault inbox even without a text extractor', async () => {
+      const fs = await import('fs');
+      const os = await import('os');
+      const path = await import('path');
+
+      const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ncw-vault-'));
+      const fakePptx = Buffer.from('PK\x03\x04fake-pptx-content');
+
+      // Mock the global fetch so downloadAndExtractDocument gets our buffer
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () =>
+          fakePptx.buffer.slice(
+            fakePptx.byteOffset,
+            fakePptx.byteOffset + fakePptx.byteLength,
+          ),
+      }) as any;
+
+      try {
+        const opts = createTestOpts({
+          registeredGroups: vi.fn(() => ({
+            'tg:12345': {
+              name: 'Vault Group',
+              folder: 'telegram_vault-claw',
+              trigger: null,
+              added_at: '2024-01-01T00:00:00.000Z',
+              containerConfig: {
+                additionalMounts: [
+                  {
+                    hostPath: vaultRoot,
+                    containerPath: 'claire-vault',
+                    readonly: false,
+                  },
+                ],
+              },
+            } as any,
+          })),
+        });
+        const channel = new TelegramChannel('test-token', opts);
+        await channel.connect();
+
+        const handler = botRef.handlers.get('message:document');
+        const ctx = makeNonTextCtx({
+          extra: {
+            document: {
+              file_id: 'pptx-file-id',
+              file_name: 'Updates-17q-paper.pptx',
+              mime_type:
+                'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            },
+          },
+        });
+        await handler!(ctx);
+
+        const savedPath = path.join(
+          vaultRoot,
+          '00-inbox',
+          'Updates-17q-paper.pptx',
+        );
+        expect(fs.existsSync(savedPath)).toBe(true);
+        expect(fs.readFileSync(savedPath)).toEqual(fakePptx);
+
+        expect(opts.onMessage).toHaveBeenCalledWith(
+          'tg:12345',
+          expect.objectContaining({
+            content: '[Document: Updates-17q-paper.pptx — saved to 00-inbox/]',
+          }),
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+        fs.rmSync(vaultRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('falls back to plain placeholder when group has no vault mount', async () => {
+      const fakePptx = Buffer.from('PK\x03\x04fake');
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () =>
+          fakePptx.buffer.slice(
+            fakePptx.byteOffset,
+            fakePptx.byteOffset + fakePptx.byteLength,
+          ),
+      }) as any;
+
+      try {
+        const opts = createTestOpts(); // default group has no containerConfig
+        const channel = new TelegramChannel('test-token', opts);
+        await channel.connect();
+
+        const handler = botRef.handlers.get('message:document');
+        const ctx = makeNonTextCtx({
+          extra: {
+            document: {
+              file_id: 'pptx-file-id',
+              file_name: 'deck.pptx',
+            },
+          },
+        });
+        await handler!(ctx);
+
+        expect(opts.onMessage).toHaveBeenCalledWith(
+          'tg:12345',
+          expect.objectContaining({
+            content: '[Document: deck.pptx]',
+          }),
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
   });
 
   // --- Bot commands ---

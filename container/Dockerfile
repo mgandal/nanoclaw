@@ -56,11 +56,13 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg    
     rm -rf /var/lib/apt/lists/*
 
 # Install agent-reach (from GitHub — not on PyPI) + yt-dlp + mcporter + bird
+# + markitdown for Office/PDF/HTML → Markdown extraction (used by pptx skill)
 # --break-system-packages is safe in containers (no venv needed)
 # agent-reach pinned: v1.4.0, 2026-03-28, commit e178470
 RUN pip3 install \
     'git+https://github.com/Panniantong/Agent-Reach.git@e178470320a4c61017c961902a84d83441f6acb0' \
     'yt-dlp==2025.12.8' \
+    'markitdown[pptx,docx,xlsx,pdf]==0.0.1a3' \
     --break-system-packages && \
     npm install -g mcporter@0.8.1 @steipete/bird@0.8.0
 
