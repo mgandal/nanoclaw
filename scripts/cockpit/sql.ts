@@ -52,7 +52,7 @@ export function getGroupsWithActivity(db: Database, now: Date): GroupRow[] {
   return result;
 }
 
-export function getTasksWithStatus(db: Database): TaskRow[] {
+export function getTasksWithStatus(db: Database, now: Date = new Date()): TaskRow[] {
   const tasks = db
     .prepare(
       `SELECT id, group_folder, prompt, agent_name, schedule_value, last_run, last_result, next_run
@@ -66,7 +66,7 @@ export function getTasksWithStatus(db: Database): TaskRow[] {
     }>;
 
   const rows: TaskRow[] = [];
-  const cutoff7d = new Date(Date.now() - 7 * MS_PER_DAY).toISOString();
+  const cutoff7d = new Date(now.getTime() - 7 * MS_PER_DAY).toISOString();
 
   for (const t of tasks) {
     const latest = db

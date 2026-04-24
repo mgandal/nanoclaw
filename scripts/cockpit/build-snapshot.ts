@@ -31,7 +31,7 @@ export function buildSnapshot(args: BuildArgs): Snapshot {
 
   const vault = scanVault(vaultPath, now);
   const groupRows = getGroupsWithActivity(db, now);
-  const taskRows = getTasksWithStatus(db);
+  const taskRows = getTasksWithStatus(db, now);
   const tasks: TaskSnapshot[] = taskRows.map(t => ({
     id: t.id,
     group: t.group,

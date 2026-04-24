@@ -79,7 +79,8 @@ describe('getTasksWithStatus', () => {
     db.run("INSERT INTO task_run_logs (task_id,run_at,duration_ms,status,result) VALUES ('t1','2026-04-18T09:00:00Z',1000,'success',NULL)");
     db.run("INSERT INTO task_run_logs (task_id,run_at,duration_ms,status,result) VALUES ('t1','2026-04-19T09:00:00Z',1000,'success','All good')");
 
-    const rows = getTasksWithStatus(db);
+    const now = new Date('2026-04-19T12:00:00Z');
+    const rows = getTasksWithStatus(db, now);
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe('t1');
     expect(rows[0].last_status).toBe('success');
@@ -88,7 +89,8 @@ describe('getTasksWithStatus', () => {
 
   it('handles task with no run logs', () => {
     db.run("INSERT INTO scheduled_tasks (id,group_folder,chat_jid,prompt,schedule_type,schedule_value,next_run,last_run,last_result,status,created_at,context_mode) VALUES ('t2','g','c@g','p','cron','0 * * * *',NULL,NULL,NULL,'active','2026-04-01','group')");
-    const [row] = getTasksWithStatus(db);
+    const now = new Date('2026-04-19T12:00:00Z');
+    const [row] = getTasksWithStatus(db, now);
     expect(row.last_status).toBeNull();
     expect(row.success_7d).toEqual([0, 0]);
   });
