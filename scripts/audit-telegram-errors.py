@@ -49,8 +49,8 @@ ERROR_LOG = LOG_DIR / "nanoclaw.error.log"
 # ---------------------------------------------------------------------------
 # Thresholds (plan-documented)
 # ---------------------------------------------------------------------------
-SUSTAINED_SPAN = timedelta(minutes=10)
-SUSTAINED_COUNT = 3
+SUSTAINED_SPAN = timedelta(minutes=30)
+SUSTAINED_COUNT = 5
 WINDOW_HOURS = 24
 BOOTSTRAP_BYTES = 5 * 1024 * 1024  # 5 MB first-run tail
 

@@ -1,6 +1,13 @@
 # Plan: Daily Telegram / NanoClaw Error Audit
 
-**Status:** draft, not yet implemented
+**Status:** SHIPPED 2026-04-21 in commit `27240666` ("feat(ops): daily error audit — classify + threshold + alert pipeline"). 491-line `scripts/audit-telegram-errors.py`, 23 pytest cases (`test_audit_classifier.py` + `test_audit_threshold.py`), launchd plist (`ops/com.nanoclaw.error-audit.plist`, registered as `com.nanoclaw.error-audit`, daily 9am ET), slash command (`.claude/commands/audit-errors.md`). Confirmed running: state file shows successful runs through 2026-04-24, latest dry-run flagged a real Slack WebSocket bug. Open question Q2 retuned 2026-04-24: thresholds tightened from 10min/3occ → 30min/5occ per user choice (looser daily-noise filter).
+
+**Two follow-ups intentionally deferred from v0.5 (per `scripts/audit-telegram-errors.py` docstring):**
+1. **Ollama LLM fallback for `unknown` bucket** — kept dependency-free for the cron path. Add when classifier-unknown rate gets noisy enough to warrant.
+2. **Alert wakeup hop** — the script currently exits 2 on actionable but does NOT insert a one-shot `scheduled_tasks` row to wake `ops-claw`. Today the launchd plist captures stderr, but no agent gets pinged. Add when first sustained bug needs human attention; routing target is `ops-claw` per Q1.
+
+**Known minor bug:** `--dry-run` still advances byte offsets in `scripts/state/error-audit-state.json`. Should be a true read-only path.
+
 **Author:** Claude (with mgandal)
 **Created:** 2026-04-20
 **Related:** `scripts/check-task-health.py` (template), `scripts/sync/sync-health-check.sh`, `feedback_verify_before_claiming_fixed.md`

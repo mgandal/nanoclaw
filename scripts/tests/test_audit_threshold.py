@@ -1,7 +1,7 @@
 """Tests for the threshold / actionability logic in audit-telegram-errors.py.
 
-Contract (from docs/plan-telegram-error-audit.md):
-  sustained = (last_seen - first_seen) >= 10 min AND count >= 3
+Contract (from docs/plan-telegram-error-audit.md, post-2026-04-24 retune Q2=c):
+  sustained = (last_seen - first_seen) >= 30 min AND count >= 5
   actionable = sustained OR source == "error_log" OR bucket == "bug"
 """
 
@@ -52,7 +52,7 @@ class TestSustainedTransient:
             last_seen=now + timedelta(minutes=2),
             count=10,
         )
-        # 2-minute span fails the 10-min rule, so not actionable despite count=10
+        # 2-minute span fails the 30-min rule, so not actionable despite count=10
         assert is_actionable(r) is False
 
     def test_long_span_but_few_occurrences_not_actionable(self, is_actionable):
@@ -63,7 +63,7 @@ class TestSustainedTransient:
             last_seen=now + timedelta(hours=2),
             count=2,
         )
-        # 2 occurrences fails the count>=3 rule
+        # 2 occurrences fails the count>=5 rule
         assert is_actionable(r) is False
 
     def test_sustained_transient_is_actionable(self, is_actionable):
@@ -71,20 +71,20 @@ class TestSustainedTransient:
         r = record(
             bucket="transient",
             first_seen=now,
-            last_seen=now + timedelta(minutes=15),
-            count=5,
+            last_seen=now + timedelta(minutes=45),
+            count=7,
         )
-        # 15-min span AND 5 occurrences — sustained
+        # 45-min span AND 7 occurrences — sustained
         assert is_actionable(r) is True
 
-    def test_exact_threshold_ten_minutes_three_occurrences(self, is_actionable):
+    def test_exact_threshold_thirty_minutes_five_occurrences(self, is_actionable):
         """Threshold boundaries should be inclusive (>=), not exclusive (>)."""
         now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
         r = record(
             bucket="transient",
             first_seen=now,
-            last_seen=now + timedelta(minutes=10),
-            count=3,
+            last_seen=now + timedelta(minutes=30),
+            count=5,
         )
         assert is_actionable(r) is True
 
