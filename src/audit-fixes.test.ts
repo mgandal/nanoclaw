@@ -871,15 +871,50 @@ describe('Ollama classification sanitization (C12)', () => {
     // Regression guard: if someone refactors parseClassification and drops
     // the sanitizer, the grep will catch it. Match the method definition
     // (not the call site) by anchoring on `private parseClassification(`.
-    const defMatch = source.match(
-      /private parseClassification\([\s\S]*?^  }/m,
-    );
+    const defMatch = source.match(/private parseClassification\([\s\S]*?^  }/m);
     expect(defMatch).not.toBeNull();
     const parseBlock = defMatch![0];
     expect(parseBlock).toContain('sanitizeClassificationText');
-    expect(parseBlock).toMatch(/sanitizeClassificationText\([^,]+,\s*'topic'\)/);
+    expect(parseBlock).toMatch(
+      /sanitizeClassificationText\([^,]+,\s*'topic'\)/,
+    );
     expect(parseBlock).toMatch(
       /sanitizeClassificationText\([^,]+,\s*'summary'\)/,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────
+// 33. C12b — haystack hardening in event-routing
+// ─────────────────────────────────────────────────
+describe('Haystack hardening (C12b)', () => {
+  const source = fs.readFileSync(
+    path.join(process.cwd(), 'src/event-routing.ts'),
+    'utf-8',
+  );
+
+  it('exports HAYSTACK_MAX_LEN and URGENT_CONFIDENCE_FLOOR', () => {
+    expect(source).toContain('export const HAYSTACK_MAX_LEN');
+    expect(source).toContain('export const URGENT_CONFIDENCE_FLOOR');
+  });
+
+  it('haystack is sliced to HAYSTACK_MAX_LEN', () => {
+    expect(source).toMatch(/\.slice\(0,\s*HAYSTACK_MAX_LEN\)/);
+  });
+
+  it('uses word-boundary match instead of raw .includes()', () => {
+    // Regression guard: the old substring match was the vuln. If it
+    // comes back, this grep fires.
+    const routeBlock =
+      source.match(/export function routeClassifiedEvent[\s\S]*?^}/m)?.[0] ??
+      '';
+    expect(routeBlock).not.toMatch(/haystack\.includes\(/);
+    expect(routeBlock).toContain('matchesKeyword');
+  });
+
+  it('urgent score weight depends on confidence floor', () => {
+    expect(source).toMatch(
+      /confidence\s*>=\s*URGENT_CONFIDENCE_FLOOR\s*\?\s*URGENT_SCORE\s*:\s*URGENT_DOWNGRADED_SCORE/,
     );
   });
 });

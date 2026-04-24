@@ -35,6 +35,39 @@ export interface RouteTarget {
   reason: string;
 }
 
+// ─── C12b: haystack hardening constants ──────────────────────────────────────
+//
+// The haystack is Ollama-derived → adversarial. Three defenses:
+// 1. HAYSTACK_MAX_LEN caps the substring-match surface.
+// 2. Word-boundary regex replaces raw includes() to prevent plural-suffix
+//    bleeds ('grant' matching 'grants') and separator-less keyword stacking
+//    ('grantnihvincent' matching three).
+// 3. URGENT_CONFIDENCE_FLOOR gates the urgent-match +3 bonus — low-confidence
+//    classifications cannot single-handedly escalate to specialist dispatch.
+
+export const HAYSTACK_MAX_LEN = 500;
+export const URGENT_CONFIDENCE_FLOOR = 0.6;
+const URGENT_SCORE = 3;
+const ROUTINE_SCORE = 1;
+const URGENT_DOWNGRADED_SCORE = ROUTINE_SCORE;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Word-boundary keyword match. `\b` anchors at ASCII word char transitions,
+ * so hyphenated keywords like 'pull-request' still match on both sides
+ * (the hyphen is non-word, giving a clean boundary on each end of the
+ * compound). Case-insensitive by compile flag.
+ */
+function matchesKeyword(haystack: string, keyword: string): boolean {
+  const kw = keyword.trim();
+  if (!kw) return false;
+  const re = new RegExp(`\\b${escapeRegExp(kw)}\\b`, 'i');
+  return re.test(haystack);
+}
+
 /**
  * Route a classified event to the agent who should act on it.
  *
@@ -49,7 +82,18 @@ export function routeClassifiedEvent(
 ): RouteTarget | null {
   const topic = (event.classification.topic || '').toLowerCase();
   const summary = (event.classification.summary || '').toLowerCase();
-  const haystack = `${topic} ${summary}`;
+  // C12b.1: bound the keyword-match surface even if upstream (C12)
+  // sanitization is bypassed.
+  const haystack = `${topic} ${summary}`.slice(0, HAYSTACK_MAX_LEN);
+
+  // C12b.3: low-confidence Ollama classifications cannot drive urgent
+  // specialist dispatch. Matches still score (preserving signal) but
+  // only at the routine weight.
+  const confidence = event.classification.confidence ?? 0;
+  const urgentWeight =
+    confidence >= URGENT_CONFIDENCE_FLOOR
+      ? URGENT_SCORE
+      : URGENT_DOWNGRADED_SCORE;
 
   let best: { agent: AgentIdentity; score: number; reason: string } | null =
     null;
@@ -58,18 +102,21 @@ export function routeClassifiedEvent(
     let score = 0;
     const matched: string[] = [];
 
+    // C12b.2: word-boundary match, not substring. Prevents 'grant'
+    // matching 'grants', and compound-planted 'grantnihvincent' from
+    // scoring three unrelated keywords at once.
     if (agent.urgentTopics) {
       for (const kw of agent.urgentTopics) {
-        if (kw && haystack.includes(kw.toLowerCase())) {
-          score += 3;
+        if (matchesKeyword(haystack, kw)) {
+          score += urgentWeight;
           matched.push(`urgent:${kw}`);
         }
       }
     }
     if (agent.routineTopics) {
       for (const kw of agent.routineTopics) {
-        if (kw && haystack.includes(kw.toLowerCase())) {
-          score += 1;
+        if (matchesKeyword(haystack, kw)) {
+          score += ROUTINE_SCORE;
           matched.push(`routine:${kw}`);
         }
       }
