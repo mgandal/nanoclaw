@@ -64,6 +64,9 @@ graphify-out/
 # Skills system (local per-installation state)
 .nanoclaw/
 
+# ByteRover local context cache
+.brv/
+
 agents-sdk-docs
 
 # Python venvs
