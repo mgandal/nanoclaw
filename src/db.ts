@@ -173,6 +173,35 @@ function createSchema(database: Database): void {
     CREATE INDEX IF NOT EXISTS idx_proactive_log_time ON proactive_log(timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_proactive_log_dedup ON proactive_log(correlation_id, timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_proactive_log_pending ON proactive_log(decision, delivered_at);
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL,
+      context TEXT,
+      owner TEXT,
+      priority INTEGER NOT NULL DEFAULT 3,
+      due_date TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      source TEXT NOT NULL DEFAULT 'manual',
+      source_ref TEXT,
+      group_folder TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      CHECK (owner IS NULL OR owner = lower(owner)),
+      CHECK (status IN ('open','done','archived')),
+      CHECK (priority BETWEEN 1 AND 4),
+      CHECK (source = 'manual' OR source IN ('email','slack','scheduled-task') OR source LIKE 'migration-%')
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
+    CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
+    CREATE INDEX IF NOT EXISTS idx_tasks_group_status ON tasks(group_folder, status);
+    CREATE TRIGGER IF NOT EXISTS trg_tasks_updated_at
+      AFTER UPDATE ON tasks FOR EACH ROW
+      BEGIN
+        UPDATE tasks SET updated_at = datetime('now') WHERE id = NEW.id;
+      END;
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
