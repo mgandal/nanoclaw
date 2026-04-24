@@ -94,7 +94,7 @@ At the START of every session, before responding:
 1. Read your agent memory at `/workspace/agents/{name}/memory.md`
 2. Read group memory at `/workspace/group/memory.md`
 3. If Hindsight is available, recall recent context: `mcp__hindsight__recall`
-4. Check global state at `/workspace/project/groups/global/state/current.md`
+4. For task-oriented work: call `mcp__nanoclaw__task_list` (authoritative). `current.md` is a rendered view, refreshed at 7am — fine for human reading, but the table is canonical.
 
 ### Hindsight (conversational memory)
 
@@ -103,6 +103,17 @@ Shared `/hermes/` namespace with Hermes. Use descriptive `document_id` (e.g., `"
 **End-of-session retain is mandatory.** Call `mcp__hindsight__retain` with a summary before your final response. When in doubt, retain anyway.
 
 **Tools:** `retain`, `recall`, `reflect`, `create_mental_model`, `create_directive` (all `mcp__hindsight__*`). **Retain:** personal facts, decisions, action items, research findings, instructions, task outcomes, errors, cross-group context.
+
+### Task Table (authoritative task list, shipped 2026-04-24)
+
+Mike's task list lives in the NanoClaw SQLite `tasks` table — one row per task, one truth, visible to every agent in every group. `todo.md` and `lab-todos.md` are archived. `current.md` is a rendered view produced daily at 7am.
+
+Three tools (all `mcp__nanoclaw__*`):
+- `task_add(title, context?, owner?, priority?, due_date?, source?, source_ref?, group_folder?, force?)` — create. Duplicates (case-insensitive on open tasks) rejected unless `force=true`. Owner defaults to `mike`. Caller's group stamps `group_folder` unless explicitly `""` (global).
+- `task_list(status?, owner?, due_before?, group_folder?, limit?)` — read. Defaults to all open, all groups, ordered overdue-first, then priority desc. Use for briefings and "what's on my list?" answers.
+- `task_close(id? | title_match?, outcome: "done"|"archived", reason?)` — close. `title_match` returns candidate list on ambiguity. Only creator group or main (CLAIRE) can close; any group can close a global (`group_folder=NULL`) task.
+
+When Mike says "X is done", call `task_close`. When he says "add to my list", call `task_add`. When he asks "what's on my plate?", call `task_list`. Do NOT edit `current.md` directly — it is auto-regenerated.
 
 ### Message Bus (Cross-Group Coordination)
 

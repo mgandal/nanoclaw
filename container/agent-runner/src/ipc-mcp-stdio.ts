@@ -733,6 +733,7 @@ const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
 const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
 const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
 const KG_RESULTS_DIR = path.join(IPC_DIR, 'kg_results');
+const TASK_RESULTS_DIR = path.join(IPC_DIR, 'task_results');
 
 async function waitForIpcResult(
   resultsDir: string,
@@ -877,6 +878,156 @@ server.tool(
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(KG_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
+// --- Task-table tools -------------------------------------------------
+// The single source of truth for Mike's task list. Phase B of the Option D
+// migration (see docs/plan-task-table-migration.md). All three tools write
+// to the IPC queue and wait for a result file at /workspace/ipc/task_results/.
+
+server.tool(
+  'task_add',
+  `Create a new task in the global task table. The task is immediately visible to every agent in every group.
+
+Use when:
+- Mike asks you to "add to my list", "remind me to X", or "track that I need to Y".
+- You discover during a conversation a follow-up obligation that must persist past this session (a commitment to a collaborator, a deliverable with a deadline, a hand-off to a mentee).
+- A scheduled task extracts an action item from email/slack that needs human attention — pass source='email' or 'slack' and source_ref=<msg-id or ts> for traceability.
+
+Do not use for:
+- One-shot reminders that do not need to persist — just respond inline.
+- Calendar events with a specific time — use calendar tools instead. The task table does not schedule.
+- Email reply obligations that are already tracked in followups.md by email-ingest.py. Adding them here creates drift.
+
+Inputs:
+- title (required): short imperative phrase ("Reply to Lucy Bicks", "Submit dbGaP renewal"). Duplicates (case-insensitive) against currently-open tasks are rejected unless force=true.
+- context: free-text background, links, reasoning.
+- owner: lowercase name ("mike", "liqing", "rachel"). Defaults to "mike". Auto-lowercased.
+- priority: 1 (low/reading) | 2 | 3 (default, active) | 4 (urgent / this week).
+- due_date: ISO date "YYYY-MM-DD". Omit when unknown.
+- source: where this came from. Allowed: "manual" (default), "email", "slack", "scheduled-task", or "migration-<date>".
+- source_ref: email msg-id, slack ts, etc. — used for de-dup.
+- group_folder: which group owns this task. Non-main callers are always stamped with their own caller group (payload value is ignored). Only the main group (CLAIRE) may stamp a different group_folder, or pass "" to make it a global task (visible+closable from any group).
+- force: true to skip the explicit duplicate-title check (the schema-level unique index on lower(title) WHERE status='open' still applies — there is no way to create two open rows with identical titles; archive one first).
+
+Returns: JSON { success: true, id: <new task id> } on success, or { success: false, error, duplicate_of? } on failure.`,
+  {
+    title: z.string().describe('Short imperative title — must be unique among open tasks unless force=true'),
+    context: z.string().optional().describe('Free-text background / links / reasoning'),
+    owner: z.string().optional().describe('Lowercase owner name; defaults to "mike"'),
+    priority: z.number().int().min(1).max(4).optional().describe('1=low 2=normal 3=default 4=urgent'),
+    due_date: z.string().optional().describe('ISO date YYYY-MM-DD'),
+    source: z.string().optional().describe('Provenance: manual | email | slack | scheduled-task | migration-*'),
+    source_ref: z.string().optional().describe('External ref (email msg-id, slack ts, file:line, etc.)'),
+    group_folder: z.string().optional().describe('Owning group; defaults to caller. Pass "" for global.'),
+    force: z.boolean().optional().describe('Skip duplicate-title check'),
+  },
+  async (args) => {
+    const requestId = `tadd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'task_add',
+      requestId,
+      ...args,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
+server.tool(
+  'task_list',
+  `Query tasks from the global task table. This is the authoritative read for "what is on Mike's list".
+
+Use when:
+- Generating a daily / weekly briefing — call this first, before reading any markdown state files.
+- Mike asks "what's on my plate?", "what's overdue?", "what did I finish this week?".
+- You need to check for duplicates before adding a new task (though task_add enforces its own dedup).
+
+Do not use for:
+- Looking up a specific known id — that still works here, but if the id is already in hand you have the row already.
+
+Inputs (all optional):
+- status: "open" (default) | "done" | "archived" | "all".
+- owner: filter to one owner (e.g., "mike", "liqing").
+- due_before: ISO date — returns only tasks due on or before this date. Use date('now') semantics on the server.
+- group_folder: filter to one group. Omit to see all groups (cross-group "global" view).
+- limit: max rows (default 100, max 1000).
+
+Returns: JSON { success: true, tasks: [{id, title, context, owner, priority, due_date, status, source, source_ref, group_folder, created_at, updated_at, completed_at}], count, truncated, limit }. Ordered: overdue (due_date <= today) first, then priority desc, then due_date asc. truncated=true means count === limit so more rows may exist; re-query with a larger limit or a filter.`,
+  {
+    status: z.enum(['open', 'done', 'archived', 'all']).optional(),
+    owner: z.string().optional(),
+    due_before: z.string().optional().describe('ISO date YYYY-MM-DD'),
+    group_folder: z.string().optional(),
+    limit: z.number().int().min(1).max(1000).optional(),
+  },
+  async (args) => {
+    const requestId = `tlist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'task_list',
+      requestId,
+      ...args,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
+server.tool(
+  'task_close',
+  `Close a task — either as "done" (completed) or "archived" (no longer relevant). One tool, two outcomes.
+
+Use when:
+- Mike says "X is done" / "I finished X" / "we shipped that" → outcome="done".
+- A scheduled task verifies an action completed (e.g., a grant was submitted) → outcome="done".
+- The task was created in error, is a duplicate, or is no longer relevant → outcome="archived".
+
+Do not use for:
+- Editing a task in flight — v1 has no edit tool. Close the old task and task_add a replacement.
+
+Inputs (one of id or title_match is required):
+- id: exact integer task id (preferred — unambiguous).
+- title_match: case-insensitive substring match on title. Will error with a candidate list if the match is ambiguous.
+- outcome (required): "done" | "archived".
+- reason: optional short note. Appended to context as "[closed: <reason>]".
+
+Auth: you can close tasks whose group_folder matches your caller group, or tasks with group_folder NULL (global). Main-group callers (CLAIRE) can close any task.
+
+Returns on success: { success: true, matched: <id>, status: "done"|"archived", completed_at: <iso> }.
+Returns on ambiguous title_match: { success: false, error: "ambiguous match", candidates: [{id, title, group_folder}, ...] } — pick an id and retry.
+Returns on no match: { success: false, error: "no open task matches" }.
+Returns on auth denial: { success: false, error: "not authorized: only the creator group or main may close this task" }.`,
+  {
+    id: z.number().int().positive().optional().describe('Exact task id (preferred)'),
+    title_match: z.string().optional().describe('Case-insensitive substring match'),
+    outcome: z.enum(['done', 'archived']).describe('"done" = completed, "archived" = no longer relevant'),
+    reason: z.string().optional().describe('Short note appended to context'),
+  },
+  async (args) => {
+    const requestId = `tclose-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'task_close',
+      requestId,
+      ...args,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
     return {
       content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
       isError: !(result as { success?: boolean }).success,

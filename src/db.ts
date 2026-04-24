@@ -197,11 +197,18 @@ function createSchema(database: Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_date);
     CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
     CREATE INDEX IF NOT EXISTS idx_tasks_group_status ON tasks(group_folder, status);
+    -- Keep updated_at fresh on every UPDATE. The WHEN guard makes the trigger
+    -- idempotent so it is safe even if recursive_triggers is ever enabled.
     CREATE TRIGGER IF NOT EXISTS trg_tasks_updated_at
       AFTER UPDATE ON tasks FOR EACH ROW
+      WHEN NEW.updated_at IS OLD.updated_at
       BEGIN
         UPDATE tasks SET updated_at = datetime('now') WHERE id = NEW.id;
       END;
+    -- Partial unique index closes the SELECT-then-INSERT dedup race in
+    -- addTask. Only applies to open rows, so archive+re-add still works.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_open_title
+      ON tasks(lower(title)) WHERE status = 'open';
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)

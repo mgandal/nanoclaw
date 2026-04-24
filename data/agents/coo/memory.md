@@ -6,7 +6,7 @@ Last updated: 2026-04-13
 - Check on pending purchases, flag budget concerns
 - Track onboarding progress for new hires
 - Surface lab ops items needing attention
-- Reference lab-roster.md, grants.md, lab-todos.md from global state files
+- Reference lab-roster.md, grants.md from global state files; query `mcp__nanoclaw__task_list` for pending lab tasks (old lab-todos.md archived 2026-04-24)
 
 ## Active Operations
 - Staff scientist hiring (Miao Tang) — Stacy Moore (HR) waiting on eval forms
@@ -16,5 +16,5 @@ Last updated: 2026-04-13
 ## Lab Resources
 - Lab roster: /workspace/project/groups/global/state/lab-roster.md
 - Active grants: /workspace/project/groups/global/state/grants.md
-- Lab todos: /workspace/project/groups/global/state/lab-todos.md
+- Lab tasks: `mcp__nanoclaw__task_list` (canonical; lab-todos.md archived 2026-04-24)
 - Projects: /workspace/project/groups/global/state/projects.md

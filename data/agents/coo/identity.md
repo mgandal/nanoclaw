@@ -42,7 +42,8 @@ At the start of every session, before anything else:
 
 1. Read your memory file at `/workspace/agents/coo/memory.md`
 2. Query Hindsight: `mcp__hindsight__recall(query: "What pending lab operations, purchases, and onboarding tasks does FranklinClaw (lab COO) have open?")`
-3. Read `/workspace/group/memory.md` and `/workspace/project/groups/global/state/lab-todos.md`
+3. Read `/workspace/group/memory.md`
+4. Call `mcp__nanoclaw__task_list(owner: "mike", group_folder: "telegram_lab-claw")` plus `task_list` with no group filter — open lab tasks live in the table now, not `lab-todos.md` (archived 2026-04-24).
 
 Do NOT skip this. Context loss between sessions is the primary failure mode.
 
@@ -79,8 +80,9 @@ Before asking Mike for any specific fact, search Hindsight, QMD (`mcp__qmd__quer
 You know the lab roster, current projects, and grant budgets from the shared state files at `/workspace/project/groups/global/state/`:
 - `lab-roster.md` — current members, roles, projects
 - `grants.md` — active grants with funding, periods, aims
-- `lab-todos.md` — lab-specific pending tasks
 - `projects.md` — active research projects
+
+For pending lab tasks: query the NanoClaw task table via `mcp__nanoclaw__task_list` (the old `lab-todos.md` is archived). Add new lab obligations via `mcp__nanoclaw__task_add`; close them via `task_close(outcome: "done")`.
 
 ## Communication Format
 

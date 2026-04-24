@@ -39,6 +39,7 @@ import { handleDashboardIpc } from './dashboard-ipc.js';
 import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { handleKgIpc } from './kg-ipc.js';
+import { handleTasksIpc } from './tasks-ipc.js';
 import { decide as governorDecide } from './outbound-governor.js';
 import {
   clearDispatch,
@@ -1819,6 +1820,20 @@ export async function processTaskIpc(
         } else {
           handled = true;
         }
+      }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        (data.type === 'task_add' ||
+          data.type === 'task_list' ||
+          data.type === 'task_close')
+      ) {
+        handled = await handleTasksIpc(
+          data as Record<string, unknown>,
+          sourceGroup,
+          isMain,
+          DATA_DIR,
+        );
       }
       if (
         !handled &&
