@@ -117,7 +117,64 @@ def generate_person_aliases(full_name: str, email: str | None = None) -> list[st
 _H1_LINE = re.compile(r"^#[ \t]+([^\n]+?)[ \t]*$", re.MULTILINE)
 
 
-def parse_contact(text: str, source_doc: str) -> dict | None:
+def _prose_project_edges(
+    body: str,
+    *,
+    person_name: str,
+    source_doc: str,
+    known_projects: set[str] | frozenset[str] | None,
+    skip_names: set[str],
+) -> list[dict]:
+    """Scan a contact body for mentions of known project names.
+
+    For every project in `known_projects` that appears in the body as a
+    whole word (case-insensitive), emit one `member_of` edge. Projects
+    already in `skip_names` (lowercased frontmatter array entries) are
+    skipped so we do not double-count. Returned edges are tagged with
+    `evidence="prose mention in {source_doc}"` to distinguish them from
+    frontmatter-sourced edges at query time.
+
+    Word-boundary match via `\\b<name>\\b` prevents false positives like
+    `APA` matching `APAthetic`. The body is assumed to have the YAML
+    frontmatter already stripped — that is what `parse_contact` passes.
+    """
+    if not known_projects:
+        return []
+    seen: set[str] = set()
+    edges: list[dict] = []
+    for proj in known_projects:
+        proj_stripped = proj.strip()
+        if not proj_stripped:
+            continue
+        if proj_stripped.lower() in skip_names:
+            continue
+        if proj_stripped.lower() in seen:
+            continue
+        pattern = re.compile(
+            r"\b" + re.escape(proj_stripped) + r"\b",
+            re.IGNORECASE,
+        )
+        if pattern.search(body):
+            edges.append(
+                {
+                    "source": person_name,
+                    "source_type": "person",
+                    "target": proj_stripped,
+                    "target_type": "project",
+                    "relation": "member_of",
+                    "evidence": f"prose mention in {source_doc}",
+                    "source_doc": source_doc,
+                }
+            )
+            seen.add(proj_stripped.lower())
+    return edges
+
+
+def parse_contact(
+    text: str,
+    source_doc: str,
+    known_projects: set[str] | frozenset[str] | None = None,
+) -> dict | None:
     """Parse a contact markdown file into a person entity.
 
     Two tiers:
@@ -144,6 +201,7 @@ def parse_contact(text: str, source_doc: str) -> dict | None:
 
             projects = fm.get("projects") or []
             project_edges: list[dict] = []
+            frontmatter_project_names: set[str] = set()
             if isinstance(projects, list):
                 for proj in projects:
                     if isinstance(proj, str) and proj.strip():
@@ -158,6 +216,26 @@ def parse_contact(text: str, source_doc: str) -> dict | None:
                                 "source_doc": source_doc,
                             }
                         )
+                        frontmatter_project_names.add(proj.strip().lower())
+
+            # KG contact-edges gap (2026-04-24): scan the BODY (not the
+            # frontmatter region) for mentions of known project names. 384
+            # of 420 contact files use prose ("Notes:", "Current Projects"
+            # bullets) instead of the frontmatter `projects:` array, so
+            # the array-only parser produced isolated person nodes. The
+            # known_projects set is supplied by the ingest driver after
+            # parsing state/projects.md, so false-positive risk is bounded
+            # by the canonical project-name list.
+            body = _FRONTMATTER.sub("", text, count=1)
+            project_edges.extend(
+                _prose_project_edges(
+                    body,
+                    person_name=name.strip(),
+                    source_doc=source_doc,
+                    known_projects=known_projects,
+                    skip_names=frontmatter_project_names,
+                )
+            )
 
             return {
                 "entity": {

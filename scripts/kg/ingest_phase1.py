@@ -80,6 +80,27 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
     # from any citations that target papers we don't already have.
     all_results: list[dict] = []
 
+    # KG contact-edges gap (2026-04-24): pre-build the known-projects set
+    # from state/projects.md BEFORE parsing contacts, so parse_contact can
+    # match prose mentions (e.g. "asd-rarevar-anno" in a Position.Notes
+    # field) against canonical project names. Without this, 384 of 420
+    # contact files produce isolated person nodes because they use prose
+    # instead of the frontmatter `projects:` array.
+    known_projects: set[str] = set()
+    projects_file = repo_root / STATE_DIR_REL / "projects.md"
+    projects_text = _read(projects_file)
+    if projects_text:
+        for proj_result in parse_projects_file(
+            projects_text, "state/projects.md"
+        ):
+            ent = proj_result.get("entity") or {}
+            if ent.get("type") == "project":
+                if ent.get("canonical_name"):
+                    known_projects.add(ent["canonical_name"])
+                for alias in ent.get("aliases") or []:
+                    if alias:
+                        known_projects.add(alias)
+
     # Contacts → persons
     contacts_dir = vault / "20-contacts"
     if contacts_dir.is_dir():
@@ -89,7 +110,11 @@ def collect_entities(vault: Path, repo_root: Path) -> tuple[list[dict], list[dic
             text = _read(f)
             if text is None:
                 continue
-            result = parse_contact(text, f"20-contacts/{f.name}")
+            result = parse_contact(
+                text,
+                f"20-contacts/{f.name}",
+                known_projects=known_projects,
+            )
             if result:
                 all_results.append(result)
 

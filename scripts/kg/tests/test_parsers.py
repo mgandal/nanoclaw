@@ -146,6 +146,149 @@ class TestParseContact:
         assert result["entity"]["confidence"] == 1.0
 
 
+class TestParseContactProseMentions:
+    """KG contacts → project edges gap: parse_contact only reads the
+    frontmatter `projects:` array today, so 384/420 contact files produce
+    isolated person nodes with no project edges. Extension: scan the body
+    for mentions of known project names (from projects.md) and emit
+    member_of edges for those too."""
+
+    KNOWN = frozenset(
+        {
+            "asd-rarevar-anno",
+            "asd-lcl-rnaseq",
+            "BrainGO",
+            "scRBP",
+            "mitoPRS",
+            "APA",
+        }
+    )
+
+    def test_prose_mention_in_position_notes_creates_edge(self):
+        text = (
+            "---\ntype: lab-member\nname: Rachel Smith\nrole: Postdoc\n---\n\n"
+            "# Rachel Smith\n\n"
+            "## Position\n"
+            "- **Notes:** asd-rarevar-anno, asd-lcl-rnaseq projects; PhD exam Apr 2025\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/rachel-smith.md", known_projects=self.KNOWN
+        )
+        assert result is not None
+        targets = {e["target"] for e in result["edges"]}
+        assert "asd-rarevar-anno" in targets
+        assert "asd-lcl-rnaseq" in targets
+        # Edge should indicate prose provenance (distinguish from array-sourced)
+        prose_edges = [e for e in result["edges"] if "prose" in e.get("evidence", "")]
+        assert len(prose_edges) >= 2
+
+    def test_prose_mention_in_current_projects_bullets(self):
+        text = (
+            "---\ntype: lab-member\nname: Rachel Smith\n---\n\n"
+            "# Rachel Smith\n\n"
+            "## Progress\n"
+            "### Current Projects\n"
+            "- asd-rarevar-anno\n"
+            "- BrainGO / Hierarchical HotNet analysis\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/rachel-smith.md", known_projects=self.KNOWN
+        )
+        targets = {e["target"] for e in result["edges"]}
+        assert "asd-rarevar-anno" in targets
+        assert "BrainGO" in targets
+
+    def test_dedup_frontmatter_array_wins_over_prose(self):
+        """If a project is in the frontmatter `projects:` array AND the body,
+        only one edge is emitted — the frontmatter one (precedence)."""
+        text = (
+            "---\n"
+            "type: lab-member\nname: Rachel Smith\n"
+            "projects:\n  - asd-rarevar-anno\n"
+            "---\n\n"
+            "# Rachel Smith\n\n"
+            "## Position\n- **Notes:** asd-rarevar-anno rules\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/rachel.md", known_projects=self.KNOWN
+        )
+        edges = [e for e in result["edges"] if e["target"] == "asd-rarevar-anno"]
+        assert len(edges) == 1
+        # Frontmatter-sourced, not prose-sourced
+        assert "projects[]" in edges[0]["evidence"]
+
+    def test_prose_match_is_case_insensitive(self):
+        text = (
+            "---\ntype: lab-member\nname: Rachel Smith\n---\n\n"
+            "# Rachel Smith\n\n"
+            "Working on ASD-RAREVAR-ANNO and braingo.\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/rachel.md", known_projects=self.KNOWN
+        )
+        targets = {e["target"] for e in result["edges"]}
+        # Targets must be canonical (as supplied in known_projects), not the
+        # as-written text
+        assert "asd-rarevar-anno" in targets
+        assert "BrainGO" in targets
+
+    def test_project_name_not_in_known_set_is_ignored(self):
+        text = (
+            "---\ntype: lab-member\nname: Rachel Smith\n---\n\n"
+            "# Rachel Smith\n\n"
+            "## Position\n- **Notes:** some-unknown-project is fun\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/rachel.md", known_projects=self.KNOWN
+        )
+        assert result["edges"] == []
+
+    def test_backward_compat_no_known_projects_kwarg(self):
+        """Pre-existing callers that do not pass known_projects still work
+        with the old `projects:`-array-only behavior."""
+        text = (
+            "---\n"
+            "type: lab-member\nname: Rachel Smith\n"
+            "projects:\n  - BrainGO\n"
+            "---\n\n"
+            "# Rachel Smith\n\n"
+            "## Position\n- **Notes:** asd-rarevar-anno\n"
+        )
+        result = parse_contact(text, "20-contacts/rachel.md")  # no kwarg
+        targets = {e["target"] for e in result["edges"]}
+        assert targets == {"BrainGO"}  # no prose hit
+
+    def test_word_boundary_prevents_substring_match(self):
+        """`APA` must not match `APAthetic` or `AppAlled`."""
+        text = (
+            "---\ntype: lab-member\nname: X Y\n---\n\n"
+            "# X Y\n\n"
+            "## Position\n- **Notes:** unappathetic attitude; appalled reaction\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/xy.md", known_projects=self.KNOWN
+        )
+        apa_edges = [e for e in result["edges"] if e["target"] == "APA"]
+        assert len(apa_edges) == 0
+
+    def test_prose_match_only_in_body_not_frontmatter_string(self):
+        """If someone writes prose about `APA` in a frontmatter comment/value,
+        the parser should NOT scan the frontmatter region for prose matches —
+        only body. Prevents false positives from malformed YAML values."""
+        text = (
+            "---\n"
+            "type: lab-member\nname: X Y\nrole: APA project guy\n"
+            "---\n\n"
+            "# X Y\n\nno project mentions here.\n"
+        )
+        result = parse_contact(
+            text, "20-contacts/xy.md", known_projects=self.KNOWN
+        )
+        # Edges should be empty — APA only appeared in `role:` frontmatter value
+        apa_edges = [e for e in result["edges"] if e["target"] == "APA"]
+        assert len(apa_edges) == 0
+
+
 # ---------------------------------------------------------------------------
 # parse_tool
 # ---------------------------------------------------------------------------
