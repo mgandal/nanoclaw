@@ -185,3 +185,69 @@ def test_show_status_runs_without_error(tmp_state, capsys):
     assert "Last run:" in captured.out
     assert "never" in captured.out
     assert "not set" in captured.out
+
+
+# ─────────────────────────────────────────────────
+# C18: _retain_decision in email-ingest.py must apply the same URL check
+# ─────────────────────────────────────────────────
+#
+# email-ingest.py is a script (hyphen in name blocks normal import), so
+# we load it via importlib.util and exercise _retain_decision directly.
+
+def _load_email_ingest():
+    """Spec-load email-ingest.py so we can call _retain_decision directly.
+
+    Registers in sys.modules so unittest.mock.patch() can find attributes
+    via the module path.
+    """
+    import importlib.util
+    import sys
+    from pathlib import Path
+    p = Path(__file__).parent.parent / "email-ingest.py"
+    spec = importlib.util.spec_from_file_location("email_ingest_script", p)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["email_ingest_script"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_c18_retain_decision_skips_unsafe_url():
+    """_retain_decision must not POST when HINDSIGHT_URL is remote."""
+    import os
+    mod = _load_email_ingest()
+
+    email = _make_email("msg-1")
+
+    class FakeResult:
+        decision_summary = "decide to do X"
+        who = "alice"
+
+    with patch.dict(os.environ, {"HINDSIGHT_URL": "http://attacker.com:8889"}), \
+         patch("email_ingest.exporter.requests") as mock_req:
+        retval = mod._retain_decision(email, FakeResult())
+    assert retval == 0
+    mock_req.post.assert_not_called()
+
+
+def test_c18_retain_decision_sends_bearer_when_safe():
+    """_retain_decision includes bearer header when env+URL are both OK."""
+    import os
+    mod = _load_email_ingest()
+
+    email = _make_email("msg-1")
+
+    class FakeResult:
+        decision_summary = "decide to do X"
+        who = "alice"
+
+    with patch.dict(
+        os.environ,
+        {"HINDSIGHT_URL": "http://localhost:8889", "HINDSIGHT_API_KEY": "tok"},
+    ), patch("email_ingest_script.requests") as mock_req:
+        mock_req.post.return_value = MagicMock(status_code=200)
+        mock_req.post.return_value.raise_for_status = MagicMock()
+        retval = mod._retain_decision(email, FakeResult())
+    assert retval == 1
+    mock_req.post.assert_called_once()
+    kwargs = mock_req.post.call_args.kwargs
+    assert kwargs.get("headers", {}).get("Authorization") == "Bearer tok"

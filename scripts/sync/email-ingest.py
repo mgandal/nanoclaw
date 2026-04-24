@@ -238,8 +238,21 @@ def _ext_to_followup(email, r):
 
 
 def _retain_decision(email, r):
-    """Retain a decision to Hindsight. Fire-and-forget; returns 1 on send attempted."""
+    """Retain a decision to Hindsight. Fire-and-forget; returns 1 on send attempted.
+
+    C18: URL allowlist + bearer-auth via shared helpers in exporter.py.
+    Unsafe HINDSIGHT_URL → log + skip, no POST.
+    """
+    from email_ingest.exporter import (
+        hindsight_url_is_safe,
+        _hindsight_auth_headers,
+    )
     hindsight_url = os.environ.get("HINDSIGHT_URL", "http://localhost:8889")
+    if not hindsight_url_is_safe(hindsight_url):
+        log.warning(
+            "Skipping decision retain: unsafe HINDSIGHT_URL %r", hindsight_url
+        )
+        return 0
     date_slug = email.date[:10] if email.date else "unknown-date"
     who_slug = (r.who or "unknown").replace(" ", "-").lower()[:40]
     doc_id = f"decision-{date_slug}-{who_slug}"
@@ -262,6 +275,7 @@ def _retain_decision(email, r):
                     "kind": "decision",
                 },
             },
+            headers=_hindsight_auth_headers(),
             timeout=10,
         )
         resp.raise_for_status()

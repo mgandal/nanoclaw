@@ -255,3 +255,98 @@ def test_retain_in_hindsight_swallows_errors():
         mock_req.post.side_effect = Exception("connection refused")
         # Should not raise
         retain_in_hindsight(_make_email(), _make_result(), "http://localhost:8889")
+
+
+# ─────────────────────────────────────────────────
+# C18: Hindsight retain safety — URL check + bearer auth
+# ─────────────────────────────────────────────────
+#
+# email content is POSTed fire-and-forget to a URL derived from the
+# HINDSIGHT_URL env var. If that variable is ever misconfigured to a
+# non-local target, every relevant email silently exfiltrates.
+# Defense-in-depth: reject non-local URLs before POST, and send a bearer
+# token when HINDSIGHT_API_KEY is set so an on-box attacker cannot
+# read memory via /recall without the shared secret.
+
+from email_ingest.exporter import hindsight_url_is_safe
+
+
+def test_hindsight_url_is_safe_allows_localhost():
+    assert hindsight_url_is_safe("http://localhost:8889") is True
+    assert hindsight_url_is_safe("http://localhost:8889/") is True
+    assert hindsight_url_is_safe("http://localhost") is True
+
+
+def test_hindsight_url_is_safe_allows_loopback_ipv4():
+    assert hindsight_url_is_safe("http://127.0.0.1:8889") is True
+    assert hindsight_url_is_safe("http://127.0.0.1") is True
+
+
+def test_hindsight_url_is_safe_allows_container_gateway():
+    # src/container-runner.ts rewrites localhost → 192.168.64.1 for
+    # the agent-runner container. Host-side retain calls might use
+    # either form, so both must be allowed.
+    assert hindsight_url_is_safe("http://192.168.64.1:8889") is True
+
+
+def test_hindsight_url_is_safe_rejects_remote_host():
+    assert hindsight_url_is_safe("http://attacker.com:8889") is False
+    assert hindsight_url_is_safe("http://evil.example.com/retain") is False
+
+
+def test_hindsight_url_is_safe_rejects_https():
+    # https:// to a remote target would be the worst-case exfil
+    # path; reject on principle even for loopback (we serve plain HTTP).
+    assert hindsight_url_is_safe("https://attacker.com:8889") is False
+
+
+def test_hindsight_url_is_safe_rejects_file_and_empty():
+    assert hindsight_url_is_safe("file:///etc/passwd") is False
+    assert hindsight_url_is_safe("") is False
+    assert hindsight_url_is_safe(None) is False
+
+
+def test_hindsight_url_is_safe_rejects_missing_scheme():
+    # `localhost:8889` without scheme — urlparse treats `localhost` as
+    # scheme, which would bypass the scheme check if we only looked at
+    # hostname. Belt-and-braces rejection.
+    assert hindsight_url_is_safe("localhost:8889") is False
+
+
+def test_retain_in_hindsight_skips_when_url_unsafe():
+    """Misconfigured HINDSIGHT_URL must NOT leak email content."""
+    with patch("email_ingest.exporter.requests") as mock_req:
+        retain_in_hindsight(
+            _make_email(), _make_result(), "http://attacker.com:8889"
+        )
+        mock_req.post.assert_not_called()
+
+
+def test_retain_in_hindsight_sends_bearer_when_env_set():
+    import os
+    with patch.dict(os.environ, {"HINDSIGHT_API_KEY": "test-secret-123"}), \
+         patch("email_ingest.exporter.requests") as mock_req:
+        mock_req.post.return_value = MagicMock(status_code=200)
+        retain_in_hindsight(
+            _make_email(), _make_result(), "http://localhost:8889"
+        )
+        mock_req.post.assert_called_once()
+        kwargs = mock_req.post.call_args.kwargs
+        headers = kwargs.get("headers") or {}
+        assert headers.get("Authorization") == "Bearer test-secret-123"
+
+
+def test_retain_in_hindsight_no_bearer_when_env_unset():
+    import os
+    # Explicitly clear the env var for this test
+    env = {k: v for k, v in os.environ.items() if k != "HINDSIGHT_API_KEY"}
+    with patch.dict(os.environ, env, clear=True), \
+         patch("email_ingest.exporter.requests") as mock_req:
+        mock_req.post.return_value = MagicMock(status_code=200)
+        retain_in_hindsight(
+            _make_email(), _make_result(), "http://localhost:8889"
+        )
+        mock_req.post.assert_called_once()
+        kwargs = mock_req.post.call_args.kwargs
+        headers = kwargs.get("headers") or {}
+        assert "Authorization" not in headers

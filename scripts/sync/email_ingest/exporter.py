@@ -5,9 +5,53 @@ import os
 import re
 from pathlib import Path
 from typing import Callable, Optional
+from urllib.parse import urlparse
 
 import requests
 import yaml
+
+# C18: URLs that hindsight_url_is_safe() accepts. Everything else is
+# treated as a misconfigured HINDSIGHT_URL and retain is skipped. These
+# must match both host-side usage (email-ingest cron runs as mgandal on
+# the Mac and talks to localhost/127.0.0.1) AND the container-rewritten
+# form that src/container-runner.ts produces (192.168.64.1, the Apple
+# Container bridge IP).
+_HINDSIGHT_ALLOWED_HOSTS = frozenset({"localhost", "127.0.0.1", "192.168.64.1"})
+
+
+def hindsight_url_is_safe(url: Optional[str]) -> bool:
+    """Return True iff `url` is safe to POST email content to.
+
+    C18 defense — reject anything that could exfiltrate:
+    - non-http schemes (https, file, ftp, etc.)
+    - missing scheme (urlparse quirks)
+    - remote hosts (anything not in _HINDSIGHT_ALLOWED_HOSTS)
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return False
+    if parsed.scheme != "http":
+        return False
+    if not parsed.hostname:
+        return False
+    return parsed.hostname in _HINDSIGHT_ALLOWED_HOSTS
+
+
+def _hindsight_auth_headers() -> dict:
+    """Build the bearer-auth headers for Hindsight retain POSTs.
+
+    Returns {} when HINDSIGHT_API_KEY is unset, so behavior is
+    backward-compatible until the server is reconfigured with
+    HINDSIGHT_API_TENANT_API_KEY. When set, the key is sent as
+    `Authorization: Bearer <key>` per Hindsight's ApiKeyTenantExtension.
+    """
+    token = os.environ.get("HINDSIGHT_API_KEY", "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
 
 from email_ingest.secure_write import write_file_secure
 from email_ingest.types import NormalizedEmail, ClassificationResult, EXPORT_DIR
@@ -222,7 +266,20 @@ def retain_in_hindsight(
     result: ClassificationResult,
     hindsight_url: str,
 ) -> None:
-    """Fire-and-forget Hindsight retain call. Swallows all errors."""
+    """Fire-and-forget Hindsight retain call. Swallows all errors.
+
+    C18: silently skip if hindsight_url is not on the allowlist —
+    a misconfigured HINDSIGHT_URL would otherwise fire email content
+    at whatever remote target the env var pointed at. Bearer token
+    is added from HINDSIGHT_API_KEY when set.
+    """
+    if not hindsight_url_is_safe(hindsight_url):
+        log.warning(
+            "Skipping Hindsight retain: unsafe URL %r (allowed hosts: %s)",
+            hindsight_url,
+            sorted(_HINDSIGHT_ALLOWED_HOSTS),
+        )
+        return
     try:
         content = (
             f"Email from {email.from_addr} re: {email.subject}\n"
@@ -244,6 +301,7 @@ def retain_in_hindsight(
                     "relevance": result.relevance,
                 },
             },
+            headers=_hindsight_auth_headers(),
             timeout=10,
         )
     except Exception as e:
