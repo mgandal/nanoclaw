@@ -135,9 +135,7 @@ export class BusWatcher {
           // _stale/ for operator inspection, not done/ (so it's visibly
           // distinct from normal completions).
           const msgId =
-            typeof content?.id === 'string' && content.id
-              ? content.id
-              : null;
+            typeof content?.id === 'string' && content.id ? content.id : null;
           if (msgId && this.dispatched.has(msgId)) {
             logger.warn(
               { file, msgId, recipient: entry.name },
