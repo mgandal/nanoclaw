@@ -1,6 +1,6 @@
 # Adopt Queue Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** Full subdirectory at `scripts/adopt-queue/`: `adopt-queue.sh` runner (list/show/clone/done subcommands), `install.sh` for laptop setup, `skill/` directory for the `/queue-adopt` Telegram command, `tests/` with `helpers.bash` + `test_runner.bats` (bats-style integration tests), and a `README.md`. Bridges Telegram `/eval-repo` verdicts to laptop-side adoption work. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Add a `/queue-adopt` Telegram command (CODE-claw) that writes a rich adoption plan to `~/claire-tools/adopt-queue/pending/`, plus a bash runner `~/claire-tools/adopt-queue.sh` with `list|show|clone|done` subcommands for laptop-side pickup.
 

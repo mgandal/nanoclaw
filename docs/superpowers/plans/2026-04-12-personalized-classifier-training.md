@@ -1,6 +1,6 @@
 # Personalized Classifier Training — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** `scripts/sync/email_ingest/trainer.py` (484 lines, 17K): `match_sent_to_inbox`, `label_gmail_threads`, `compute_weights`, `TrainingExample` dataclass. Builds personalized profile from reply behavior — "emails replied to = important, not replied = unimportant" — and augments the existing classifier with a sender/topic weight map. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Train the email classifier on the user's reply behavior — emails replied to = important, not replied = unimportant — and augment the existing classifier with a sender/topic weight map + few-shot examples.
 

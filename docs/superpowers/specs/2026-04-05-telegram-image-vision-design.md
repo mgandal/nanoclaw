@@ -1,7 +1,7 @@
 # Telegram Image Vision
 
 **Date**: 2026-04-05
-**Status**: Design
+**Status**: SHIPPED in commit `439d9c57` ("feat: add Telegram image vision and fix mount-security tests"). All six layers wired: `src/image.ts` + `src/image.test.ts` (7/7 pass), `message:photo` handler in `src/channels/telegram.ts:536-576`, `ImageAttachment` + `images?: ImageAttachment[]` in `src/types.ts:68,86`, threaded through `src/container-runner.ts:214` (ContainerInput.images), `container/agent-runner/src/index.ts:43,107,110` (MessageStream.push multimodal), and `src/index.ts:487,493,572` (in-memory image cache → container input). Companion `/add-image-vision` skill exists for forks/installs that didn't pick this up via main.
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # Proactive Claire v1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: SHIPPED.** v1 substrate live: `src/outbound-governor.ts` (governor with quiet-hours/cooldown/dedup), `src/proactive-log.ts` + tests (audit log of every proactive send), `src/proactive-pause.ts` + tests (per-group pause toggle), `src/proactive-e2e.test.ts` (3-test E2E covering the full pipeline). 17/17 vitest pass. Per design intent, v1 ships zero correlation rules — the substrate is what's needed; v2 (cross-surface correlator) is gated on 2-4 weeks of governor-log data. Open `- [ ]` boxes never updated retroactively.
 
 **Goal:** Ship the measurement substrate for proactive Claire — expanded watchers, outbound governor with quiet-hours / cooldown / dedup, proactive audit log, and a daily review digest. Correlator deferred to v2.
 
