@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import requests
+import yaml
 
 from email_ingest.secure_write import write_file_secure
 from email_ingest.types import NormalizedEmail, ClassificationResult, EXPORT_DIR
@@ -115,28 +116,45 @@ def _build_attachments_section(
 
 
 def build_markdown(email: NormalizedEmail, result: ClassificationResult) -> str:
-    """Build enriched markdown document from email + classification."""
-    entities_yaml = "[" + ", ".join(f'"{e}"' for e in result.entities) + "]"
-    to_yaml = "[" + ", ".join(f'"{t}"' for t in email.to) + "]"
-    cc_yaml = "[" + ", ".join(f'"{c}"' for c in email.cc) + "]" if email.cc else "[]"
+    """Build enriched markdown document from email + classification.
+
+    C7 fix: every frontmatter value is routed through `yaml.safe_dump` so
+    adversarial strings (subject, from_addr, entities, labels) cannot
+    escape the fence. Previously fields were f-string-quoted by hand —
+    a subject containing `"\\n---\\nmalicious: true"` broke out.
+    """
     direction = _infer_direction(email)
     thread_id = (email.metadata or {}).get("threadId", "")
 
+    frontmatter: dict = {
+        "source": email.source,
+        "direction": direction,
+        "thread_id": thread_id,
+        "from": email.from_addr,
+        "to": list(email.to),
+        "cc": list(email.cc) if email.cc else [],
+        "subject": email.subject,
+        "date": email.date,
+        "labels": list(email.labels or []),
+        "relevance": result.relevance,
+        "topic": result.topic,
+        "entities": list(result.entities),
+        "message_id": email.id,
+    }
+    # width=inf prevents YAML from line-wrapping long values (which would
+    # turn a single attacker-controlled string into multiple lines).
+    # sort_keys=False preserves the documented field order for readability.
+    frontmatter_yaml = yaml.safe_dump(
+        frontmatter,
+        default_flow_style=False,
+        allow_unicode=True,
+        width=float("inf"),
+        sort_keys=False,
+    ).rstrip("\n")
+
     lines = [
         "---",
-        f"source: {email.source}",
-        f"direction: {direction}",
-        f'thread_id: "{thread_id}"',
-        f'from: "{email.from_addr}"',
-        f"to: {to_yaml}",
-        f"cc: {cc_yaml}",
-        f'subject: "{email.subject}"',
-        f"date: {email.date}",
-        f"labels: {email.labels}",
-        f"relevance: {result.relevance}",
-        f"topic: {result.topic}",
-        f"entities: {entities_yaml}",
-        f'message_id: "{email.id}"',
+        frontmatter_yaml,
         "---",
         "",
         "## Summary",

@@ -1,14 +1,29 @@
 """Tests for markdown exporter."""
 
 import os
+import re
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
+import yaml
 
 from email_ingest.exporter import (
     build_markdown, sanitize_filename, export_email, retain_in_hindsight,
 )
 from email_ingest.types import NormalizedEmail, ClassificationResult
+
+
+def _parse_frontmatter(md: str) -> dict:
+    """Extract the leading YAML frontmatter block and return the parsed dict.
+
+    Frontmatter is delimited by the first two `---` lines. Body can contain
+    its own `---` separator (between summary/action-items and body fence),
+    so the regex only captures the first fenced block.
+    """
+    m = re.match(r"^---\n(.*?)\n---\n", md, re.DOTALL)
+    if not m:
+        raise AssertionError("No frontmatter block found")
+    return yaml.safe_load(m.group(1)) or {}
 
 
 def _make_email(**overrides) -> NormalizedEmail:
@@ -79,12 +94,89 @@ def test_build_markdown_includes_thread_id_from_metadata():
         _make_email(metadata={"threadId": "thread-abc-123"}),
         _make_result(),
     )
-    assert 'thread_id: "thread-abc-123"' in md
+    fm = _parse_frontmatter(md)
+    assert fm["thread_id"] == "thread-abc-123"
 
 
 def test_build_markdown_thread_id_empty_when_metadata_missing():
     md = build_markdown(_make_email(metadata={}), _make_result())
-    assert 'thread_id: ""' in md
+    fm = _parse_frontmatter(md)
+    assert fm["thread_id"] == ""
+
+
+# ─────────────────────────────────────────────────
+# C7: YAML frontmatter injection
+# ─────────────────────────────────────────────────
+#
+# Attacker-controlled strings (subject, from, entities, summary) must never
+# escape the frontmatter. A subject like `"Hi\n---\nmalicious: true\n"`
+# previously broke out of the fence because build_markdown relied on hand-spun
+# f-string quoting (`f'"{email.subject}"'`). The fix routes every value
+# through `yaml.safe_dump` so escaping happens in one place.
+
+
+def test_c7_subject_with_yaml_fence_does_not_escape():
+    """A subject containing `---` must stay inside the `subject:` value."""
+    injected = 'Hello\n---\nmalicious: true\n# pwn'
+    md = build_markdown(_make_email(subject=injected), _make_result())
+    fm = _parse_frontmatter(md)
+    assert fm["subject"] == injected
+    assert "malicious" not in fm
+    assert "pwn" not in fm
+
+
+def test_c7_subject_with_double_quotes_round_trips():
+    """Embedded double quotes must not break YAML parsing."""
+    injected = 'Re: "urgent" request'
+    md = build_markdown(_make_email(subject=injected), _make_result())
+    fm = _parse_frontmatter(md)
+    assert fm["subject"] == injected
+
+
+def test_c7_from_addr_with_injection_round_trips():
+    """`from` is attacker-controlled via email headers."""
+    injected = 'Mallory <m@x.com>"\nprivileged: true\n"'
+    md = build_markdown(_make_email(from_addr=injected), _make_result())
+    fm = _parse_frontmatter(md)
+    assert fm["from"] == injected
+    assert "privileged" not in fm
+
+
+def test_c7_entities_with_injection_round_trip():
+    """Classification entities are Ollama-derived → adversarial."""
+    injected_entities = ['Jane"\nescaped: yes', 'normal']
+    md = build_markdown(
+        _make_email(),
+        _make_result(entities=injected_entities),
+    )
+    fm = _parse_frontmatter(md)
+    assert fm["entities"] == injected_entities
+    assert "escaped" not in fm
+
+
+def test_c7_summary_injection_stays_in_body():
+    """`summary` is the only field that leaves frontmatter as free text —
+    but the body-level delimiter (`---` between summary and body) should
+    survive a summary containing its own `---`."""
+    injected_summary = "Line 1\n---\nfake_field: true"
+    md = build_markdown(
+        _make_email(),
+        _make_result(summary=injected_summary),
+    )
+    # Frontmatter itself must still parse cleanly.
+    fm = _parse_frontmatter(md)
+    assert "fake_field" not in fm
+    assert "## Summary" in md
+    assert injected_summary in md
+
+
+def test_c7_labels_with_injection_preserved_as_list():
+    """`labels` was previously emitted via Python list __repr__ (fragile)."""
+    injected_labels = ['INBOX', 'IMPORTANT', 'x"\ninjected: yes']
+    md = build_markdown(_make_email(labels=injected_labels), _make_result())
+    fm = _parse_frontmatter(md)
+    assert fm["labels"] == injected_labels
+    assert "injected" not in fm
 
 
 def test_export_email_creates_file(tmp_path):
