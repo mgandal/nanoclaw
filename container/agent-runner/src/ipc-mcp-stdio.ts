@@ -823,6 +823,7 @@ server.tool(
     'Query the knowledge graph for entities and their relationships.',
     '',
     'Use when: the question is about CONNECTIONS — "who collaborates with X", "what papers cite Y", "which projects does grant Z fund".',
+    'For "who is X" / lab-roster / contact questions, CALL kg_query FIRST to get the entity plus its neighbors (projects, grants, papers), THEN read the vault file for prose detail. Do not skip kg_query and go straight to the vault — you will miss the structured relationships.',
     'Prefer qmd instead when: the question is about CONTENT — full-text or semantic search across document prose. The KG indexes structured relationships, not text.',
     '',
     'Returns matched entities (by canonical name or alias), their neighbors out to `hops`, and the edges connecting them. 30s timeout.',
