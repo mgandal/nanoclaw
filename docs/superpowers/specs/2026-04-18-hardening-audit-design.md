@@ -406,6 +406,16 @@ util-linux via Homebrew; mkdir atomicity is POSIX and zero-dependency.
 
 #### C3. `dashboard_query` and `kg_query` leak cross-group data
 
+**Status: resolved 2026-04-24.** Two sub-findings handled separately:
+
+- `state_freshness` exposure verified safe (9f633629) — every file in
+  `groups/global/state/` is already mounted read-only into every group's
+  container at `/workspace/global` (`src/container-runner.ts:286-293`),
+  so mtimes add no new information. Pinning tests in
+  `src/dashboard-ipc.test.ts` catch future architectural drift.
+- `kg_query` cross-group leak — closed via C20's visibility column +
+  filter.
+
 - **Where:** `src/dashboard-ipc.ts`, `src/kg-ipc.ts`, `src/kg.ts:175-216`.
 - **Risk:** `state_freshness` leaks mtimes of global state files; `kg_query`
   returns entities/edges with no group provenance, exposing grants/papers/
@@ -590,6 +600,17 @@ Deleted — the issue was an expansion of C6 ("size + section-regex gaps"),
 not a separate finding. See C6.
 
 #### C20. KG entities lack provenance; non-main gets full graph
+
+**Status: resolved 2026-04-24.** Added `entities.visibility` and
+`edges.visibility` columns (`scripts/kg/migrate_visibility.py`,
+89915c45/bf247d6e). `queryKg` filters by caller group via
+`visibilityClause` in `src/kg.ts` (f654df11); non-main callers see only
+rows with visibility IN ('public', own-group). Fail-safe: callers with
+no caller context get zero results. Ingest stamps via
+`classify_visibility(source_doc)` in `scripts/kg/ingest_phase1.py`
+(890f9ad3) — currently hard-returns 'main'; single extension point for
+future per-doc classification. End-to-end isolation tests in
+`src/kg-ipc.test.ts` (80c29a3f).
 
 - **Where:** `src/kg-ipc.ts`, `src/kg.ts`.
 - **Risk:** KG is populated from franklin-admin, grants.md, papers.md, and
