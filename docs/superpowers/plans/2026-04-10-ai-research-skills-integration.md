@@ -1,5 +1,7 @@
 # AI Research SKILLs Integration — Implementation Plan
 
+> **Status: SHIPPED 2026-04-10.** Skills installed: commits `c35da17c` (SCIENCE-claw 8 skills) + `e70eb3f6` (CODE-claw 7 skills). All 8 SCIENCE-claw skills present in `groups/telegram_science-claw/skills/`: autoresearch, ml-paper-writing, academic-plotting, brainstorming-research-ideas, peft, lm-evaluation-harness, sentence-transformers, dspy. All 7 CODE-claw skills present in `groups/telegram_code-claw/skills/`: autoresearch, ml-paper-writing, dspy, instructor, vllm, weights-and-biases, modal. Group-skill sync wired in `src/container-runner.ts:116-160` (`groupSkillsSrc = path.join(groupDir, 'skills')`, with same Bash-frontmatter filter as agent skills). autoresearch SKILL.md is 24.4K with `references/` + `templates/` — full install, not stub. Skill catalog later extended to 17 K-Dense skills 2026-04-20 (see `project_kdense_skills.md`). Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Install curated AI Research SKILLs from Orchestra Research into SCIENCE-claw and CODE-claw groups, with a persistent sync mechanism so skills survive session resets.

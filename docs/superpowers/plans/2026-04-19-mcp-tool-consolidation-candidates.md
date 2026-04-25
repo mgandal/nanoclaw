@@ -1,7 +1,9 @@
 # MCP Tool Consolidation Candidates
 
 **Date:** 2026-04-19
-**Status:** Follow-up notes (not a plan to execute yet)
+**Status:** EXPLORATORY — design notes, not an executable plan. (Reconciled 2026-04-25.) No `- [ ]` checkboxes, no test files, no commit signals expected. Verified live state 2026-04-25: all 4 candidate tools still present in `container/agent-runner/src/ipc-mcp-stdio.ts` (`publish_to_bus` line 119, `write_agent_state` line 169, `bus_publish` line 1595, `knowledge_search` line 1800) — exactly matching this doc's "later/no action" verdicts. Items 2 and 5 self-classify as no-action (correct as-is); item 3 is bundled with the agent-architecture-redesign Phase 2 cleanup; items 1 and 4 are "later" with no scheduled work. Future plan-reconciliation sweeps: skip this file. Recommend relocating to `docs/notes/` or `docs/context-engineering/` so it stops appearing in `docs/superpowers/plans/` audits.
+
+**Original status note:** Follow-up notes (not a plan to execute yet)
 **Scope:** `container/agent-runner/src/ipc-mcp-stdio.ts`
 **Triggered by:** Tool-description audit against `docs/context-engineering/tool-design.md` rubric
 

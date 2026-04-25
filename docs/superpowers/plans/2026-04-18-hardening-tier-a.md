@@ -1,5 +1,7 @@
 # Hardening Tier A Implementation Plan
 
+> **Status: SHIPPED 2026-04-18 → 2026-04-21.** Plan-tracking commit: `4941b444`. A1 (writeFileSecure TS): commits `6a041864`, `1fc59178`. B8 (Python `secure_write.py`): `b99856ea`. A3 (`untrusted_email_body` fence in `classifier.py`, `exporter.py`, `classification-prompts.ts`): `505bdc97`. A2 (group-skill `allowed-tools.*Bash` rejection): live at `src/container-runner.ts:101`. A4/A5 explicitly deferred to Tier B (closed separately by `0fc5c022` "mark remaining Tier B items resolved" + `c22508a8` Tier B remaining plan). Tier A docs banner published in `264967cc`. Artifacts: `src/secure-write.ts` + `src/secure-write.test.ts` + `scripts/sync/email_ingest/secure_write.py`. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the six direct-exploit paths identified as Tier A in the 2026-04-18 hardening audit (`docs/superpowers/specs/2026-04-18-hardening-audit-design.md`). No new features; every change is a containment measure that preserves existing functionality for the user but denies it to an attacker.

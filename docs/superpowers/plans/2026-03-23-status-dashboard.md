@@ -1,5 +1,7 @@
 # Status Dashboard Implementation Plan
 
+> **Status: SHIPPED 2026-03-23, then SUPERSEDED 2026-04-19 by cockpit-snapshot-builder.** Original delivery: `src/dashboard-ipc.ts` (5.7K, Apr 17), `query_dashboard` MCP tool wired in `container/agent-runner/src/ipc-mcp-stdio.ts`, DB query helpers (`getTaskRunLogs`, `getTaskSuccessRate`, `getConsecutiveFailures`) shipped — confirmed by commit `9f633629 test(dashboard): pin state_freshness invariant (C3 confirmation)`. Telegram-digest delivery scheduled tasks (`dashboard-daily`/`dashboard-weekly`) are no longer registered in `scheduled_tasks` (verified empty 2026-04-25). Successor: `2026-04-19-cockpit-snapshot-builder.md` reuses these same DB helpers but emits a JSON snapshot to Cloudflare R2 + a PWA at `cockpit-pwa/` instead of Telegram digests. Cockpit shipped via commits `59968068`, `b97b2be6`, `76196530`, `1a137959`, `6ce78b0c`, `4b83c2e8`, `d1f674e8` (and Date.now-injection fix `0df13d16` today). The DB helpers from this plan are alive and in production use; only the user-facing surface migrated. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Telegram-based status dashboard with daily summaries, weekly deep dives, and real-time failure alerts.

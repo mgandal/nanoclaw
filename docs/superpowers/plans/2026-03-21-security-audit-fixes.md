@@ -1,5 +1,7 @@
 # Security Audit Fixes Implementation Plan
 
+> **Status: SHIPPED 2026-03-21 → 2026-04-04.** All 11 actionable tasks landed with verified live artifacts. T1 proxy auth: `src/credential-proxy.ts:21 proxyToken = randomUUID()`, commit `02ca81e4` (also covers T6 redaction + T9). T2 shutdown drain + T3 seq cursor ORDER BY: commit `cfde348c` (verified at `src/db.ts:522,526,534,543,545`). T5 path-traversal validation: `src/pageindex-ipc.ts:32` regex `/^[A-Za-z0-9_-]{1,64}$/` + 3 sites in `src/ipc.ts`. T6 `redactContainerArgs()`: `src/container-runner.ts:62,1061`. SimpleMem token leak: `2e65f254`. Three critical trust-boundary gaps: `564c76ef`. Successor security work tracked under hardening Tier A/B and the C-class audit (commit range `9f633629..350019a8`); this plan is the predecessor, not subsumed. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Address all findings from the oracle's deep audit of the NanoClaw codebase, covering security, reliability, data integrity, and code quality issues.

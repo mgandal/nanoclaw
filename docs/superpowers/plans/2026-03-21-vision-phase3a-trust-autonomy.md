@@ -1,5 +1,7 @@
 # Phase 3a: Trust & Autonomy Framework
 
+> **Status: INTENT SHIPPED via different artifacts (SUPERSEDED).** The plan's *concept* (trust gating, approval queue, promotion analyzer) shipped, but the schema and approval UX diverged from the original design. This plan called for `src/approval-tracker.ts`, `src/promotion-analyzer.ts`, a `data/trust.yaml` `draft` routing tier, and `max_promotion` keys — none of these specific artifacts exist. Actual delivery vehicles: **`pending_actions` table + `checkTrustAndStage`** (commits `a73af0a5`, `be0ff06c`, `fa68d5c3`, `0471f2c9` under the `2026-04-19-tier-b-trust-coverage.md` and `2026-04-18-adopt-queue.md` plans), and **promotion analyzer** added in `577d7cf4 feat(sync): add trust promotion analyzer as step 9`. The successor plans use in-band tool gating instead of Telegram-reply approvals. Treat this plan as a design artifact for the trust framework intent; the implementation lives in the two adopt-queue/tier-b plans. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add approval tracking and automatic trust promotion to NanoClaw's event router, enabling the system to learn from user feedback and propose routing changes when patterns stabilize.

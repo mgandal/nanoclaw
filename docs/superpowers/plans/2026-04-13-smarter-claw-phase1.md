@@ -1,5 +1,7 @@
 # Smarter Claw Phase 1 — Implementation Plan
 
+> **Status: SHIPPED 2026-04-13.** All 3 features landed. **Feature A (Gmail Pub/Sub):** 4 commits — `36d48df5` (types), `9ee0c809` (history fetch), `8c80f44c` (status tracking), `e2e0ef1b` (Pub/Sub wiring). Verified at `src/watchers/gmail-watcher.ts:40-44, 105, 125, 172, 339-404`. **Feature B (Shared Intelligence):** `knowledge_publish` IPC handler at `src/ipc.ts:1419`; tests at `src/ipc.test.ts:1631, 1660` (incl. C13 trust enforcement). **Feature C (Pattern Engine):** `action_log` and `pattern_proposals` tables in `src/db.ts:110, 122`; helpers at `db.ts:1139-1211`; tests at `src/db.test.ts:2473, 2498`. Note: pattern-detection scheduled task was later retired (see `src/task-scheduler.ts:329` comment "Pattern detection was removed") — table writes retained for downstream consumers. Plan-tracking commit: `018f90eb`. Phase 2 followup shipped at commit `95dda1c2` (see `2026-04-25-skill-crystallization-phase2-3.md`). Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make NanoClaw agents smarter and more aware: instant email perception (Gmail Push), cross-agent knowledge sharing (Shared Intelligence), and pattern recognition with outcome tracking (Pattern Engine).

@@ -1,5 +1,7 @@
 # Infrastructure Health Guardrails Implementation Plan
 
+> **Status: SHIPPED 2026-03-26 → 2026-03-28.** All required files exist: `src/system-alerts.ts` (Mar 28), `src/health-check.ts` (Mar 28); infra alerting wired into `HealthMonitor`. Direct task-for-task commit chain: `1d54adfa feat: add system-alerts module for infrastructure health persistence` (Task 1), `b37aa513 feat: add infra_error support to HealthMonitor` (Task 7), `9a937376 feat: wire infrastructure health guardrails — alerts to CODE-claw, MCP checks in health monitor` (Task 8), `cd608dcb docs: add system-alerts.json to CLAIRE digest instructions` (Task 9). Post-ship hardening: `7bbed870 fix: require 3 consecutive failures before MCP infra alerts`; `468d9598 chore: add pre-commit guardrail against hardcoded alert routing`. The later `2026-04-04-health-watchdog.md` and the C-class audit extended this work (different scope: cron/launchd watchdog vs. in-process alerts) — related, not superseding. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add tests verifying recent infrastructure fixes, runtime guardrails that detect and alert on failures proactively, and exponential backoff to prevent log spam.

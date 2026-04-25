@@ -1,5 +1,7 @@
 # Calendar MCP Server Implementation Plan
 
+> **Status: SHIPPED 2026-04-06.** Calendar MCP live (commit `c152fc57`). launchd `com.calendar-mcp` running (PID 1171, currently loaded). Server artifacts at `~/.cache/calendar-mcp/` (server.mjs 9.2K, proxy.mjs, start.sh, package.json). Container wiring: `src/container-runner.ts:586-600` rewrites `CALENDAR_URL`; `container/agent-runner/src/index.ts:329` registers calendar MCP server; `mcp__calendar__*` allowlisted at line 809. 4 tools (`calendar_today`, `calendar_range`, `calendar_now`, `calendar_list`) live since 2026-04-06. Wraps icalBuddy CLI for all macOS calendars (Google, Exchange/Outlook, subscriptions). Ports: 8188 (proxy), 8187 (supergateway). Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give container agents real-time, on-demand access to ALL macOS calendars (including Exchange/Outlook) via a Calendar MCP server running on the host.
