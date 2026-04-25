@@ -1137,3 +1137,20 @@ git commit -m "feat(swarm): add membership audit script (audit-only, no enforcem
 ```
 
 Same fix applies to Task 4 Step 6 commit — `git add` should NOT include the JSON outputs.
+
+---
+
+## Implementation status (2026-04-25)
+
+**Tasks 1-5 SHIPPED.** Task 6 deferred-fire variant: memory written and plan committed today; first scheduled fire verification pending 2026-04-26T08:30 EDT.
+
+Commits on `feat/swarm-membership-audit`:
+- `bd752308` Task 1 — swarm-membership.yaml
+- `cafdd1d3` Task 2 — getPoolBotForPersona accessor
+- `a7d7e475` Task 2 followup — multi-persona test + cast cleanup
+- `71cdfa72` Task 3 — audit script (classifyChatProbe, renderMarkdown)
+- `238eac2c` Task 3 followup — pool-size guard + import.meta.dirname
+- `174a9298` Task 4 — diffAudits regression-only alerting
+- `ae4d1884` Task 5 — scheduled_tasks row + runbook
+
+Smoke-tests passed throughout. Plan deviations were corrections of plan errors (peer review caught: stealth-token claim wrong, JID clobber, schema mismatches; commit `09796ddf` patched the plan before implementation began).
