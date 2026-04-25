@@ -1367,7 +1367,13 @@ describe('skill_invoked invocation logging', () => {
     // No usage.jsonl should have been created.
     expect(
       fs.existsSync(
-        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+        path.join(
+          agentsRoot,
+          'claire',
+          'skills',
+          'crystallized',
+          'usage.jsonl',
+        ),
       ),
     ).toBe(false);
   });
@@ -1387,7 +1393,13 @@ describe('skill_invoked invocation logging', () => {
     );
     expect(
       fs.existsSync(
-        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+        path.join(
+          agentsRoot,
+          'claire',
+          'skills',
+          'crystallized',
+          'usage.jsonl',
+        ),
       ),
     ).toBe(false);
   });
@@ -1409,7 +1421,13 @@ describe('skill_invoked invocation logging', () => {
     ).resolves.not.toThrow();
     expect(
       fs.existsSync(
-        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+        path.join(
+          agentsRoot,
+          'claire',
+          'skills',
+          'crystallized',
+          'usage.jsonl',
+        ),
       ),
     ).toBe(false);
   });
