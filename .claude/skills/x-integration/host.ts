@@ -85,9 +85,11 @@ export async function handleXIpc(
     return false;
   }
 
-  // Only main group can use X integration
-  if (!isMain) {
-    logger.warn({ sourceGroup, type }, 'X integration blocked: not main group');
+  // Write tools (post, like, reply, retweet, quote) are main-only.
+  // Read tools (bookmarks) are open to all groups.
+  const X_WRITE_TYPES = new Set(['x_post', 'x_like', 'x_reply', 'x_retweet', 'x_quote']);
+  if (X_WRITE_TYPES.has(type) && !isMain) {
+    logger.warn({ sourceGroup, type }, 'X integration blocked: write tools are main-only');
     return true;
   }
 

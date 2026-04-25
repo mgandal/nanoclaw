@@ -1292,37 +1292,38 @@ Returns: host message confirming the quote (URL) or reporting failure. 2-minute 
     },
   );
 
-  server.tool(
-    'x_bookmarks',
-    `Fetch the user's recent X bookmarks. Main group only.
+}
+
+server.tool(
+  'x_bookmarks',
+  `Fetch the user's recent X bookmarks. Available to all groups (read-only — write tools like x_post remain main-only).
 
 Inputs:
 - limit: max tweets to return (default 50).
 - since_id: stop at this tweet ID (for incremental sync — pass the most recent ID seen last time).
 
 Returns: JSON array of bookmarked tweets, each with author, text, URL, and tweet ID. 3-minute timeout.`,
-    {
-      limit: z.number().default(50).describe('Max bookmarks to fetch (default 50)'),
-      since_id: z.string().optional().describe('Stop at this tweet ID (for incremental sync)'),
-    },
-    async (args) => {
-      const requestId = `xbookmarks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      writeIpcFile(TASKS_DIR, {
-        type: 'x_bookmarks',
-        requestId,
-        limit: args.limit,
-        sinceId: args.since_id,
-        groupFolder,
-        timestamp: new Date().toISOString(),
-      });
-      const result = await waitForXResult(requestId, 180000);
-      return {
-        content: [{ type: 'text' as const, text: typeof result.data === 'object' ? JSON.stringify(result.data) : result.message }],
-        isError: !result.success,
-      };
-    },
-  );
-}
+  {
+    limit: z.number().default(50).describe('Max bookmarks to fetch (default 50)'),
+    since_id: z.string().optional().describe('Stop at this tweet ID (for incremental sync)'),
+  },
+  async (args) => {
+    const requestId = `xbookmarks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'x_bookmarks',
+      requestId,
+      limit: args.limit,
+      sinceId: args.since_id,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForXResult(requestId, 180000);
+    return {
+      content: [{ type: 'text' as const, text: typeof result.data === 'object' ? JSON.stringify(result.data) : result.message }],
+      isError: !result.success,
+    };
+  },
+);
 
 // --- iMessage Tools ---
 // Read/search/send iMessages via host-side SQLite + AppleScript.

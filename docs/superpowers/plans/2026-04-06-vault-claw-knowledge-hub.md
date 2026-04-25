@@ -1,5 +1,26 @@
 # VAULT-claw Knowledge Hub Implementation Plan
 
+> **STATUS: SHIPPED** (reconciled 2026-04-25). All 11 tasks landed; all three parts operationally healthy after a same-day repair pass that re-authed the X session and lifted `x_bookmarks` out of the main-only gate.
+>
+> **Evidence (verified 2026-04-25):**
+> - Task 1 — `groups/telegram_vault-claw/CLAUDE.md` (159 lines) leads with "Core Rule: Ingest Everything" matching the plan body.
+> - Task 2 — `container/Dockerfile:41` installs `@readwise/cli` globally.
+> - Task 3 — `src/container-runner.ts:673-679` injects `READWISE_ACCESS_TOKEN` (gated by `isSecretAllowed`, an improvement over the plan).
+> - Task 5 — `readwise-daily-sync` (cron `0 8 * * *`) active; `last_run = 2026-04-25T12:03:28Z`; state `{"last_sync": "2026-04-25T12:00:00Z", "count": 6}`.
+> - Task 6 — `.claude/skills/x-integration/scripts/bookmarks.ts` (4.5K) present.
+> - Task 7 — `x_bookmarks` host IPC case present in `.claude/skills/x-integration/host.ts`.
+> - Task 8 — `x_bookmarks` MCP tool present at `container/agent-runner/src/ipc-mcp-stdio.ts:1296`.
+> - Task 10 — `x-bookmarks-daily-sync` (cron `0 9 * * *`) active; `last_run = 2026-04-25T13:01:28Z`.
+>
+> **Operational status (2026-04-25):**
+> - Part A (link ingest) — healthy. VAULT-claw CLAUDE.md governs runtime behavior.
+> - Part B (Readwise) — healthy. 6 items synced 2026-04-25.
+> - Part C (X bookmarks) — healthy after repair. Verified 2026-04-25 11:41Z: scheduled task fired, container spawned (Claire/main context), `x_bookmarks` MCP tool dispatched, `bookmarks.ts` ran 48s, host returned `result.success=true`, agent sent "no new bookmarks" digest to Telegram. `data/x-auth.json` re-stamped 2026-04-25 after `setup.ts` re-auth. **Note:** the stale `groups/telegram_vault-claw/x-bookmarks-state.json` still shows the 2026-04-06 "AUTH_TOKEN and CT0 not set" error — this is cosmetic only; the agent prompt only rewrites the state file when there are *new* bookmarks. Next non-empty scrape will overwrite it.
+>
+> **Repair summary (2026-04-25):**
+> - X Chrome profile session re-authenticated via `npx tsx .claude/skills/x-integration/scripts/setup.ts` (session had silently expired ~10 days after the 2026-03-27 stamp).
+> - Plan Task 8 wrapped `x_bookmarks` registration inside the `isMain` block at `container/agent-runner/src/ipc-mcp-stdio.ts:1206`, conflicting with Plan Task 10 placing the scheduler on VAULT-claw (non-main). The current scheduled-task prompt is itself rewritten to run as Claire/main, so this didn't surface in production — but the design mismatch is fixed defensively: `x_bookmarks` registration moved outside the `isMain` block (read-only by nature), and `.claude/skills/x-integration/host.ts` now gates only the X *write* tools (`x_post`/`x_like`/`x_reply`/`x_retweet`/`x_quote`) to main, allowing read tools from any group.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make VAULT-claw the primary knowledge ingestion channel — direct wiki ingest on URLs, daily Readwise Reader sync, and daily X bookmark scraping.
