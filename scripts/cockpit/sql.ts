@@ -52,7 +52,7 @@ export function getGroupsWithActivity(db: Database, now: Date): GroupRow[] {
   return result;
 }
 
-export function getTasksWithStatus(db: Database, now: Date = new Date()): TaskRow[] {
+export function getTasksWithStatus(db: Database, now: Date): TaskRow[] {
   const tasks = db
     .prepare(
       `SELECT id, group_folder, prompt, agent_name, schedule_value, last_run, last_result, next_run

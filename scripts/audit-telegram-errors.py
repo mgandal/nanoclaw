@@ -175,8 +175,8 @@ def classify(
 def is_actionable(record: dict[str, Any]) -> bool:
     """Threshold logic for whether a normalized record should wake someone.
 
-    Contract (docs/plan-telegram-error-audit.md):
-      sustained  = (last_seen - first_seen) >= 10 min AND count >= 3
+    Contract (docs/plan-telegram-error-audit.md, post-2026-04-24 retune Q2=c):
+      sustained  = (last_seen - first_seen) >= 30 min AND count >= 5
       actionable = sustained OR source == 'error_log' OR bucket == 'bug'
     """
     if record.get("source") == "error_log":

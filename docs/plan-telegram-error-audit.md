@@ -20,7 +20,7 @@ NanoClaw emits errors across three surfaces — `logs/nanoclaw.log` (pino stdout
 
 1. Pulls the last 24 hours of errors/warnings
 2. Separates real bugs from transient/expected noise
-3. Highlights **sustained** problems (same bug recurring ≥10 minutes) rather than one-offs
+3. Highlights **sustained** problems (same bug recurring ≥30 minutes with ≥5 occurrences — retuned 2026-04-24 from the original 10/3) rather than one-offs
 4. Produces a report actionable from the command line
 
 Today, bugs like `SyntaxError: Export named 'OPS_ALERT_FOLDER' not found` sit in `nanoclaw.error.log` for days unnoticed because no one greps it.
@@ -29,7 +29,7 @@ Today, bugs like `SyntaxError: Export named 'OPS_ALERT_FOLDER' not found` sit in
 
 - Daily cron job that runs on the host, reads the last rolling-24h window, writes a structured audit report.
 - Wake CLAIRE (or ops-claw) **only** when something actionable appears — no audit fatigue.
-- Actionable = a bug-bucket entry that has recurred continuously or intermittently for ≥10 minutes, OR any new entry in `nanoclaw.error.log` (launchd-visible crash = always actionable).
+- Actionable = a bug-bucket entry that has recurred continuously or intermittently for ≥30 minutes with ≥5 occurrences, OR any new entry in `nanoclaw.error.log` (launchd-visible crash = always actionable).
 - A `/audit-errors` slash command that runs the same audit on-demand and walks the user through proposed fixes interactively.
 
 ## Non-goals (explicitly out of scope for v1)
@@ -66,7 +66,7 @@ Host cron (launchd, daily 9am ET)
           ├─ classify()  ─┬─ rule-based pre-pass (transient / config / bug / infra / unknown)
           │               └─ Ollama phi4-mini LLM pass, ONLY for "unknown" bucket
           │
-          ├─ threshold() → sustained? (first_seen..last_seen span ≥10 min AND count ≥3)
+          ├─ threshold() → sustained? (first_seen..last_seen span ≥30 min AND count ≥5)
           │                OR any entry in nanoclaw.error.log (always actionable)
           │
           └─ report()    ─┬─ write audit-YYYY-MM-DD.md to vault 00-inbox/
@@ -109,13 +109,15 @@ Encoded as a list of `(regex, bucket, notes)` triples in the script. First match
 | any line from `nanoclaw.error.log` not matched above | bug | Anything launchd sees as stderr is worth looking at |
 | (no match) | unknown | Send to LLM |
 
-### Threshold logic — the "sustained for 10 min" definition
+### Threshold logic — the "sustained for 30 min" definition
+
+Retuned 2026-04-24 from the original 10min/3occ to the looser 30min/5occ in response to plan question Q2=c (lower-noise daily filter).
 
 For each normalized record `r`:
-- `sustained = (r.last_seen - r.first_seen) >= 10 min AND r.count >= 3`
+- `sustained = (r.last_seen - r.first_seen) >= 30 min AND r.count >= 5`
 - `actionable = sustained OR r.source == "error_log" OR r.bucket == "bug"`
 
-A single-shot bug that only fires once won't trip the threshold by time — but if its bucket is `bug`, we surface it anyway. The 10-min rule is specifically for things that *might* be transient but have been happening steadily (e.g. a flapping 429 over hours is louder than a 10-minute spike).
+A single-shot bug that only fires once won't trip the threshold by time — but if its bucket is `bug`, we surface it anyway. The 30-min rule is specifically for things that *might* be transient but have been happening steadily (e.g. a flapping 429 over hours is louder than a 30-minute spike).
 
 ### Report format (`audit-YYYY-MM-DD.md` in vault `00-inbox/`)
 
@@ -235,6 +237,6 @@ Before shipping:
 ## Open questions for user review
 
 1. **Alert routing:** ops-claw vs CLAIRE vs both? Plan defaults to ops-claw with env-var override.
-2. **Sustained threshold — exact definition:** `≥10 min span AND ≥3 occurrences`. Tighter (5 min / 5 occ)? Looser?
+2. **Sustained threshold — exact definition:** `≥10 min span AND ≥3 occurrences`. Tighter (5 min / 5 occ)? Looser? **RESOLVED 2026-04-24: Q2=c (looser) — `≥30 min AND ≥5 occurrences`.**
 3. **Baseline diff:** should the report always fire when error-rate > 2× 7-day baseline, even if no single issue is sustained? Plan currently says yes — conservative.
 4. **Error-log policy:** plan treats any line in `nanoclaw.error.log` as a bug. Anything there we should explicitly whitelist? (The credential-proxy warning spam is in `nanoclaw.log`, not the error log, so it's already excluded.)
