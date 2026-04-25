@@ -1,0 +1,23 @@
+# Source of truth: which personas are expected to be reachable in which groups
+# via the Telegram bot pool. Audited daily by the swarm-membership-audit task.
+#
+# group_folder: matches groups/<folder>/ and registered_groups.folder in store/messages.db.
+# personas: list of agent display names from data/agents/<id>/identity.md (the `name:` field).
+#
+# A persona listed here MUST be pinned in TELEGRAM_POOL_PIN (.env) — otherwise the
+# audit will report `unpinned` for that persona regardless of which group it's listed in.
+# Groups not listed below are not audited (they default to main-bot only).
+
+groups:
+  telegram_lab-claw:
+    personas: [Marvin, Warren, Vincent, FranklinClaw]
+  telegram_home-claw:
+    personas: [Marvin, Warren]
+  telegram_code-claw:
+    personas: [Simon, Vincent]
+  telegram_science-claw:
+    personas: [Einstein, Simon, Vincent]
+  telegram_coach-claw:
+    personas: [Freud]
+  telegram_clinic-claw:
+    personas: [Steve]

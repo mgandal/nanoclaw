@@ -46,6 +46,11 @@ scripts/sync/gmail-sync-latest.json
 scripts/paperpile-wiki/pipeline.log
 scripts/state/*.json
 
+# Swarm membership audit run-state (regenerated daily by scheduled task)
+data/agents/swarm-membership-audit.json
+data/agents/swarm-membership-audit-diffs.json
+groups/telegram_claire/state/swarm-audit.md
+
 # Skill output and runtime state
 graphify-out/
 .remember/

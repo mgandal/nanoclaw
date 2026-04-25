@@ -1034,6 +1034,8 @@ import {
   initBotPool,
   sendPoolMessage as sendPoolMessageFn,
   _resetPoolStateForTests,
+  getPoolBotForPersona,
+  getPoolSize,
 } from './telegram.js';
 
 function getBot(token: string) {
@@ -1123,5 +1125,70 @@ describe('pool pinning', () => {
     const ok = await sendPoolMessageFn('tg:1', 'hi', 'Claire', 'g');
     expect(ok).toBe(true);
     expect(getBot('t1').sendMessage).toHaveBeenCalled();
+  });
+
+  it('skips setMyName when skipRename: true is passed', async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2'], { bot_t2: 'Freud' }, { skipRename: true });
+    // Pin is still recorded
+    expect(getPoolBotForPersona('Freud')).toBeDefined();
+    // setMyName was NOT called on the pinned bot.
+    expect(getBot('t2').setMyName).toHaveBeenCalledTimes(0);
+    // Nor on the unpinned bot.
+    expect(getBot('t1').setMyName).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe('getPoolBotForPersona', () => {
+  beforeEach(() => {
+    botRef.poolApiInstances.length = 0;
+    _resetPoolStateForTests();
+  });
+
+  it('returns the Api for a pinned persona', async () => {
+    await initBotPool(['t1', 't2'], { bot_t2: 'Freud' });
+    const api = getPoolBotForPersona('Freud');
+    expect(api).toBeDefined();
+    // The pinned bot must be index 1 (we pinned the second one)
+    expect(api!.token).toBe('t2');
+  });
+
+  it('returns undefined for an unpinned persona', async () => {
+    await initBotPool(['t1'], {});
+    expect(getPoolBotForPersona('NoSuchPersona')).toBeUndefined();
+  });
+
+  it('returns undefined when the pool is empty', async () => {
+    // Don't call initBotPool
+    expect(getPoolBotForPersona('Freud')).toBeUndefined();
+  });
+
+  it("returns each pinned persona's own Api when multiple personas are pinned", async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2', 't3'], {
+      bot_t2: 'Freud',
+      bot_t3: 'Marvin',
+    });
+    const freudApi = getPoolBotForPersona('Freud');
+    const marvinApi = getPoolBotForPersona('Marvin');
+    expect(freudApi).toBeDefined();
+    expect(marvinApi).toBeDefined();
+    expect(freudApi!.token).toBe('t2');
+    expect(marvinApi!.token).toBe('t3');
+    // The two Apis are distinct — not aliasing each other
+    expect(freudApi).not.toBe(marvinApi);
+  });
+});
+
+describe('getPoolSize', () => {
+  it('returns 0 when initBotPool has not run', async () => {
+    _resetPoolStateForTests();
+    expect(getPoolSize()).toBe(0);
+  });
+
+  it('returns the number of bots initialized', async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2', 't3'], {});
+    expect(getPoolSize()).toBe(3);
   });
 });

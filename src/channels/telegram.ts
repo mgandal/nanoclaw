@@ -125,6 +125,31 @@ const senderBotMap = new Map<string, number>();
 // Maps sender name → pool Api index for pinned senders (global — a pinned bot's
 // Telegram display name is global, so one pin covers every group that bot is in).
 const pinnedSenderIdx = new Map<string, number>();
+
+/**
+ * Read-only accessor for audit/diagnostic code: returns the Grammy `Api`
+ * instance pinned to a given persona display name (e.g. "Freud", "Marvin").
+ * Returns `undefined` if the persona is not pinned or the pool is empty.
+ *
+ * Does NOT trigger round-robin assignment — this is intentional. The audit
+ * only cares about *pinned* personas. Dynamic round-robin assignments are
+ * per-session and not auditable as a stable mapping.
+ */
+export function getPoolBotForPersona(persona: string): Api | undefined {
+  const idx = pinnedSenderIdx.get(persona);
+  if (idx === undefined) return undefined;
+  return poolApis[idx];
+}
+
+/**
+ * Read-only accessor for audit/diagnostic code: returns the number of pool
+ * bots successfully initialized by initBotPool. Use to detect when initBotPool
+ * silently failed for all tokens (returns 0).
+ */
+export function getPoolSize(): number {
+  return poolApis.length;
+}
+
 let nextPoolIndex = 0;
 
 /** Reset module-level pool state — test-only hook. */
@@ -182,6 +207,7 @@ async function handleMigration(
 export async function initBotPool(
   tokens: string[],
   pins: Record<string, string> = {},
+  options: { skipRename?: boolean } = {},
 ): Promise<void> {
   for (const token of tokens) {
     try {
@@ -197,17 +223,24 @@ export async function initBotPool(
       const pinnedSender = me.username ? pins[me.username] : undefined;
       if (pinnedSender) {
         pinnedSenderIdx.set(pinnedSender, idx);
-        try {
-          await api.setMyName(pinnedSender);
+        if (options.skipRename) {
           logger.info(
             { botUsername: me.username, pinnedSender, poolIndex: idx },
-            'Pool bot pinned and pre-renamed',
+            'Pool bot pinned (rename skipped — read-only mode)',
           );
-        } catch (err) {
-          logger.warn(
-            { botUsername: me.username, pinnedSender, err },
-            'Failed to pre-rename pinned pool bot (pin kept, will send anyway)',
-          );
+        } else {
+          try {
+            await api.setMyName(pinnedSender);
+            logger.info(
+              { botUsername: me.username, pinnedSender, poolIndex: idx },
+              'Pool bot pinned and pre-renamed',
+            );
+          } catch (err) {
+            logger.warn(
+              { botUsername: me.username, pinnedSender, err },
+              'Failed to pre-rename pinned pool bot (pin kept, will send anyway)',
+            );
+          }
         }
       }
     } catch (err) {
