@@ -81,9 +81,25 @@ echo "[pre-flight] Checking sync dependencies..."
 bash "$SCRIPT_DIR/sync-health-check.sh" 2>&1 | grep -E '✓|✗|⚠|Results'
 echo ""
 
-# --- Step 1: Exchange email sync (DISABLED — migration complete) ---
+# --- Step 1: Exchange email sync (Mac Mail Outlook → mikejg1838@gmail.com) ---
+# Reads .emlx files directly from ~/Library/Mail/V10/<EXCHANGE_UUID>/ and
+# uploads new ones via Gmail API. Dedupes by emlx filename in
+# state/email-migration.json. Self-throttles at daily_limit_bytes; safe
+# to invoke every 4h — exits fast if at quota.
 echo ""
-echo "[1/10] Exchange email sync... SKIPPED (migration complete, requires Full Disk Access)"
+echo "[1/10] Exchange email sync (Mac Mail → mikejg1838@gmail.com)..."
+MIGRATE_SCRIPT="/Users/mgandal/Agents/marvin2/scripts/email-migrate.py"
+if [ -f "$MIGRATE_SCRIPT" ]; then
+    $PYTHON3 "$MIGRATE_SCRIPT" 2>&1
+    EC=$?
+    if [ $EC -ne 0 ]; then
+        echo "[1/10] WARNING: Exchange sync had errors (exit $EC)"
+        ERRORS=$((ERRORS + 1))
+    fi
+else
+    echo "[1/10] WARNING: $MIGRATE_SCRIPT not found"
+    ERRORS=$((ERRORS + 1))
+fi
 
 # --- Step 2: Gmail sync (mgandal → mikejg1838) ---
 echo ""
