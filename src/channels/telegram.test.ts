@@ -1138,7 +1138,7 @@ describe('getPoolBotForPersona', () => {
     const api = getPoolBotForPersona('Freud');
     expect(api).toBeDefined();
     // The pinned bot must be index 1 (we pinned the second one)
-    expect((api as { token: string }).token).toBe('t2');
+    expect(api!.token).toBe('t2');
   });
 
   it('returns undefined for an unpinned persona', async () => {
@@ -1149,5 +1149,18 @@ describe('getPoolBotForPersona', () => {
   it('returns undefined when the pool is empty', async () => {
     // Don't call initBotPool
     expect(getPoolBotForPersona('Freud')).toBeUndefined();
+  });
+
+  it('returns each pinned persona\'s own Api when multiple personas are pinned', async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2', 't3'], { bot_t2: 'Freud', bot_t3: 'Marvin' });
+    const freudApi = getPoolBotForPersona('Freud');
+    const marvinApi = getPoolBotForPersona('Marvin');
+    expect(freudApi).toBeDefined();
+    expect(marvinApi).toBeDefined();
+    expect(freudApi!.token).toBe('t2');
+    expect(marvinApi!.token).toBe('t3');
+    // The two Apis are distinct — not aliasing each other
+    expect(freudApi).not.toBe(marvinApi);
   });
 });
