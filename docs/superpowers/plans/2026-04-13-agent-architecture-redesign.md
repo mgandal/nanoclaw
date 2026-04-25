@@ -1,5 +1,7 @@
 # Agent Architecture Redesign — Implementation Plan
 
+> **Status: SHIPPED 2026-04-13 → 2026-04-19.** All 4 phases complete. 9 agent dirs at `data/agents/{claire,coo,einstein,freud,marvin,simon,steve,vincent,warren}/` each with `identity.md` + `memory.md` + `trust.yaml` + `skills/`. `lead: true` only on `claire/identity.md` (correct per spec); others `lead: false`. `write_agent_memory` IPC handler at `src/ipc.ts:1473` (64KB cap, section validation, agent-name guard) + MCP tool at `container/agent-runner/src/ipc-mcp-stdio.ts:1859`. Per-agent host dir mounts read-only to `/workspace/agent` in `src/container-runner.ts:438-448`. Phase 1 skill crystallization layer wires `data/agents/{name}/skills/crystallized/` between group and container skills (`src/container-runner.ts:117`, commits `168a3a21`, `c2683278`, `1ee76d36`). Tests: `bun --bun vitest run src/agent-registry.test.ts` → 24/24 pass. Phase 2/3 (invocation logging + implicit triggers) tracked in `2026-04-25-skill-crystallization-phase2-3.md` and shipped 2026-04-25 (commit `0027fb46` + ancestors). Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unify Claire's memory, make specialist agents portable with persistent identity/memory/skills, and reduce CLAUDE.md bloat from 48KB to ~14KB per session.

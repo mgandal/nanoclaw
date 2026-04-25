@@ -1,5 +1,7 @@
 # Passive Email Knowledge Ingestion — Implementation Plan
 
+> **Status: SHIPPED 2026-04-11 → 2026-04-24.** Pipeline live at `scripts/sync/email-ingest.py` + `scripts/sync/email_ingest/` package (classifier.py, gmail_adapter.py, exchange_adapter.py, exporter.py, types.py + extras: aging.py, closure.py, extractor.py, followups.py, markitdown.py, secure_write.py, trainer.py). Runs every 4h via `~/Library/LaunchAgents/com.nanoclaw.sync.plist` (StartInterval=14400) as step 2 of `scripts/sync/sync-all.sh`. Tests: `cd scripts/sync && python3 -m pytest tests/ -v` → 200 pass across 21 test files. Key commits: `093cc877` (orchestrator), `1d6a9ca3` (cred fallback), `a3215232` (followups foundation), `8e173403` (Hindsight retain fix), `5977d7f5` (MarkItDown attachment conversion), `f1a01bd9` (C18 Hindsight hardening). Memory: `project_email_ingest.md`. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Batch pipeline that reads all Gmail + Exchange emails, classifies/summarizes via Ollama, and exports enriched markdown to a QMD collection so agents can recall email context.

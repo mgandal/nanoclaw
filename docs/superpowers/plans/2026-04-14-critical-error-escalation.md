@@ -1,5 +1,7 @@
 # Critical Error Escalation — Implementation Plan
 
+> **Status: SHIPPED 2026-04-14.** All 8 tasks landed. Container OOM detection: `ContainerOutput` carries `exitCode`/`timedOut`; `src/index.ts:766-768` triggers `sendSystemAlert('Container OOM',...)` on `exitCode === 137 && !timedOut`. Alert fallback chain at `src/index.ts:976-1081`: `isSendingAlert` re-entrancy guard → OPS-claw → Telegram main DM → Slack DM → `appendAlertToFile`. `ESCALATION_SLACK_JID` constant in `src/config.ts:194` (default `slack:D0AQ09RSF1B`). Supergroup migration: `src/db.ts:1220 migrateGroupJid`; `src/channels/telegram.ts:167` calls `opts.onMigrate`; `src/channels/registry.ts:13-14` declares `onMigrate`/`onSendFailure` on `ChannelOpts`; `src/index.ts:1759-1779` wires both (calls `migrateGroupJid` + updates in-memory state + sends alert). Send-failure escalation: `src/send-failure-tracker.ts` + `.test.ts` exist; `src/channels/telegram.ts:945-956` routes structural vs. transient errors via `classifySendError`/`trackTransientFailure`. All tests pass. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make critical errors (supergroup migrations, message delivery failures, container OOM) escalate to the user instead of silently logging.

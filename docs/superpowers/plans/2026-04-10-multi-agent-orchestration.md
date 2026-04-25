@@ -1,5 +1,7 @@
 # Multi-Agent Orchestration Implementation Plan
 
+> **Status: SHIPPED 2026-04-13.** All 11 tasks landed (commits `8f4d366e..0b9104e7`). Compound keys (`src/compound-key.ts` with `compoundKey`/`parseCompoundKey`/`compoundKeyToFsPath`/`fsPathToCompoundKey`/`isCompoundKey`), agent registry (`src/agent-registry.ts` 6.3K), bus watcher (`src/bus-watcher.ts` 8.3K), per-message bus (`src/message-bus.ts` 7.2K), and 9 agent identity dirs under `data/agents/{claire,coo,einstein,freud,marvin,simon,steve,vincent,warren}/` (vs 3 originally specified) all live. `agent_registry` table at `src/db.ts:92` (read at `db.ts:1271`). `task-scheduler.ts:11,215,382` plumbs `parseCompoundKey` and `agentName` through. Tests: 67/67 pass across compound-key/agent-registry/trust-enforcement/bus-watcher. Phase 2 (gaps) tracked in `2026-04-14-multi-agent-completion.md`. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add persistent named agents (Claire, Jennifer, Einstein) that can be invoked within groups, coordinate via message bus, and operate under a trust enforcement layer.

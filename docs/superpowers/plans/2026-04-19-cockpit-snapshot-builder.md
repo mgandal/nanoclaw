@@ -1,5 +1,7 @@
 # Cockpit Snapshot Builder Implementation Plan
 
+> **Status: SHIPPED 2026-04-19 → 2026-04-25.** All 14 modules under `scripts/cockpit/` shipped in commits `ae5099ff..d1f674e8` (types/config, cron-humanizer, watchlist, papers, emails, blogs, priorities, SQL, vault-scan, delta, R2, orchestrator, CLI entrypoint, launchd plist). Follow-up hardening: `186f3682` (test-env `import.meta.dirname` guard), `d04b7566` (priorities regex), `334b2b0d` (FDA precondition `error.cause`), `45946e73` (clock contract sync), `0df13d16` (Date.now clock injection into `getTasksWithStatus` — landed today). Tests: `bun --bun vitest run scripts/cockpit/` → 50/50 passing across 11 files. `launchd/com.nanoclaw.cockpit.plist` runs every 30 min (StartInterval=1800). Excluded by design (Plans B/C): Cloudflare Worker, Pages site, PWA. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the Mac-side snapshot builder that reads NanoClaw state (SQLite, per-group/per-agent files, vault) and uploads a JSON snapshot plus a bundle of recently-edited vault pages to Cloudflare R2 every 30 minutes.

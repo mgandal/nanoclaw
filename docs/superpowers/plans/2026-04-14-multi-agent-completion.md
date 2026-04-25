@@ -1,5 +1,7 @@
 # Multi-Agent Orchestration Completion — Implementation Plan
 
+> **Status: SHIPPED 2026-04-15.** All 4 workstreams landed. W1 (registry seeding from identity.md): commit `b3027ffc`, `src/db.ts:1288 upsertAgentRegistry`. W2 (trust + logging): `src/trust-enforcement.ts` 4.7K with `checkTrust` + `checkTrustAndStage`; `src/ipc.ts` imports at lines 28/34 and gates 8+ call sites (510, 960, 1016, 1055, 1118, 1184, 1365…). `db.ts:1308 insertAgentAction` exists. Commit `09b06fc7`. C13 hardening (`be0ff06c`, `5a5a515b`, `63d0a82d`, `d32b9040`, `c8651c05`, `bf87a566`) extended trust gates to schedule_task, write_agent_memory, publish_to_bus, knowledge_publish, write_agent_state, task lifecycle. W3 (bus dispatch fix): commit `cdeef397`, `message-bus.ts:72` calls `writeAgentMessage` from `publish()`. W4 (task scheduler agent identity): `task-scheduler.ts:382 agentName: task.agent_name`. Follow-ups: `cb7befce` (event-router escalate→agent via bus dispatch); `0603a7e9` pool-bot persona pinning (`config.ts:148-165`, `TELEGRAM_BOT_POOL` + `TELEGRAM_POOL_PIN` env). 67/67 multi-agent tests pass. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Complete the remaining 20% of the Multi-Agent Orchestration spec — trust enforcement, action logging, bus dispatch fix, registry seeding, and agent-aware task scheduling.

@@ -1,5 +1,7 @@
 # Health Watchdog Implementation Plan
 
+> **Status: SHIPPED 2026-04-04 (Layer 1) — ⚠ runtime gap on Layer 2.** Layer 1 (in-process auto-fix) fully wired: `src/health-monitor.ts` defines `FixHandler` (line 54), `addFixHandler` (105), `getFixHandler` (109), `getInfraFailureCount` (117), `attemptFix` (121), `createDefaultFixActions` (464). 6 of 7 fix scripts present in `scripts/fixes/` (restart-{qmd,apple-notes,todoist,container-runtime}.sh, kill-port-squatter.sh, kill-sqlite-orphans.sh — `restart-simplemem.sh` retired with SimpleMem→Honcho migration, expected). 155/155 health-monitor tests pass. Layer 2 (external watchdog): `scripts/watchdog-heartbeat.sh` (7.2K) shipped, `launchd/com.nanoclaw.watchdog.plist` shipped, user copy at `~/Library/LaunchAgents/com.nanoclaw.watchdog.plist` exists **but is NOT loaded into launchd** (`launchctl list` shows no `com.nanoclaw.watchdog`). Either intentional (Layer 1 has been sufficient) or a missed `launchctl load`. Operator action: decide whether to load it or document why it's off. Open `- [ ]` checkboxes left as-is — banner is the source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add auto-fix capability to NanoClaw's health monitoring — detect known failure patterns, attempt repair, verify the fix, and escalate to Telegram if auto-fix fails.
