@@ -1126,6 +1126,17 @@ describe('pool pinning', () => {
     expect(ok).toBe(true);
     expect(getBot('t1').sendMessage).toHaveBeenCalled();
   });
+
+  it('skips setMyName when skipRename: true is passed', async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2'], { bot_t2: 'Freud' }, { skipRename: true });
+    // Pin is still recorded
+    expect(getPoolBotForPersona('Freud')).toBeDefined();
+    // setMyName was NOT called on the pinned bot.
+    expect(getBot('t2').setMyName).toHaveBeenCalledTimes(0);
+    // Nor on the unpinned bot.
+    expect(getBot('t1').setMyName).toHaveBeenCalledTimes(0);
+  });
 });
 
 describe('getPoolBotForPersona', () => {

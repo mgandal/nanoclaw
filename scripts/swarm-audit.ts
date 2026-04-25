@@ -144,7 +144,11 @@ async function main() {
       'TELEGRAM_BOT_POOL is empty in .env — audit cannot run without pool bots',
     );
   }
-  await initBotPool(TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN);
+  // Audit must be read-only against Telegram. initBotPool would otherwise call
+  // setMyName on every pinned bot — a write that overwrites any manual rename
+  // (e.g., BotFather debugging). skipRename: true tells initBotPool to populate
+  // pinnedSenderIdx without touching the bot's display name.
+  await initBotPool(TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN, { skipRename: true });
   if (getPoolSize() === 0) {
     throw new Error(
       'initBotPool completed but no pool bots initialized — check Telegram tokens and network. ' +

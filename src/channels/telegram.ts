@@ -207,6 +207,7 @@ async function handleMigration(
 export async function initBotPool(
   tokens: string[],
   pins: Record<string, string> = {},
+  options: { skipRename?: boolean } = {},
 ): Promise<void> {
   for (const token of tokens) {
     try {
@@ -222,17 +223,24 @@ export async function initBotPool(
       const pinnedSender = me.username ? pins[me.username] : undefined;
       if (pinnedSender) {
         pinnedSenderIdx.set(pinnedSender, idx);
-        try {
-          await api.setMyName(pinnedSender);
+        if (options.skipRename) {
           logger.info(
             { botUsername: me.username, pinnedSender, poolIndex: idx },
-            'Pool bot pinned and pre-renamed',
+            'Pool bot pinned (rename skipped — read-only mode)',
           );
-        } catch (err) {
-          logger.warn(
-            { botUsername: me.username, pinnedSender, err },
-            'Failed to pre-rename pinned pool bot (pin kept, will send anyway)',
-          );
+        } else {
+          try {
+            await api.setMyName(pinnedSender);
+            logger.info(
+              { botUsername: me.username, pinnedSender, poolIndex: idx },
+              'Pool bot pinned and pre-renamed',
+            );
+          } catch (err) {
+            logger.warn(
+              { botUsername: me.username, pinnedSender, err },
+              'Failed to pre-rename pinned pool bot (pin kept, will send anyway)',
+            );
+          }
         }
       }
     } catch (err) {

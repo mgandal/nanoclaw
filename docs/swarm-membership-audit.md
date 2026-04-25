@@ -34,4 +34,4 @@ cat data/agents/swarm-membership-audit-diffs.json
 
 ## Out of scope
 The audit does not enforce membership. The runtime send path
-(`src/channels/telegram.ts:319-348`) still falls back to the main bot on 403.
+(`src/channels/telegram.ts:364-369`) still falls back to the main bot on 403.
