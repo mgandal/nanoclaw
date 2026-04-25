@@ -19,10 +19,13 @@ import {
   writeOutput,
   getSessionSummary,
   buildMcpServers,
+  shouldOfferCrystallize,
+  appendCrystallizeOffer,
   OUTPUT_START_MARKER,
   OUTPUT_END_MARKER,
   type ContainerInput,
   type ContainerOutput,
+  type ToolCallRecord,
 } from './index.js';
 
 // ─── sanitizeFilename ────────────────────────────────────────────────────────
@@ -520,5 +523,110 @@ describe('output markers', () => {
   it('markers are well-formed strings', () => {
     expect(OUTPUT_START_MARKER).toBe('---NANOCLAW_OUTPUT_START---');
     expect(OUTPUT_END_MARKER).toBe('---NANOCLAW_OUTPUT_END---');
+  });
+});
+
+// ─── shouldOfferCrystallize (Phase 3 implicit-offer heuristic) ──────────────
+
+describe('shouldOfferCrystallize', () => {
+  const mcp = (tool: string, paramsHash = '0'): ToolCallRecord => ({
+    tool,
+    paramsHash,
+    timestamp: '2026-04-25T10:00:00.000Z',
+  });
+
+  it('returns true with 3 distinct MCP tool calls, small response, flag on', () => {
+    const calls = [
+      mcp('mcp__qmd__query', 'a'),
+      mcp('mcp__honcho__honcho_search', 'b'),
+      mcp('mcp__todoist__find_tasks', 'c'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: true }),
+    ).toBe(true);
+  });
+
+  it('returns false with only 2 distinct MCP calls (below threshold)', () => {
+    const calls = [
+      mcp('mcp__qmd__query', 'a'),
+      mcp('mcp__honcho__honcho_search', 'b'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: true }),
+    ).toBe(false);
+  });
+
+  it('returns false when 5 calls share the same tool+paramsHash (1 distinct)', () => {
+    const calls = [
+      mcp('mcp__qmd__query', 'same'),
+      mcp('mcp__qmd__query', 'same'),
+      mcp('mcp__qmd__query', 'same'),
+      mcp('mcp__qmd__query', 'same'),
+      mcp('mcp__qmd__query', 'same'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: true }),
+    ).toBe(false);
+  });
+
+  it('returns false when response is too large (> 2000 chars)', () => {
+    const calls = [
+      mcp('mcp__qmd__query', 'a'),
+      mcp('mcp__honcho__honcho_search', 'b'),
+      mcp('mcp__todoist__find_tasks', 'c'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 5000, { offerEnabled: true }),
+    ).toBe(false);
+  });
+
+  it('returns false when offerEnabled flag is off', () => {
+    const calls = [
+      mcp('mcp__qmd__query', 'a'),
+      mcp('mcp__honcho__honcho_search', 'b'),
+      mcp('mcp__todoist__find_tasks', 'c'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: false }),
+    ).toBe(false);
+  });
+
+  it('ignores non-MCP tools (Read/Edit/Bash do not count toward threshold)', () => {
+    const calls = [
+      { tool: 'Read', paramsHash: 'a', timestamp: '' },
+      { tool: 'Edit', paramsHash: 'b', timestamp: '' },
+      { tool: 'Bash', paramsHash: 'c', timestamp: '' },
+      { tool: 'Grep', paramsHash: 'd', timestamp: '' },
+      { tool: 'Glob', paramsHash: 'e', timestamp: '' },
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: true }),
+    ).toBe(false);
+  });
+
+  it('counts distinct (tool, paramsHash) pairs across mixed MCP calls', () => {
+    // 3 distinct: qmd a, qmd b (different params), honcho a.
+    const calls = [
+      mcp('mcp__qmd__query', 'a'),
+      mcp('mcp__qmd__query', 'b'),
+      mcp('mcp__qmd__query', 'a'), // dupe of first
+      mcp('mcp__honcho__honcho_search', 'a'),
+    ];
+    expect(
+      shouldOfferCrystallize(calls, 500, { offerEnabled: true }),
+    ).toBe(true);
+  });
+});
+
+describe('appendCrystallizeOffer', () => {
+  it('appends suggestion suffix with the call count', () => {
+    const out = appendCrystallizeOffer('Done.', 4);
+    expect(out).toContain('Done.');
+    expect(out).toContain('4 tool calls');
+    expect(out).toContain('/crystallize');
+  });
+
+  it('returns the original string unchanged if it is null', () => {
+    expect(appendCrystallizeOffer(null, 4)).toBeNull();
   });
 });

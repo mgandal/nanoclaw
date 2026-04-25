@@ -47,6 +47,14 @@ export interface ContainerConfig {
    * Omit or leave empty to pass no secondary tokens to this group.
    */
   allowedSecrets?: AllowedSecret[];
+  /**
+   * Phase 3 of skill crystallization: when true, the agent-runner appends a
+   * passive "want me to /crystallize this?" suffix after responses that
+   * involved >= 3 distinct MCP tool calls. Default false. Per-group opt-in
+   * — recommended only for groups where the user actively reviews crystallized
+   * skills. Spec: docs/superpowers/specs/2026-04-18-skill-crystallization-design.md.
+   */
+  implicitCrystallizeOffer?: boolean;
 }
 
 export interface RegisteredGroup {

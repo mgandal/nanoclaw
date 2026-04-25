@@ -27,10 +27,54 @@ import { fileURLToPath } from 'url';
 import { createHonchoClient } from './honcho-client.js';
 import { HonchoSession } from './honcho-session.js';
 
-interface ToolCallRecord {
+export interface ToolCallRecord {
   tool: string;
   paramsHash: string;
   timestamp: string;
+}
+
+const CRYSTALLIZE_OFFER_MIN_DISTINCT_MCP = 3;
+const CRYSTALLIZE_OFFER_MAX_RESPONSE_CHARS = 2000;
+
+/**
+ * Phase 3 of skill crystallization: pure-function heuristic that decides
+ * whether to nudge the user with "want me to /crystallize this?". The
+ * suggestion fires only if all four conditions hold:
+ *   1. The flag is on (per-group opt-in).
+ *   2. The response is short enough that the suffix won't bury the answer.
+ *   3. There are at least N distinct MCP tool calls (3 by default).
+ *   4. Distinctness is by (tool, paramsHash) so 5 identical retries don't
+ *      trigger a crystallize offer for a non-recipe pattern.
+ *
+ * Pure: no I/O, no env reads — `offerEnabled` is passed in, so callers
+ * can control the env-flag check from one site. Easy to unit test.
+ */
+export function shouldOfferCrystallize(
+  toolCalls: readonly ToolCallRecord[],
+  responseSize: number,
+  opts: { offerEnabled: boolean },
+): boolean {
+  if (!opts.offerEnabled) return false;
+  if (responseSize > CRYSTALLIZE_OFFER_MAX_RESPONSE_CHARS) return false;
+  const distinctMcp = new Set<string>();
+  for (const c of toolCalls) {
+    if (!c.tool.startsWith('mcp__')) continue;
+    distinctMcp.add(`${c.tool}|${c.paramsHash}`);
+  }
+  return distinctMcp.size >= CRYSTALLIZE_OFFER_MIN_DISTINCT_MCP;
+}
+
+/**
+ * Append a passive crystallize suggestion to a result string. Returns the
+ * input unchanged if null. The suffix uses italics + parens to read as a
+ * sidebar, not a directive — the user is free to ignore.
+ */
+export function appendCrystallizeOffer(
+  result: string | null,
+  toolCallCount: number,
+): string | null {
+  if (result == null) return result;
+  return `${result}\n\n_(I made ${toolCallCount} tool calls solving that. Want me to /crystallize this as a reusable skill?)_`;
 }
 
 const sessionToolCalls: ToolCallRecord[] = [];
@@ -645,6 +689,12 @@ async function runQuery(
   let lastAssistantUuid: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
+  // Per-turn tool calls for the Phase 3 implicit-crystallize heuristic.
+  // Distinct from the module-scoped sessionToolCalls (which spans the
+  // whole session for the Pattern Engine). Reset would happen naturally
+  // because runQuery is called once per turn.
+  const turnToolCalls: ToolCallRecord[] = [];
+  const offerEnabled = process.env.IMPLICIT_CRYSTALLIZE_OFFER === '1';
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -798,11 +848,13 @@ async function runQuery(
       if (Array.isArray(contentBlocks)) {
         for (const content of contentBlocks) {
           if (content.type === 'tool_use' && typeof content.name === 'string') {
-            sessionToolCalls.push({
+            const record: ToolCallRecord = {
               tool: content.name,
               paramsHash: hashToolParams(content.input),
               timestamp: new Date().toISOString(),
-            });
+            };
+            sessionToolCalls.push(record);
+            turnToolCalls.push(record);
           }
         }
       }
@@ -829,11 +881,33 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      const textResult =
+      let textResult =
         'result' in message ? (message as { result?: string }).result : null;
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
+      // Phase 3 of skill crystallization: append a passive nudge if the
+      // turn ran enough distinct MCP calls to plausibly be a recipe and
+      // the response is small enough that the suffix doesn't bury the
+      // answer. Heuristic + flag isolated in pure functions; here we only
+      // wire them. Only fires for successful results — error paths skip.
+      const isSuccess =
+        (message as { subtype?: string }).subtype === 'success';
+      if (
+        isSuccess &&
+        textResult &&
+        shouldOfferCrystallize(turnToolCalls, textResult.length, {
+          offerEnabled,
+        })
+      ) {
+        const distinctMcp = new Set(
+          turnToolCalls
+            .filter((c) => c.tool.startsWith('mcp__'))
+            .map((c) => `${c.tool}|${c.paramsHash}`),
+        ).size;
+        textResult = appendCrystallizeOffer(textResult, distinctMcp);
+        log(`Appended crystallize-offer suggestion (${distinctMcp} distinct MCP calls)`);
+      }
       writeOutput({
         status: 'success',
         result: textResult || null,

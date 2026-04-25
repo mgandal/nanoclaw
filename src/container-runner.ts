@@ -707,6 +707,14 @@ function buildContainerArgs(
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
 
+  // Phase 3 of skill crystallization: opt-in implicit-offer flag. Default
+  // off; only set to "1" in the container if this group has the flag
+  // enabled in containerConfig. Default behavior for all groups stays
+  // unchanged unless explicitly opted in.
+  if (group.containerConfig?.implicitCrystallizeOffer === true) {
+    args.push('-e', 'IMPLICIT_CRYSTALLIZE_OFFER=1');
+  }
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
