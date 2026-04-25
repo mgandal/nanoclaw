@@ -154,88 +154,113 @@ git add src/ipc.ts src/ipc.test.ts
 git commit -m "feat(skills): skill_invoked IPC handler — bump invocation_count + log usage.jsonl"
 ```
 
-### Task A2: Detect Skill-tool invocations of crystallized skills in agent-runner
+### Task A2: Detect Skill-tool invocations of crystallized skills via PreToolUse hook
 
 **Files:**
 - Modify: `container/agent-runner/src/index.ts`
 
-**Background:** The SDK `Skill` tool fires with `input: { skill: "<name>" }` (or similar — verify on first message). We tap the existing `tool_use`-capture loop and emit IPC for skills whose name matches a crystallized skill the agent owns.
+**Background (revised after discovery):** Initial plan was to tap the existing `tool_use` content-block capture at line 706-720. Discovery in `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:1538` revealed a typed `PreToolUseHookInput` with `tool_name: string` + `tool_input: unknown` — a first-class SDK hook. Use the hook instead — same pattern as the existing `PreCompact` registration, cleaner than the content-block tap, and integrates the toolUseID for correlation.
 
-- [ ] **Step 1: Determine the actual Skill-tool invocation shape**
+- [ ] **Step 1: Build the crystallized-skill name set on session start**
 
-This is the discovery step — the design doc assumed the SDK exposes `Skill(skill: name)` but the contract has not been verified. Run a small probe:
-
-```bash
-# Spin up a one-shot container query that explicitly invokes a known skill.
-# Read /tmp/agent-runner.log inside the container or capture stdout.
-# The relevant message is type=assistant with a content block of
-# type=tool_use, name="Skill", input={ skill: "<name>" }.
-```
-
-Easier: just check the SDK's type definitions:
-
-```bash
-grep -rE "Skill.*tool|name.*['\"]Skill['\"]" container/agent-runner/node_modules/@anthropic-ai/claude-agent-sdk/dist/*.d.ts | head -10
-```
-
-If the tool name is literally `"Skill"` and the input shape is `{ skill: "<name>" }`, proceed. Otherwise update Step 2 to match the actual shape and document it inline.
-
-- [ ] **Step 2: Build the crystallized-skill name set on session start**
-
-Near where `containerInput.agentName` is first available (search for `containerInput.assistantName` near line 689), add:
+Near the existing `compactionJustHappened` flag (line 96 module scope), add a session-scoped helper. Inside `runQuery` (around line 580 where `containerInput.agentName` is available), build:
 
 ```typescript
 const crystallizedSkillNames: Set<string> = (() => {
   if (!containerInput.agentName) return new Set();
-  // Inside the container, the synced skills live at /home/node/.claude/skills.
-  // We only count crystallized ones — but the sync flattens layers, so we
-  // need a separate signal. Easiest: read data/agents/{name}/skills/crystallized/
-  // through the read-only agents mount at /workspace/agents.
-  const dir = `/workspace/agents/${containerInput.agentName}/skills/crystallized`;
+  // Read-only agent mount: container-runner.ts:444 binds the *single*
+  // agent dir (data/agents/{name}) to /workspace/agent (singular).
+  const dir = `/workspace/agent/skills/crystallized`;
   try {
     return new Set(
       fs.readdirSync(dir).filter((entry) => {
-        const skillMd = path.join(dir, entry, 'SKILL.md');
-        return fs.existsSync(skillMd);
+        try {
+          return fs.statSync(path.join(dir, entry)).isDirectory()
+            && fs.existsSync(path.join(dir, entry, 'SKILL.md'));
+        } catch { return false; }
       }),
     );
   } catch {
     return new Set();
   }
 })();
-log(`Crystallized skills tracked for invocation: ${[...crystallizedSkillNames].join(', ') || '(none)'}`);
+log(`Crystallized skills tracked: ${[...crystallizedSkillNames].join(', ') || '(none)'}`);
 ```
 
-Verify the mount path. If `/workspace/agents` is read-only and `agentName` mode is active, `crystallized/{name}/SKILL.md` should be visible. If the mount path differs, adjust accordingly — search `src/container-runner.ts` for `'/workspace/agents'`.
+Verify the mount path by grepping `src/container-runner.ts` for `'/workspace/agents'`. (If the path differs, adjust.)
 
-- [ ] **Step 3: Tap the tool_use capture loop**
+- [ ] **Step 2: Define a PreToolUse hook callback**
 
-In the `for (const content of contentBlocks)` loop (line 710-719), after the existing `sessionToolCalls.push(...)`, add:
+Add near `createPreCompactHook` (around line 331):
 
 ```typescript
-if (content.name === 'Skill' && content.input && typeof content.input === 'object') {
-  const skillName = (content.input as { skill?: string }).skill;
-  if (skillName && crystallizedSkillNames.has(skillName)) {
-    // Fire-and-forget IPC; don't await, don't block the message stream.
-    const taskFile = path.join(IPC_INPUT_DIR.replace('/inputs', '/tasks'), `skill-invoked-${Date.now()}.json`);
+function createPreToolUseHook(
+  agentName: string | undefined,
+  crystallizedSet: Set<string>,
+  groupFolder: string,
+): HookCallback {
+  return async (input) => {
+    // Type guard — input is the union of all hook inputs.
+    if (!('tool_name' in input)) return {};
+    const toolName = (input as { tool_name?: string }).tool_name;
+    if (toolName !== 'Skill') return {};
+
+    // Defensive: the Skill tool input shape is `unknown` in the SDK type
+    // defs. Log the raw shape on first sight so the actual contract is
+    // visible at runtime; never crash if the shape drifts.
+    const rawInput = (input as { tool_input?: unknown }).tool_input;
+    log(`PreToolUse Skill input: ${JSON.stringify(rawInput).slice(0, 200)}`);
+
+    if (!agentName || !rawInput || typeof rawInput !== 'object') return {};
+    const skillName =
+      (rawInput as { skill?: string }).skill ??
+      (rawInput as { name?: string }).name;
+    if (!skillName || !crystallizedSet.has(skillName)) return {};
+
+    // Fire-and-forget IPC. Use the standard tasks dir.
     try {
+      const taskFile = `/workspace/ipc/tasks/skill-invoked-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
       fs.writeFileSync(
         taskFile,
         JSON.stringify({
           type: 'skill_invoked',
-          agent: containerInput.agentName,
+          agent: agentName,
           name: skillName,
-          groupFolder: containerInput.groupFolder,
+          groupFolder,
         }),
       );
     } catch (err) {
       log(`skill_invoked IPC write failed: ${err}`);
     }
-  }
+    return {};
+  };
 }
 ```
 
-Confirm `IPC_INPUT_DIR` resolution — the existing PreCompact path uses it (search around line 1071 from Phase 1's lossless memory work for the pattern).
+- [ ] **Step 3: Register the hook alongside PreCompact**
+
+The two `query()` calls at line 687 and 920 each register `hooks: { PreCompact: [...] }`. Extend both:
+
+```typescript
+hooks: {
+  PreCompact: [
+    { hooks: [createPreCompactHook(containerInput.assistantName)] },
+  ],
+  PreToolUse: [
+    {
+      hooks: [
+        createPreToolUseHook(
+          containerInput.agentName,
+          crystallizedSkillNames,
+          containerInput.groupFolder,
+        ),
+      ],
+    },
+  ],
+},
+```
+
+Both query call sites must match — the first is for the main query loop, the second is for the resumed-session loop.
 
 - [ ] **Step 4: Build the container**
 

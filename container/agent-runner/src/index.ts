@@ -379,6 +379,55 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
+/**
+ * Phase 2 of skill crystallization: emit a `skill_invoked` IPC whenever
+ * the SDK's `Skill` tool is about to invoke a name we know to be a
+ * crystallized skill for this agent. Fire-and-forget — the hook returns
+ * `{}` immediately and the host bumps invocation_count + appends to
+ * usage.jsonl asynchronously.
+ *
+ * `crystallizedSet` is built once on session start by reading the
+ * read-only agent mount at /workspace/agent/skills/crystallized/.
+ */
+function createPreToolUseHook(
+  agentName: string | undefined,
+  crystallizedSet: Set<string>,
+  groupFolder: string,
+): HookCallback {
+  return async (input) => {
+    if (!('tool_name' in input)) return {};
+    const toolName = (input as { tool_name?: string }).tool_name;
+    if (toolName !== 'Skill') return {};
+
+    const rawInput = (input as { tool_input?: unknown }).tool_input;
+    // Defensive: SDK type defs leave tool_input as `unknown`. Log on
+    // first sight so a future shape drift is visible at runtime.
+    log(`PreToolUse Skill input: ${JSON.stringify(rawInput).slice(0, 200)}`);
+
+    if (!agentName || !rawInput || typeof rawInput !== 'object') return {};
+    const skillName =
+      (rawInput as { skill?: string }).skill ??
+      (rawInput as { name?: string }).name;
+    if (!skillName || !crystallizedSet.has(skillName)) return {};
+
+    try {
+      const taskFile = `/workspace/ipc/tasks/skill-invoked-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
+      fs.writeFileSync(
+        taskFile,
+        JSON.stringify({
+          type: 'skill_invoked',
+          agent: agentName,
+          name: skillName,
+          groupFolder,
+        }),
+      );
+    } catch (err) {
+      log(`skill_invoked IPC write failed: ${err}`);
+    }
+    return {};
+  };
+}
+
 export function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
@@ -633,6 +682,35 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  // Phase 2 of skill crystallization: build the set of crystallized skill
+  // names so PreToolUse can emit telemetry only for those (not for every
+  // Skill invocation). Built from the read-only agent mount.
+  const crystallizedSkillNames: Set<string> = (() => {
+    if (!containerInput.agentName) return new Set<string>();
+    const dir = '/workspace/agent/skills/crystallized';
+    try {
+      const entries = fs.readdirSync(dir);
+      const names = new Set<string>();
+      for (const entry of entries) {
+        try {
+          const full = path.join(dir, entry);
+          if (
+            fs.statSync(full).isDirectory() &&
+            fs.existsSync(path.join(full, 'SKILL.md'))
+          ) {
+            names.add(entry);
+          }
+        } catch { /* skip unreadable entry */ }
+      }
+      return names;
+    } catch {
+      return new Set<string>();
+    }
+  })();
+  log(
+    `Crystallized skills tracked for invocation: ${[...crystallizedSkillNames].join(', ') || '(none)'}`,
+  );
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -687,6 +765,17 @@ async function runQuery(
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
+        ],
+        PreToolUse: [
+          {
+            hooks: [
+              createPreToolUseHook(
+                containerInput.agentName,
+                crystallizedSkillNames,
+                containerInput.groupFolder,
+              ),
+            ],
+          },
         ],
       },
     },
