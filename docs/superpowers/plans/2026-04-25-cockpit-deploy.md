@@ -48,36 +48,21 @@ Don't proceed to Step 1 until at least `COCKPIT_APEX_DOMAIN` is filled.
 
 ---
 
-## Pre-flight: confirm the snapshot pipe is healthy
+## Pre-flight: confirm the codebase is deploy-ready
 
-Before deploying anything to Cloudflare, verify the upstream snapshot builder is actually producing fresh output. If it's broken, deploying a Worker that reads from R2 will just give you a 404 factory.
+Before touching Cloudflare, verify the code paths and infrastructure references the deploy will exercise. Note: snapshot-freshness verification has moved to **Step 4.3** because the snapshot builder is R2-coupled by design (`scripts/cockpit/main.ts` lines 39-41 throw if R2 env vars are missing — there's no dry-run mode), so we can't verify upload output until after Step 3 wires up R2 credentials.
 
-- [ ] **Step P1: Confirm snapshot builder ran successfully recently**
-
-```bash
-launchctl print "gui/$(id -u)/com.nanoclaw.cockpit" 2>&1 | grep -E "last exit code|state"
-```
-
-Expected: `last exit code = 0` and `state = waiting` (or running). If exit code is non-zero, fix the cockpit job before continuing — check `logs/cockpit.log`. Out of scope for this plan.
-
-- [ ] **Step P2: Confirm snapshot output is fresh**
+- [ ] **Step P1: Confirm cockpit launchd plist exists and points at the right script**
 
 ```bash
-ls -la /Users/mgandal/Agents/nanoclaw/data/cockpit/snapshot.json /Users/mgandal/Agents/nanoclaw/data/cockpit/heartbeat.txt 2>&1
+test -f ~/Library/LaunchAgents/com.nanoclaw.cockpit.plist && echo "loaded plist exists" || echo "MISSING — run: cp /Users/mgandal/Agents/nanoclaw/launchd/com.nanoclaw.cockpit.plist ~/Library/LaunchAgents/"
+test -f /Users/mgandal/Agents/nanoclaw/launchd/com.nanoclaw.cockpit.plist && echo "repo plist exists"
+test -f /Users/mgandal/Agents/nanoclaw/scripts/cockpit/main.ts && echo "builder source exists"
 ```
 
-Expected: both files exist; `snapshot.json` mtime within the last hour (cockpit runs every 30 min); `heartbeat.txt` mtime same range. If either is missing or stale, manually trigger:
+Expected: all three "exists" lines. If `~/Library/LaunchAgents/com.nanoclaw.cockpit.plist` is MISSING, copy from the repo path (per the printed instruction). The job won't be loaded into launchd yet — that happens in Step 3.3 after R2 credentials are wired.
 
-```bash
-launchctl kickstart -k "gui/$(id -u)/com.nanoclaw.cockpit"
-sleep 15
-ls -la /Users/mgandal/Agents/nanoclaw/data/cockpit/{snapshot,heartbeat}.{json,txt} 2>&1
-tail -20 /Users/mgandal/Agents/nanoclaw/logs/cockpit.log
-```
-
-If still missing or the log shows errors, **do not proceed to Step 1**.
-
-- [ ] **Step P3: Confirm code/tests are green**
+- [ ] **Step P2: Confirm code/tests are green**
 
 ```bash
 cd /Users/mgandal/Agents/nanoclaw/cockpit-worker && bun run test 2>&1 | tail -3
@@ -85,6 +70,18 @@ cd /Users/mgandal/Agents/nanoclaw/cockpit-pwa && bun run test 2>&1 | tail -3
 ```
 
 Expected: 20/20 worker, 71/71 PWA. If any fail, this plan is blocked — fix tests in a separate session first.
+
+- [ ] **Step P3: Confirm SQLite + vault dependencies the builder reads**
+
+The builder reads `store/messages.db`, `groups/global/state/current.md`, and the vault. Verify these exist:
+
+```bash
+test -f /Users/mgandal/Agents/nanoclaw/store/messages.db && echo "DB exists"
+test -f /Users/mgandal/Agents/nanoclaw/groups/global/state/current.md && echo "current.md exists"
+test -d /Volumes/sandisk4TB/marvin-vault && echo "vault mount available"
+```
+
+Expected: all three "exists". If the vault mount is unavailable (external drive unplugged), the builder will fail at scan time — plug it in before continuing.
 
 ---
 
@@ -211,30 +208,49 @@ Expected: `1`. If `2+`, the sed didn't clean prior runs — manually deduplicate
 
 ---
 
-## Step 4: Trigger first publish + verify R2 has objects
+## Step 4: Load launchd job + first publish + verify R2 has objects
 
-Before deploying the Worker, prove the snapshot builder can actually upload to R2.
+The cockpit launchd job has likely never been loaded (verified during pre-flight). With R2 credentials now in `.env`, load and trigger it.
 
-**Files:** None.
+**Files:** None (modifies launchd state).
 
-- [ ] **Step 4.1: Trigger immediate publish**
+- [ ] **Step 4.1: Load the launchd job (one-time)**
+
+```bash
+launchctl list | grep -q com.nanoclaw.cockpit \
+  && echo "already loaded" \
+  || launchctl load ~/Library/LaunchAgents/com.nanoclaw.cockpit.plist
+launchctl list | grep com.nanoclaw.cockpit
+```
+
+Expected: a row like `<PID> 0 com.nanoclaw.cockpit` (PID may be `-` between runs). The plist has `RunAtLoad=true` so loading triggers an immediate execution. If exit code is non-zero, check `logs/cockpit.log`.
+
+- [ ] **Step 4.2: Trigger immediate publish (idempotent)**
 
 ```bash
 launchctl kickstart -k "gui/$(id -u)/com.nanoclaw.cockpit"
 sleep 30
-tail -20 /Users/mgandal/Agents/nanoclaw/logs/cockpit.log
+tail -30 /Users/mgandal/Agents/nanoclaw/logs/cockpit.log
 ```
 
-Expected: log contains an upload-success line for `snapshot.json` and `heartbeat.txt`. If you see 401/403, the token is wrong — re-check `COCKPIT_R2_TOKEN` formatting in `.env` (must be `<key-id>:<secret>`, no quotes, no spaces).
+Expected: log ends with a line like `cockpit: ok, N pages uploaded, heartbeat <ISO timestamp>`. If you see `Missing R2 config`, `.env` wasn't picked up — verify Step 3.2 saved the file correctly. If you see 401/403 in the upload, the token is wrong — re-check `COCKPIT_R2_TOKEN` formatting (must be `<key-id>:<secret>`, no quotes, no spaces).
 
-- [ ] **Step 4.2: List R2 objects**
+- [ ] **Step 4.3: Verify local snapshot was written**
+
+```bash
+ls -la /Users/mgandal/Agents/nanoclaw/data/cockpit/snapshot.json /Users/mgandal/Agents/nanoclaw/data/cockpit/last-snapshot.json 2>&1
+```
+
+Expected: both exist with mtime within the last minute. The local file is written before the upload (line 68 of `main.ts`) — if it exists, the builder ran successfully. The upload happens after.
+
+- [ ] **Step 4.4: List R2 objects to confirm upload**
 
 ```bash
 cd /Users/mgandal/Agents/nanoclaw/cockpit-worker
 ./node_modules/.bin/wrangler r2 object list nanoclaw-cockpit 2>&1 | head -10
 ```
 
-Expected: at least `snapshot.json` and `heartbeat.txt`. If empty, fix Step 4.1 before proceeding — deploying a Worker against an empty bucket gives 404 on every read.
+Expected: at least `snapshot.json`, `heartbeat.txt`, and a `snapshot-YYYYMMDD-HHMM.json` historical entry. If empty, the local snapshot was written but upload failed — read `logs/cockpit.log` for the upload error. **Do not proceed to Step 5** until R2 has objects (deploying a Worker against an empty bucket gives 404 on every read).
 
 ---
 
