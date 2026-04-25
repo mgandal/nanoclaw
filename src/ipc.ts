@@ -2405,10 +2405,17 @@ function handleCrystallizeSkillIpc(
   const body = typeof data.body === 'string' ? data.body : undefined;
   const confidence =
     typeof data.confidence === 'number' ? data.confidence : NaN;
-  // Test seam: let tests point the write at a tmp dir. Production omits
-  // this field and the default AGENTS_DIR is used.
+  // Test seam: let tests point the write at a tmp dir. Honored ONLY when
+  // running under vitest (process.env.VITEST is set automatically). In
+  // production a compromised container could otherwise redirect writes
+  // to an arbitrary host path. Production omits the field and the
+  // default AGENTS_DIR is used.
+  const isTestEnv =
+    process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
   const agentsRoot =
-    typeof data.agentsRoot === 'string' ? data.agentsRoot : AGENTS_DIR;
+    isTestEnv && typeof data.agentsRoot === 'string'
+      ? data.agentsRoot
+      : AGENTS_DIR;
   const requestId =
     typeof data.requestId === 'string' ? data.requestId : undefined;
 
@@ -2509,17 +2516,19 @@ function handleSkillInvokedIpc(
 ): boolean {
   const agent = typeof data.agent === 'string' ? data.agent : undefined;
   const name = typeof data.name === 'string' ? data.name : undefined;
+  // Test seam — see handleCrystallizeSkillIpc for rationale. Honored
+  // only under vitest; in production a compromised container cannot
+  // redirect writes to an arbitrary host path.
+  const isTestEnv =
+    process.env.VITEST === 'true' || process.env.NODE_ENV === 'test';
   const agentsRoot =
-    typeof data.agentsRoot === 'string' ? data.agentsRoot : AGENTS_DIR;
+    isTestEnv && typeof data.agentsRoot === 'string'
+      ? data.agentsRoot
+      : AGENTS_DIR;
 
   const agentRe = /^[a-z0-9][a-z0-9_-]{0,63}$/;
   const skillNameRe = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
-  if (
-    !agent ||
-    !agentRe.test(agent) ||
-    !name ||
-    !skillNameRe.test(name)
-  ) {
+  if (!agent || !agentRe.test(agent) || !name || !skillNameRe.test(name)) {
     logger.warn(
       { agent, name, sourceGroup },
       'skill_invoked IPC rejected: invalid payload',

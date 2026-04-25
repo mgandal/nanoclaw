@@ -436,17 +436,21 @@ function createPreCompactHook(assistantName?: string): HookCallback {
 function createPreToolUseHook(
   agentName: string | undefined,
   crystallizedSet: Set<string>,
-  groupFolder: string,
 ): HookCallback {
+  // Closure flag — log the raw Skill tool_input shape on FIRST sight only,
+  // so a future SDK shape drift is visible without spamming logs on every
+  // skill invocation.
+  let loggedShapeOnce = false;
   return async (input) => {
     if (!('tool_name' in input)) return {};
     const toolName = (input as { tool_name?: string }).tool_name;
     if (toolName !== 'Skill') return {};
 
     const rawInput = (input as { tool_input?: unknown }).tool_input;
-    // Defensive: SDK type defs leave tool_input as `unknown`. Log on
-    // first sight so a future shape drift is visible at runtime.
-    log(`PreToolUse Skill input: ${JSON.stringify(rawInput).slice(0, 200)}`);
+    if (!loggedShapeOnce) {
+      log(`PreToolUse Skill input (first-sight): ${JSON.stringify(rawInput).slice(0, 200)}`);
+      loggedShapeOnce = true;
+    }
 
     if (!agentName || !rawInput || typeof rawInput !== 'object') return {};
     const skillName =
@@ -462,7 +466,6 @@ function createPreToolUseHook(
           type: 'skill_invoked',
           agent: agentName,
           name: skillName,
-          groupFolder,
         }),
       );
     } catch (err) {
@@ -822,7 +825,6 @@ async function runQuery(
               createPreToolUseHook(
                 containerInput.agentName,
                 crystallizedSkillNames,
-                containerInput.groupFolder,
               ),
             ],
           },
