@@ -11,7 +11,7 @@
 **Pre-flight reality checks:**
 - `data/agents/` contains 9 agent identity dirs (claire, coo, einstein, freud, marvin, simon, steve, vincent, warren). Persona names are read from `name:` in each `identity.md` (verified 2026-04-25).
 - `src/config.ts:163-178` parses `TELEGRAM_POOL_PIN` as `bot_username:SenderName` pairs into `Record<string, string>`. Today the inverse direction (sender→token) is reconstructed inside `initBotPool` at `src/channels/telegram.ts:182-223`.
-- `src/channels/telegram.ts` keeps `poolApis: Api[]` and `pinnedSenderIdx: Map<string, number>` as module-private state. We need to expose a read-only accessor for them — be careful not to break the existing send path or its 1093-line test suite.
+- `src/channels/telegram.ts` keeps `poolApis: Api[]` and `pinnedSenderIdx: Map<string, number>` as module-private state. We need to expose a read-only accessor for them — be careful not to break the existing send path or its 52-test, ~1127-line test suite.
 - The current memory-of-record claims:
   - LAB-claw → Marvin, Warren, Vincent, FranklinClaw
   - HOME-claw → Marvin, Warren
@@ -114,7 +114,7 @@ git commit -m "feat(swarm): add swarm-membership.yaml as audit source of truth"
 
 **Files:**
 - Modify: `src/channels/telegram.ts` (after the `pinnedSenderIdx` declaration)
-- Test: `src/channels/telegram.test.ts` (extend; file already exists at 1093+ lines)
+- Test: `src/channels/telegram.test.ts` (extend; baseline is 52 tests in ~1127 lines as of 2026-04-25)
 
 - [ ] **Step 1: Read the existing pool-state module-private declarations**
 
@@ -201,7 +201,7 @@ Expected: 3 PASS. If still failing, check that the mock for `Api` in the existin
 bun --bun vitest run src/channels/telegram.test.ts
 ```
 
-Expected: all tests PASS, including the 1000+ existing ones.
+Expected: all tests PASS — baseline is 52 tests, post-change should be 52 + the 3 new `getPoolBotForPersona` tests = 55.
 
 - [ ] **Step 7: Commit**
 
@@ -298,6 +298,10 @@ Create `scripts/swarm-audit.ts`:
  * Run manually:
  *   bun run scripts/swarm-audit.ts
  */
+// Load .env BEFORE importing config — config.ts reads process.env at import time.
+// Without this, ad-hoc CLI invocations (smoke-tests, manual reruns) silently see an
+// empty TELEGRAM_BOT_POOL and the audit throws.
+import 'dotenv/config';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'yaml';
@@ -376,11 +380,14 @@ async function main() {
   }
   await initBotPool(TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN);
 
-  // 3. Resolve group_folder → chat_jid via DB
+  // 3. Resolve group_folder → chat_jid via DB.
+  // IMPORTANT: registered_groups has multiple rows per folder for multi-channel
+  // groups (e.g. telegram_lab-claw has both `tg:-100…` and `slack:C0AB…`).
+  // Filter to Telegram-only: api.getChat() takes a Telegram numeric id, not a Slack id.
   const db = new Database(DB_PATH, { readonly: true });
   const folderToJid = new Map<string, string>();
   const rows = db
-    .prepare('SELECT folder, jid FROM registered_groups')
+    .prepare("SELECT folder, jid FROM registered_groups WHERE jid LIKE 'tg:%'")
     .all() as Array<{ folder: string; jid: string }>;
   for (const r of rows) folderToJid.set(r.folder, r.jid);
   db.close();
@@ -822,22 +829,24 @@ Expected: one row, `folder=telegram_claire`, `jid=tg:8475020901` (or similar —
 
 - [ ] **Step 3: Compute `next_run` for the first fire**
 
-08:30 ET tomorrow, in epoch milliseconds:
+`next_run` is **TEXT (ISO 8601)** in SQLite — verified via `SELECT typeof(next_run), next_run FROM scheduled_tasks LIMIT 1` which returns `text|2026-04-27T13:00:00.000Z`. The scheduler does string comparison `next_run <= ?`, NOT integer arithmetic. Earlier plan drafts used epoch ms; that was wrong.
+
+08:30 ET tomorrow, as ISO 8601:
 
 ```bash
 node -e "
 const d = new Date();
 d.setDate(d.getDate() + 1);
 d.setHours(8, 30, 0, 0);
-console.log(d.getTime());
+console.log(d.toISOString());
 "
 ```
 
-Capture the output (single number, e.g., `1809091800000`).
+Capture the output (a string like `2026-04-26T12:30:00.000Z` — note this is UTC since the .ts conversion strips local-tz offset; SQLite ISO strings sort correctly).
 
 - [ ] **Step 4: Insert the task**
 
-Substitute `<CLAIRE_JID>` with the value from Step 2 and `<NEXT_RUN_MS>` with the value from Step 3:
+Substitute `<CLAIRE_JID>` with the value from Step 2 and `<NEXT_RUN_ISO>` with the ISO string from Step 3 (wrapped in single quotes — it's a TEXT column).
 
 ```bash
 sqlite3 /Users/mgandal/Agents/nanoclaw/store/messages.db <<EOF
@@ -854,23 +863,27 @@ INSERT INTO scheduled_tasks (
   'cron',
   '30 8 * * *',
   'active',
-  <NEXT_RUN_MS>,
+  '<NEXT_RUN_ISO>',
   'isolated',
   0,
   0,
-  strftime('%s','now') * 1000
+  strftime('%Y-%m-%dT%H:%M:%fZ','now')
 );
 EOF
 ```
+
+Notes:
+- `created_at` uses `strftime('%Y-%m-%dT%H:%M:%fZ','now')` to match the ISO 8601 TEXT format the rest of the schema uses (verified against existing rows).
+- `script` is `NULL` because we want the prompt path (LLM agent decides what to do based on prompt body), not a raw script.
 
 - [ ] **Step 5: Verify the row landed**
 
 ```bash
 sqlite3 /Users/mgandal/Agents/nanoclaw/store/messages.db \
-  "SELECT id, schedule_value, status, datetime(next_run/1000, 'unixepoch', 'localtime') AS next_run_local FROM scheduled_tasks WHERE id='swarm-membership-audit';"
+  "SELECT id, schedule_value, status, next_run, created_at FROM scheduled_tasks WHERE id='swarm-membership-audit';"
 ```
 
-Expected: one row, `schedule_value=30 8 * * *`, `status=active`, `next_run_local` shows tomorrow 08:30.
+Expected: one row, `schedule_value=30 8 * * *`, `status=active`, `next_run` is the ISO string from Step 3, `created_at` is an ISO string from "now". **No `datetime()` math** — `next_run` is already a readable ISO string.
 
 - [ ] **Step 6: Tell NanoClaw to reload its scheduler view**
 
@@ -943,12 +956,25 @@ git commit -m "docs(swarm): runbook for daily membership audit"
 
 - [ ] **Step 1: Wait for first fire (08:30 ET tomorrow) and inspect the run log**
 
+`task_run_logs` columns are `run_at TEXT, status TEXT, result TEXT, error TEXT, duration_ms INTEGER` — verified via `.schema task_run_logs`. There is **no `stdout`/`stderr` column**; the agent's textual output goes into `result` (or `error` on failure).
+
 ```bash
 sqlite3 /Users/mgandal/Agents/nanoclaw/store/messages.db \
-  "SELECT datetime(run_at/1000, 'unixepoch', 'localtime') AS local_ts, status, substr(stdout, 1, 400) FROM task_run_logs WHERE task_id='swarm-membership-audit' ORDER BY run_at DESC LIMIT 1;"
+  "SELECT run_at, status, duration_ms, substr(result, 1, 400) AS result_head, substr(error, 1, 200) AS error_head FROM task_run_logs WHERE task_id='swarm-membership-audit' ORDER BY run_at DESC LIMIT 1;"
 ```
 
-Expected: one row with `status=success`, stdout containing JSON summary.
+Expected: one row with `status=success`, `result_head` containing either:
+- the agent's "diffs are empty, exiting" acknowledgement, OR
+- a brief Telegram-message summary if `diffs[]` was non-empty.
+
+**Stronger check** — also confirm the audit ran (the *script* succeeded, not just the agent):
+
+```bash
+ls -la /Users/mgandal/Agents/nanoclaw/data/agents/swarm-membership-audit-diffs.json
+stat -f "%Sm" /Users/mgandal/Agents/nanoclaw/data/agents/swarm-membership-audit-diffs.json
+```
+
+The mtime should be within an hour of the scheduled fire. If the file's mtime is from before the fire, the agent didn't actually run the script — investigate.
 
 - [ ] **Step 2: Confirm the report files were updated by the scheduled run**
 
@@ -1011,3 +1037,103 @@ at data/agents/swarm-membership-audit{,-diffs}.json. Memory updated."
   - Auto-inviting missing bots via `createChatInviteLink` (that's the **B** scope from brainstorming).
   - Hard-rejecting sends from disallowed personas (the **C** scope).
   - Including dynamic round-robin assignments in the audit (intentionally excluded — see Task 2 docstring).
+
+---
+
+### Task 7: Rollback procedure (only run if implementation needs to be reversed)
+
+This is reference material — only execute if the audit produces unexpected behavior or you need to undo the work for a different reason. The plan is structurally low-risk (no runtime send-path changes), so rollback should be needed only in unusual circumstances.
+
+**Files affected by rollback:**
+- Delete row from `store/messages.db` `scheduled_tasks`
+- `git rm` or `git revert` for: `data/agents/swarm-membership.yaml`, `scripts/swarm-audit.ts`, `scripts/swarm-audit.test.ts`, `docs/swarm-membership-audit.md`
+- `git revert` the export commit in `src/channels/telegram.ts` (the `getPoolBotForPersona` accessor)
+- Remove run-state files: `data/agents/swarm-membership-audit.json`, `data/agents/swarm-membership-audit-diffs.json`, `groups/telegram_claire/state/swarm-audit.md`
+
+- [ ] **Step 1: Stop the scheduled task**
+
+```bash
+sqlite3 /Users/mgandal/Agents/nanoclaw/store/messages.db \
+  "DELETE FROM scheduled_tasks WHERE id='swarm-membership-audit';"
+sqlite3 /Users/mgandal/Agents/nanoclaw/store/messages.db \
+  "SELECT COUNT(*) FROM scheduled_tasks WHERE id='swarm-membership-audit';"
+```
+
+Expected: `0`.
+
+- [ ] **Step 2: Remove run-state artifacts**
+
+```bash
+cd /Users/mgandal/Agents/nanoclaw/.worktrees/swarm-audit
+rm -f data/agents/swarm-membership-audit.json \
+      data/agents/swarm-membership-audit-diffs.json \
+      groups/telegram_claire/state/swarm-audit.md
+```
+
+These are run-state, not source. They should already be gitignored (see Task 3 sub-step below) but `rm -f` is idempotent.
+
+- [ ] **Step 3: Revert the feature commits**
+
+```bash
+cd /Users/mgandal/Agents/nanoclaw/.worktrees/swarm-audit
+# Find the commits to revert
+git log --oneline feat/swarm-membership-audit ^main
+# Revert in reverse chronological order (newest first), or use a single revert range
+git revert --no-edit <oldest_commit>..<newest_commit>
+```
+
+Or, if you want to throw the branch away entirely:
+
+```bash
+cd /Users/mgandal/Agents/nanoclaw
+git worktree remove .worktrees/swarm-audit
+git branch -D feat/swarm-membership-audit
+```
+
+- [ ] **Step 4: Restart NanoClaw to drop the deleted task from in-memory scheduler**
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+sleep 5
+grep -i "swarm-membership-audit" /Users/mgandal/Agents/nanoclaw/logs/nanoclaw.log | tail -5
+```
+
+Expected: no recent log entries referencing the task; if there are old ones, that's fine — just confirm no scheduler-loop errors.
+
+---
+
+### Task 3 sub-step: gitignore run-state artifacts (added per peer review)
+
+Insert this between Task 3 Step 7 (smoke-test) and Task 3 Step 8 (commit) of the live execution flow:
+
+- [ ] **Sub-step 7b: Gitignore audit run-state files**
+
+The audit produces three run-state files on every fire. They MUST NOT be tracked, or every audit run produces a churn-y git diff:
+
+```bash
+cd /Users/mgandal/Agents/nanoclaw/.worktrees/swarm-audit
+cat >> .gitignore <<'EOF'
+
+# Swarm membership audit run-state (regenerated daily by scheduled task)
+data/agents/swarm-membership-audit.json
+data/agents/swarm-membership-audit-diffs.json
+groups/telegram_claire/state/swarm-audit.md
+EOF
+git check-ignore -v data/agents/swarm-membership-audit.json
+```
+
+Expected: prints the gitignore rule that matches.
+
+Then **change the Task 3 Step 8 commit** to drop the run-state files from `git add`:
+
+```bash
+# Old:
+# git add scripts/swarm-audit.ts scripts/swarm-audit.test.ts \
+#   data/agents/swarm-membership-audit.json \
+#   groups/telegram_claire/state/swarm-audit.md
+# New:
+git add scripts/swarm-audit.ts scripts/swarm-audit.test.ts .gitignore
+git commit -m "feat(swarm): add membership audit script (audit-only, no enforcement)"
+```
+
+Same fix applies to Task 4 Step 6 commit — `git add` should NOT include the JSON outputs.
