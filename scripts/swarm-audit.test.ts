@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyChatProbe, renderMarkdown } from './swarm-audit.js';
+import { classifyChatProbe, renderMarkdown, diffAudits } from './swarm-audit.js';
 
 describe('classifyChatProbe', () => {
   it('classifies a successful getChat as member', () => {
@@ -73,5 +73,73 @@ describe('renderMarkdown', () => {
       '✗ **Steve** — not_member: Forbidden: bot is not a member of the supergroup chat',
     );
     expect(md).toContain('1/2 reachable');
+  });
+});
+
+const row = (
+  group: string,
+  persona: string,
+  status: 'member' | 'not_member' | 'error' | 'unpinned' | 'no_chat',
+) => ({
+  group_folder: group,
+  group_jid: `tg:fake-${group}`,
+  persona,
+  status,
+  detail: '',
+  probed_at: '2026-04-25T12:00:00.000Z',
+});
+
+describe('diffAudits', () => {
+  it('returns empty when prev and curr are identical', () => {
+    const r = [row('telegram_lab-claw', 'Marvin', 'member')];
+    expect(diffAudits(r, r)).toEqual([]);
+  });
+
+  it('flags a member→not_member regression', () => {
+    const prev = [row('telegram_lab-claw', 'Marvin', 'member')];
+    const curr = [row('telegram_lab-claw', 'Marvin', 'not_member')];
+    expect(diffAudits(prev, curr)).toEqual([
+      {
+        group_folder: 'telegram_lab-claw',
+        persona: 'Marvin',
+        from: 'member',
+        to: 'not_member',
+        kind: 'regression',
+      },
+    ]);
+  });
+
+  it('flags a brand-new not_member row as new_miss', () => {
+    const prev: ReturnType<typeof row>[] = [];
+    const curr = [row('telegram_clinic-claw', 'Steve', 'not_member')];
+    expect(diffAudits(prev, curr)).toEqual([
+      {
+        group_folder: 'telegram_clinic-claw',
+        persona: 'Steve',
+        from: null,
+        to: 'not_member',
+        kind: 'new_miss',
+      },
+    ]);
+  });
+
+  it('does NOT flag not_member→not_member (still broken, but not new)', () => {
+    const prev = [row('telegram_clinic-claw', 'Steve', 'not_member')];
+    const curr = [row('telegram_clinic-claw', 'Steve', 'not_member')];
+    expect(diffAudits(prev, curr)).toEqual([]);
+  });
+
+  it('flags not_member→member as recovery', () => {
+    const prev = [row('telegram_clinic-claw', 'Steve', 'not_member')];
+    const curr = [row('telegram_clinic-claw', 'Steve', 'member')];
+    expect(diffAudits(prev, curr)).toEqual([
+      {
+        group_folder: 'telegram_clinic-claw',
+        persona: 'Steve',
+        from: 'not_member',
+        to: 'member',
+        kind: 'recovery',
+      },
+    ]);
   });
 });

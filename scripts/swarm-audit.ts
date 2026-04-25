@@ -66,6 +66,56 @@ interface AuditReport {
   };
 }
 
+export interface AuditDiff {
+  group_folder: string;
+  persona: string;
+  from: ProbeResult['status'] | null;
+  to: ProbeResult['status'];
+  kind: 'regression' | 'new_miss' | 'recovery';
+}
+
+export function diffAudits(prev: AuditRow[], curr: AuditRow[]): AuditDiff[] {
+  const key = (r: AuditRow) => `${r.group_folder}::${r.persona}`;
+  const prevMap = new Map(prev.map((r) => [key(r), r.status] as const));
+  const out: AuditDiff[] = [];
+  for (const r of curr) {
+    const before = prevMap.get(key(r)) ?? null;
+    if (before === r.status) continue;
+    if (r.status === 'member' && before && before !== 'member') {
+      out.push({
+        group_folder: r.group_folder,
+        persona: r.persona,
+        from: before,
+        to: r.status,
+        kind: 'recovery',
+      });
+    } else if (
+      (r.status === 'not_member' || r.status === 'error') &&
+      before === 'member'
+    ) {
+      out.push({
+        group_folder: r.group_folder,
+        persona: r.persona,
+        from: before,
+        to: r.status,
+        kind: 'regression',
+      });
+    } else if (
+      (r.status === 'not_member' || r.status === 'error') &&
+      before === null
+    ) {
+      out.push({
+        group_folder: r.group_folder,
+        persona: r.persona,
+        from: null,
+        to: r.status,
+        kind: 'new_miss',
+      });
+    }
+  }
+  return out;
+}
+
 export function classifyChatProbe(err: unknown, chat: unknown): ProbeResult {
   if (!err && chat) return { status: 'member', detail: 'getChat ok' };
   if (err && typeof err === 'object' && 'error_code' in err) {
@@ -171,11 +221,33 @@ async function main() {
   };
   const report: AuditReport = { generated_at: probedAt, rows: auditRows, summary };
 
-  // 6. Write JSON
+  // 6. Diff against previous run for alert-worthy changes
+  let prevReport: AuditReport | null = null;
+  try {
+    if (fs.existsSync(JSON_OUT)) {
+      prevReport = JSON.parse(fs.readFileSync(JSON_OUT, 'utf8')) as AuditReport;
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Could not parse previous audit JSON, treating as empty');
+  }
+  const diffs = diffAudits(prevReport?.rows ?? [], auditRows);
+  if (diffs.length > 0) {
+    logger.info({ diffs }, 'Swarm membership audit diffs detected');
+    console.log('DIFFS:', JSON.stringify(diffs, null, 2));
+  } else {
+    console.log('DIFFS: none');
+  }
+  // Also write the diffs alongside the report so the scheduled-task prompt can read them
+  fs.writeFileSync(
+    path.join(RUNTIME_ROOT, 'data/agents/swarm-membership-audit-diffs.json'),
+    JSON.stringify({ generated_at: probedAt, diffs }, null, 2),
+  );
+
+  // 7. Write JSON
   fs.mkdirSync(path.dirname(JSON_OUT), { recursive: true });
   fs.writeFileSync(JSON_OUT, JSON.stringify(report, null, 2));
 
-  // 7. Write Markdown digest
+  // 8. Write Markdown digest
   const md = renderMarkdown(report);
   fs.mkdirSync(path.dirname(MD_OUT), { recursive: true });
   fs.writeFileSync(MD_OUT, md);
