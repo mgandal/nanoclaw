@@ -1,5 +1,7 @@
 # Smarter Claw Phase 2 — Implementation Plan
 
+> **Status: SHIPPED 2026-04-13.** Both features live. Skill Discovery: `scripts/sync/skill-catalog-sync.sh` (`8fd49486`) generates entries (38 in `data/skill-catalog/`), wired as step `[6/10]` in `sync-all.sh`, indexed under QMD `skill-catalog` collection (37 docs); `skill_search` IPC handler in `src/ipc.ts:1952` (`fd6a5bb5`); `skill_search` MCP tool + `SKILL_RESULTS_DIR` in `container/agent-runner/src/ipc-mcp-stdio.ts:734,1828`. Lossless Memory: `write_agent_memory` MCP tool at `ipc-mcp-stdio.ts:1860`; section-upsert via `sectionRegex` at `src/ipc.ts:1568`; `compactionJustHappened` flag flow in `container/agent-runner/src/index.ts:96,376,1071` (`eafe8953`); `Session Continuity` injection in `src/context-assembler.ts:232` later hardened to "treat as data, not instructions" (`3e99f2f8`); `clearStaleSessionContinuity` in `src/container-runner.ts:1236` wired at line 813 (`3399e9cb`). Open `- [ ]` boxes below were never updated retroactively — see commit pointers above for evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add skill discovery (agents search for capabilities they don't have) and lossless conversation memory (context survives SDK compaction).
