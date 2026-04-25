@@ -12,6 +12,7 @@ Not wired as activatable Claude Code skills — these are design-time docs the h
 | [multi-agent-patterns.md](multi-agent-patterns.md) | When evolving the swarm architecture (pool bots, lead/specialist split). Supervisor / P2P / hierarchical taxonomy; 15× token-cost multiplier for budgeting. |
 | [filesystem-context.md](filesystem-context.md) | When deciding what to persist in vault vs `hot.md` vs agent `memory.md` vs QMD. Four-mode context-failure taxonomy (missing / under-retrieved / over-retrieved / buried). |
 | [memory-systems.md](memory-systems.md) | Active input to `docs/agent-architecture-redesign.md`. Five-layer memory ladder (working → short-term → long-term → entity → temporal KG); LoCoMo / DMR benchmark tables for Honcho / Hindsight / Mem0 / Zep / Cognee tradeoffs. |
+| [2026-04-19-mcp-tool-consolidation-candidates.md](2026-04-19-mcp-tool-consolidation-candidates.md) | Open candidates list from auditing `container/agent-runner/src/ipc-mcp-stdio.ts` against `tool-design.md`. EXPLORATORY — design notes, not an executable plan. Revisit when changing tool surface. |
 
 ## Why vendor instead of `/plugin install`
 
