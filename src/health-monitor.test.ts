@@ -451,7 +451,7 @@ describe('HealthMonitor Ollama tracking', () => {
     expect(monitor['ollamaLatencyLog'][0].latencyMs).toBe(100);
   });
 
-  it('tryProbeAndRecover dilutes p95 on success and lets breaker close', async () => {
+  it('tryProbeAndRecover records a fresh latency sample on success', async () => {
     // Simulate the wedge: 1 single 15s sample → degraded with no fresh
     // samples possible (route() short-circuits on degraded).
     monitor.recordOllamaLatency(15000);
@@ -467,11 +467,31 @@ describe('HealthMonitor Ollama tracking', () => {
     );
     expect(recovered).toBe(true);
     expect(fakeFetch).toHaveBeenCalledTimes(1);
-    // The 50ms recovery sample now sits alongside the 15000ms one.
-    // p95 with 2 samples — Math.floor(2*0.95)=1 → still 15000 here, but
-    // additional probes (or real classifications now allowed) would dilute.
-    // Confirm at least that a fresh sample was recorded.
-    expect(monitor['ollamaLatencyLog'].length).toBeGreaterThanOrEqual(2);
+    // Verify the synthetic 50ms recovery sample was recorded.
+    const log = monitor['ollamaLatencyLog'];
+    expect(log).toHaveLength(2);
+    expect(log[1].latencyMs).toBe(50);
+  });
+
+  it('tryProbeAndRecover closes the breaker after enough successful probes', async () => {
+    // 1 bad sample at 15000ms wedges the breaker. p95 picks
+    // sorted[floor((K+1)*0.95)] where K is the count of fresh probe
+    // samples. The bad sample is the largest, so it sits at p95 until
+    // floor((K+1)*0.95) < K — solving (0.95K + 0.95 < K) gives K > 19,
+    // i.e. K >= 20. Test bypasses the 60s probe cooldown by injecting
+    // samples directly to verify the recovery math itself.
+    monitor.recordOllamaLatency(15000);
+    expect(monitor.isOllamaDegraded()).toBe(true);
+
+    // K=19: still degraded. floor(20*0.95)=19 → sorted[19]=15000.
+    for (let i = 0; i < 19; i++) {
+      monitor.recordOllamaLatency(50);
+    }
+    expect(monitor.isOllamaDegraded()).toBe(true);
+
+    // K=20: closes. floor(21*0.95)=19 → sorted[19]=50.
+    monitor.recordOllamaLatency(50);
+    expect(monitor.isOllamaDegraded()).toBe(false);
   });
 
   it('tryProbeAndRecover honors cooldown', async () => {

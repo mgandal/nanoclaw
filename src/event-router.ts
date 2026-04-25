@@ -167,11 +167,13 @@ export class EventRouter {
 
     let classification: Classification;
     if (this.config.healthMonitor.isOllamaDegraded()) {
-      // Half-open probe: try a cheap recovery check before falling back. If
-      // Ollama is healthy now, the probe records a small latency that
-      // dilutes p95, lets the breaker self-close, and we run real
-      // classification. Without this, a single timeout on a cold model
-      // wedges the breaker for a full hour.
+      // Half-open probe: try a cheap recovery check before falling back.
+      // On success the probe records a small fresh latency sample.
+      // p95 over a 1h window doesn't drop instantly (one good sample
+      // doesn't move it past one bad one — see HealthMonitor probe
+      // notes), but enough probes plus resumed real classifications
+      // eventually close the breaker. Without this, the wedge persists
+      // for the full 1h sample-aging window even when Ollama is healthy.
       const recovered = this.config.healthMonitor.tryProbeAndRecover
         ? await this.config.healthMonitor.tryProbeAndRecover(
             this.config.ollamaHost,

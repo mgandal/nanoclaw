@@ -398,8 +398,13 @@ export class HealthMonitor {
   // window with no fresh samples to dilute them, and the breaker stays
   // tripped until they age out — but routing is silently broken in the
   // meantime. This probe is the half-open step: cheap HTTP check; on
-  // success, record a small synthetic latency to dilute p95 and let the
-  // breaker self-close. Cooldown prevents probe storms.
+  // success, record a small synthetic latency that contributes toward
+  // closing the breaker. Recovery is not instantaneous: p95 picks
+  // sorted[floor((K+1)*0.95)], so with 1 bad sample at 15s and K fresh
+  // 50ms probe samples, p95 stays at 15s until K >= 20. The probe is a
+  // kickstart; once enough probes accumulate (or real classifications
+  // resume after the breaker closes), p95 falls below threshold and the
+  // breaker self-closes. Cooldown prevents probe storms during outage.
   private lastProbeAt = 0;
   private static readonly PROBE_COOLDOWN_MS = 60_000;
   private static readonly PROBE_RECOVERY_LATENCY_MS = 50;
