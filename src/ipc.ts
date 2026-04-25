@@ -1953,6 +1953,15 @@ export async function processTaskIpc(
       ) {
         handled = await handleSkillSearchIpc(data, sourceGroup);
       }
+      if (
+        !handled &&
+        typeof data.type === 'string' &&
+        data.type === 'skill_invoked'
+      ) {
+        // Phase 2 telemetry — any group can emit, host writes to that
+        // agent's own log. Path-traversal gated by handler regex.
+        handled = handleSkillInvokedIpc(data, sourceGroup);
+      }
       if (!handled) {
         logger.warn({ type: data.type }, 'Unknown IPC task type');
       }
@@ -2484,6 +2493,104 @@ function handleCrystallizeSkillIpc(
       success: false,
       message: `Error: ${err instanceof Error ? err.message : String(err)}`,
     });
+  }
+  return true;
+}
+
+/**
+ * Phase 2 of skill crystallization: log Skill-tool invocations of crystallized
+ * skills. Read-modify-write the SKILL.md frontmatter to bump invocation_count
+ * and stamp last_invoked_at; append one line to usage.jsonl. Fire-and-forget
+ * — no IPC reply, no error surfaced to the caller.
+ */
+function handleSkillInvokedIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+): boolean {
+  const agent = typeof data.agent === 'string' ? data.agent : undefined;
+  const name = typeof data.name === 'string' ? data.name : undefined;
+  const agentsRoot =
+    typeof data.agentsRoot === 'string' ? data.agentsRoot : AGENTS_DIR;
+
+  const agentRe = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+  const skillNameRe = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
+  if (
+    !agent ||
+    !agentRe.test(agent) ||
+    !name ||
+    !skillNameRe.test(name)
+  ) {
+    logger.warn(
+      { agent, name, sourceGroup },
+      'skill_invoked IPC rejected: invalid payload',
+    );
+    return true;
+  }
+
+  try {
+    const crystallizedDir = path.join(
+      agentsRoot,
+      agent,
+      'skills',
+      'crystallized',
+    );
+    const skillFile = path.join(crystallizedDir, name, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) {
+      logger.debug(
+        { agent, name },
+        'skill_invoked: no SKILL.md found, ignoring',
+      );
+      return true;
+    }
+
+    const existing = fs.readFileSync(skillFile, 'utf-8');
+    const fmMatch = existing.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+    if (!fmMatch) {
+      logger.warn({ agent, name }, 'skill_invoked: malformed frontmatter');
+      return true;
+    }
+
+    let frontmatter = fmMatch[1];
+    const body = fmMatch[2];
+    const nowIso = new Date().toISOString();
+
+    // Bump invocation_count.
+    if (/^invocation_count:\s*\d+/m.test(frontmatter)) {
+      frontmatter = frontmatter.replace(
+        /^invocation_count:\s*(\d+)/m,
+        (_, n) => `invocation_count: ${Number(n) + 1}`,
+      );
+    } else {
+      frontmatter = `${frontmatter}\ninvocation_count: 1`;
+    }
+
+    // Upsert last_invoked_at.
+    if (/^last_invoked_at:/m.test(frontmatter)) {
+      frontmatter = frontmatter.replace(
+        /^last_invoked_at:.*$/m,
+        `last_invoked_at: ${nowIso}`,
+      );
+    } else {
+      frontmatter = `${frontmatter}\nlast_invoked_at: ${nowIso}`;
+    }
+
+    const updated = `---\n${frontmatter}\n---\n${body}`;
+    const tmpPath = `${skillFile}.tmp`;
+    fs.writeFileSync(tmpPath, updated);
+    fs.renameSync(tmpPath, skillFile);
+
+    const usageLine =
+      JSON.stringify({
+        ts: nowIso,
+        agent,
+        name,
+        sourceGroup,
+      }) + '\n';
+    fs.appendFileSync(path.join(crystallizedDir, 'usage.jsonl'), usageLine);
+
+    logger.info({ agent, name, sourceGroup }, 'Crystallized skill invoked');
+  } catch (err) {
+    logger.error({ err, agent, name }, 'skill_invoked IPC error');
   }
   return true;
 }

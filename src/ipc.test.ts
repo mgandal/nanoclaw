@@ -1216,6 +1216,235 @@ describe('crystallize_skill', () => {
   });
 });
 
+describe('skill_invoked invocation logging', () => {
+  let tmpDir: string;
+  let agentsRoot: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-skill-invoked-'));
+    agentsRoot = path.join(tmpDir, 'data', 'agents');
+    fs.mkdirSync(path.join(agentsRoot, 'claire'), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  const seedSkill = (
+    invocationCount: number,
+  ): { skillDir: string; skillFile: string } => {
+    const skillDir = path.join(
+      agentsRoot,
+      'claire',
+      'skills',
+      'crystallized',
+      'deadline-aggregation',
+    );
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    fs.writeFileSync(
+      skillFile,
+      `---\nname: deadline-aggregation\ndescription: "demo skill"\ncrystallized_at: 2026-04-20T00:00:00.000Z\nsource_task: "demo"\nconfidence: 7\ninvocation_count: ${invocationCount}\n---\n\nbody content\n`,
+    );
+    return { skillDir, skillFile };
+  };
+
+  it('increments invocation_count and stamps last_invoked_at', async () => {
+    const { skillFile } = seedSkill(2);
+
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const updated = fs.readFileSync(skillFile, 'utf-8');
+    expect(updated).toMatch(/invocation_count: 3\b/);
+    expect(updated).toMatch(/last_invoked_at: \d{4}-\d{2}-\d{2}T/);
+    // Body untouched.
+    expect(updated).toContain('body content');
+    // Pre-existing frontmatter fields preserved.
+    expect(updated).toContain('name: deadline-aggregation');
+    expect(updated).toContain('confidence: 7');
+  });
+
+  it('appends one line to usage.jsonl per invocation', async () => {
+    seedSkill(0);
+
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const usagePath = path.join(
+      agentsRoot,
+      'claire',
+      'skills',
+      'crystallized',
+      'usage.jsonl',
+    );
+    const lines = fs.readFileSync(usagePath, 'utf-8').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    const entry = JSON.parse(lines[0]);
+    expect(entry.agent).toBe('claire');
+    expect(entry.name).toBe('deadline-aggregation');
+    expect(entry.sourceGroup).toBe('telegram_main');
+    expect(entry.ts).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('replaces (not appends) last_invoked_at on second invocation', async () => {
+    const { skillFile } = seedSkill(0);
+
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    const updated = fs.readFileSync(skillFile, 'utf-8');
+    // Exactly one last_invoked_at line, exactly one invocation_count line.
+    const lastInvokedMatches = updated.match(/^last_invoked_at:/gm) ?? [];
+    const countMatches = updated.match(/^invocation_count:/gm) ?? [];
+    expect(lastInvokedMatches).toHaveLength(1);
+    expect(countMatches).toHaveLength(1);
+    expect(updated).toMatch(/invocation_count: 2\b/);
+  });
+
+  it('rejects skill_invoked with invalid agent name (path-traversal guard)', async () => {
+    seedSkill(0);
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: '../etc',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    // No usage.jsonl should have been created.
+    expect(
+      fs.existsSync(
+        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+      ),
+    ).toBe(false);
+  });
+
+  it('rejects skill_invoked with invalid skill name', async () => {
+    seedSkill(0);
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: '../escape',
+        agentsRoot,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+    expect(
+      fs.existsSync(
+        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+      ),
+    ).toBe(false);
+  });
+
+  it('no-ops idempotently when SKILL.md does not exist', async () => {
+    // No seed — skill dir absent.
+    await expect(
+      processTaskIpc(
+        {
+          type: 'skill_invoked',
+          agent: 'claire',
+          name: 'nonexistent-skill',
+          agentsRoot,
+        } as any,
+        'telegram_main',
+        true,
+        deps,
+      ),
+    ).resolves.not.toThrow();
+    expect(
+      fs.existsSync(
+        path.join(agentsRoot, 'claire', 'skills', 'crystallized', 'usage.jsonl'),
+      ),
+    ).toBe(false);
+  });
+
+  it('non-main caller can still log invocation (read-only telemetry)', async () => {
+    // Phase 2 design choice: invocation logging is observability, not a
+    // privileged write. Any group's container may emit it; the host writes
+    // to that agent's own log. Path-traversal is still gated by regex.
+    seedSkill(0);
+    await processTaskIpc(
+      {
+        type: 'skill_invoked',
+        agent: 'claire',
+        name: 'deadline-aggregation',
+        agentsRoot,
+      } as any,
+      'telegram_other',
+      false,
+      deps,
+    );
+    const updated = fs.readFileSync(
+      path.join(
+        agentsRoot,
+        'claire',
+        'skills',
+        'crystallized',
+        'deadline-aggregation',
+        'SKILL.md',
+      ),
+      'utf-8',
+    );
+    expect(updated).toMatch(/invocation_count: 1\b/);
+  });
+});
+
 // --- 11. Malformed task data handling ---
 
 describe('malformed task data', () => {
