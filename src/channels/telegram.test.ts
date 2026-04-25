@@ -1035,6 +1035,7 @@ import {
   sendPoolMessage as sendPoolMessageFn,
   _resetPoolStateForTests,
   getPoolBotForPersona,
+  getPoolSize,
 } from './telegram.js';
 
 function getBot(token: string) {
@@ -1151,9 +1152,12 @@ describe('getPoolBotForPersona', () => {
     expect(getPoolBotForPersona('Freud')).toBeUndefined();
   });
 
-  it('returns each pinned persona\'s own Api when multiple personas are pinned', async () => {
+  it("returns each pinned persona's own Api when multiple personas are pinned", async () => {
     _resetPoolStateForTests();
-    await initBotPool(['t1', 't2', 't3'], { bot_t2: 'Freud', bot_t3: 'Marvin' });
+    await initBotPool(['t1', 't2', 't3'], {
+      bot_t2: 'Freud',
+      bot_t3: 'Marvin',
+    });
     const freudApi = getPoolBotForPersona('Freud');
     const marvinApi = getPoolBotForPersona('Marvin');
     expect(freudApi).toBeDefined();
@@ -1162,5 +1166,18 @@ describe('getPoolBotForPersona', () => {
     expect(marvinApi!.token).toBe('t3');
     // The two Apis are distinct — not aliasing each other
     expect(freudApi).not.toBe(marvinApi);
+  });
+});
+
+describe('getPoolSize', () => {
+  it('returns 0 when initBotPool has not run', async () => {
+    _resetPoolStateForTests();
+    expect(getPoolSize()).toBe(0);
+  });
+
+  it('returns the number of bots initialized', async () => {
+    _resetPoolStateForTests();
+    await initBotPool(['t1', 't2', 't3'], {});
+    expect(getPoolSize()).toBe(3);
   });
 });

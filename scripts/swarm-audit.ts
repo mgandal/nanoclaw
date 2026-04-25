@@ -16,13 +16,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'yaml';
 import { Database } from 'bun:sqlite';
-import { initBotPool, getPoolBotForPersona } from '../src/channels/telegram.js';
+import { initBotPool, getPoolBotForPersona, getPoolSize } from '../src/channels/telegram.js';
 import { TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN } from '../src/config.js';
 import { logger } from '../src/logger.js';
 
-// REPO_ROOT: directory containing the swarm-audit.ts source (worktree or main repo).
+// SCRIPT_ROOT: directory containing the swarm-audit.ts source (worktree or main repo).
 // Used for source-controlled files (YAML config lives next to the script).
-const SCRIPT_ROOT = path.resolve(__dirname, '..');
+const SCRIPT_ROOT = path.resolve(import.meta.dirname, '..');
 // RUNTIME_ROOT: the working directory from which the script is invoked.
 // Runtime data files (DB, output JSON/MD, groups/ state) always live in the
 // main nanoclaw working tree — even when running from a worktree during dev.
@@ -95,6 +95,12 @@ async function main() {
     );
   }
   await initBotPool(TELEGRAM_BOT_POOL, TELEGRAM_POOL_PIN);
+  if (getPoolSize() === 0) {
+    throw new Error(
+      'initBotPool completed but no pool bots initialized — check Telegram tokens and network. ' +
+        'Without this guard, all audit rows would land as "unpinned" with misleading messages.',
+    );
+  }
 
   // 3. Resolve group_folder → chat_jid via DB.
   // IMPORTANT: registered_groups has multiple rows per folder for multi-channel

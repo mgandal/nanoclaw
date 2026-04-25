@@ -141,6 +141,15 @@ export function getPoolBotForPersona(persona: string): Api | undefined {
   return poolApis[idx];
 }
 
+/**
+ * Read-only accessor for audit/diagnostic code: returns the number of pool
+ * bots successfully initialized by initBotPool. Use to detect when initBotPool
+ * silently failed for all tokens (returns 0).
+ */
+export function getPoolSize(): number {
+  return poolApis.length;
+}
+
 let nextPoolIndex = 0;
 
 /** Reset module-level pool state — test-only hook. */
