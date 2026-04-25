@@ -9,7 +9,7 @@
 > - Task 5 — `readwise-daily-sync` (cron `0 8 * * *`) active; `last_run = 2026-04-25T12:03:28Z`; state `{"last_sync": "2026-04-25T12:00:00Z", "count": 6}`.
 > - Task 6 — `.claude/skills/x-integration/scripts/bookmarks.ts` (4.5K) present.
 > - Task 7 — `x_bookmarks` host IPC case present in `.claude/skills/x-integration/host.ts`.
-> - Task 8 — `x_bookmarks` MCP tool present at `container/agent-runner/src/ipc-mcp-stdio.ts:1296`.
+> - Task 8 — `x_bookmarks` MCP tool registered in `container/agent-runner/src/ipc-mcp-stdio.ts` (search for `server.tool('x_bookmarks'`).
 > - Task 10 — `x-bookmarks-daily-sync` (cron `0 9 * * *`) active; `last_run = 2026-04-25T13:01:28Z`.
 >
 > **Operational status (2026-04-25):**
@@ -19,7 +19,7 @@
 >
 > **Repair summary (2026-04-25):**
 > - X Chrome profile session re-authenticated via `npx tsx .claude/skills/x-integration/scripts/setup.ts` (session had silently expired ~10 days after the 2026-03-27 stamp).
-> - Plan Task 8 wrapped `x_bookmarks` registration inside the `isMain` block at `container/agent-runner/src/ipc-mcp-stdio.ts:1206`, conflicting with Plan Task 10 placing the scheduler on VAULT-claw (non-main). The current scheduled-task prompt is itself rewritten to run as Claire/main, so this didn't surface in production — but the design mismatch is fixed defensively: `x_bookmarks` registration moved outside the `isMain` block (read-only by nature), and `.claude/skills/x-integration/host.ts` now gates only the X *write* tools (`x_post`/`x_like`/`x_reply`/`x_retweet`/`x_quote`) to main, allowing read tools from any group.
+> - Plan Task 8 wrapped `x_bookmarks` registration inside the `if (isMain)` block in `container/agent-runner/src/ipc-mcp-stdio.ts`, conflicting with Plan Task 10 placing the scheduler on VAULT-claw (non-main). The current scheduled-task prompt is itself rewritten to run as Claire/main, so this didn't surface in production — but the design mismatch is fixed defensively in commits `b667c9af` and the follow-up: `x_bookmarks` registration moved outside the `if (isMain)` block (read-only by nature), and `.claude/skills/x-integration/host.ts` now uses a fail-closed allowlist (`X_NON_MAIN_TYPES`) — every X tool is main-only by default, with `x_bookmarks` explicitly opted in. Adding a future X tool requires deliberate inclusion in the allowlist; forgetting fails closed.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

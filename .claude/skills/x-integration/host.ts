@@ -85,11 +85,20 @@ export async function handleXIpc(
     return false;
   }
 
-  // Write tools (post, like, reply, retweet, quote) are main-only.
-  // Read tools (bookmarks) are open to all groups.
-  const X_WRITE_TYPES = new Set(['x_post', 'x_like', 'x_reply', 'x_retweet', 'x_quote']);
-  if (X_WRITE_TYPES.has(type) && !isMain) {
-    logger.warn({ sourceGroup, type }, 'X integration blocked: write tools are main-only');
+  // Fail-closed allowlist: every X tool is main-only by default. To open a
+  // tool to non-main groups, add it here AND register it outside the
+  // `if (isMain)` block in container/agent-runner/src/ipc-mcp-stdio.ts.
+  //
+  // x_bookmarks is opened because: (a) it returns user-curated content the
+  // user already saved, (b) the authenticated Chrome session lives host-side
+  // and is never exposed to the container.
+  //
+  // DO NOT generalize this pattern to imessage_*, apple_notes_*, or gmail_*
+  // read tools — those expose third-party PII (other people's messages,
+  // notes shared with the user, emails) and need per-tool review.
+  const X_NON_MAIN_TYPES = new Set(['x_bookmarks']);
+  if (!X_NON_MAIN_TYPES.has(type) && !isMain) {
+    logger.warn({ sourceGroup, type }, 'X integration blocked: tool is main-only');
     return true;
   }
 
