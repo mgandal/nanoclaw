@@ -1034,6 +1034,7 @@ import {
   initBotPool,
   sendPoolMessage as sendPoolMessageFn,
   _resetPoolStateForTests,
+  getPoolBotForPersona,
 } from './telegram.js';
 
 function getBot(token: string) {
@@ -1123,5 +1124,30 @@ describe('pool pinning', () => {
     const ok = await sendPoolMessageFn('tg:1', 'hi', 'Claire', 'g');
     expect(ok).toBe(true);
     expect(getBot('t1').sendMessage).toHaveBeenCalled();
+  });
+});
+
+describe('getPoolBotForPersona', () => {
+  beforeEach(() => {
+    botRef.poolApiInstances.length = 0;
+    _resetPoolStateForTests();
+  });
+
+  it('returns the Api for a pinned persona', async () => {
+    await initBotPool(['t1', 't2'], { bot_t2: 'Freud' });
+    const api = getPoolBotForPersona('Freud');
+    expect(api).toBeDefined();
+    // The pinned bot must be index 1 (we pinned the second one)
+    expect((api as { token: string }).token).toBe('t2');
+  });
+
+  it('returns undefined for an unpinned persona', async () => {
+    await initBotPool(['t1'], {});
+    expect(getPoolBotForPersona('NoSuchPersona')).toBeUndefined();
+  });
+
+  it('returns undefined when the pool is empty', async () => {
+    // Don't call initBotPool
+    expect(getPoolBotForPersona('Freud')).toBeUndefined();
   });
 });

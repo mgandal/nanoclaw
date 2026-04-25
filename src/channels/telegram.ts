@@ -125,6 +125,22 @@ const senderBotMap = new Map<string, number>();
 // Maps sender name → pool Api index for pinned senders (global — a pinned bot's
 // Telegram display name is global, so one pin covers every group that bot is in).
 const pinnedSenderIdx = new Map<string, number>();
+
+/**
+ * Read-only accessor for audit/diagnostic code: returns the Grammy `Api`
+ * instance pinned to a given persona display name (e.g. "Freud", "Marvin").
+ * Returns `undefined` if the persona is not pinned or the pool is empty.
+ *
+ * Does NOT trigger round-robin assignment — this is intentional. The audit
+ * only cares about *pinned* personas. Dynamic round-robin assignments are
+ * per-session and not auditable as a stable mapping.
+ */
+export function getPoolBotForPersona(persona: string): Api | undefined {
+  const idx = pinnedSenderIdx.get(persona);
+  if (idx === undefined) return undefined;
+  return poolApis[idx];
+}
+
 let nextPoolIndex = 0;
 
 /** Reset module-level pool state — test-only hook. */
