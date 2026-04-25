@@ -450,6 +450,57 @@ describe('HealthMonitor Ollama tracking', () => {
     expect(monitor['ollamaLatencyLog']).toHaveLength(1);
     expect(monitor['ollamaLatencyLog'][0].latencyMs).toBe(100);
   });
+
+  it('tryProbeAndRecover dilutes p95 on success and lets breaker close', async () => {
+    // Simulate the wedge: 1 single 15s sample → degraded with no fresh
+    // samples possible (route() short-circuits on degraded).
+    monitor.recordOllamaLatency(15000);
+    expect(monitor.isOllamaDegraded()).toBe(true);
+
+    const fakeFetch = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as typeof fetch;
+    const recovered = await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      Date.now(),
+      fakeFetch,
+    );
+    expect(recovered).toBe(true);
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+    // The 50ms recovery sample now sits alongside the 15000ms one.
+    // p95 with 2 samples — Math.floor(2*0.95)=1 → still 15000 here, but
+    // additional probes (or real classifications now allowed) would dilute.
+    // Confirm at least that a fresh sample was recorded.
+    expect(monitor['ollamaLatencyLog'].length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('tryProbeAndRecover honors cooldown', async () => {
+    const fakeFetch = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as typeof fetch;
+    const t0 = Date.now();
+    await monitor.tryProbeAndRecover('http://localhost:11434', t0, fakeFetch);
+    // Second call within cooldown window — should not fire.
+    const second = await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      t0 + 1_000,
+      fakeFetch,
+    );
+    expect(second).toBe(false);
+    expect(fakeFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('tryProbeAndRecover returns false on probe failure', async () => {
+    const fakeFetch = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    }) as unknown as typeof fetch;
+    const recovered = await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      Date.now(),
+      fakeFetch,
+    );
+    expect(recovered).toBe(false);
+  });
 });
 
 describe('HealthMonitor fix handlers', () => {

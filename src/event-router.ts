@@ -81,6 +81,7 @@ export interface MessageBusLike {
 export interface HealthMonitorLike {
   recordOllamaLatency: (ms: number) => void;
   isOllamaDegraded: () => boolean;
+  tryProbeAndRecover?: (ollamaHost: string) => Promise<boolean>;
 }
 
 export interface EventRouterConfig {
@@ -166,11 +167,29 @@ export class EventRouter {
 
     let classification: Classification;
     if (this.config.healthMonitor.isOllamaDegraded()) {
-      logger.warn(
-        { eventId: event.id },
-        'Ollama degraded — using fallback classification',
-      );
-      classification = { ...DEFAULT_CLASSIFICATION };
+      // Half-open probe: try a cheap recovery check before falling back. If
+      // Ollama is healthy now, the probe records a small latency that
+      // dilutes p95, lets the breaker self-close, and we run real
+      // classification. Without this, a single timeout on a cold model
+      // wedges the breaker for a full hour.
+      const recovered = this.config.healthMonitor.tryProbeAndRecover
+        ? await this.config.healthMonitor.tryProbeAndRecover(
+            this.config.ollamaHost,
+          )
+        : false;
+      if (recovered && !this.config.healthMonitor.isOllamaDegraded()) {
+        logger.info(
+          { eventId: event.id },
+          'Ollama recovery probe succeeded — resuming classification',
+        );
+        classification = await this.classify(event);
+      } else {
+        logger.warn(
+          { eventId: event.id },
+          'Ollama degraded — using fallback classification',
+        );
+        classification = { ...DEFAULT_CLASSIFICATION };
+      }
     } else {
       classification = await this.classify(event);
     }

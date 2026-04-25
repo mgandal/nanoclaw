@@ -391,6 +391,46 @@ export class HealthMonitor {
     return this.getOllamaP95Latency(3600_000) > 10_000;
   }
 
+  // Active recovery probe. When `isOllamaDegraded()` returns true, the
+  // EventRouter short-circuits to fallback classification *without* calling
+  // classify(), which is the only site that records new latency samples.
+  // Result: the bad samples that tripped the breaker just sit in the 1-hour
+  // window with no fresh samples to dilute them, and the breaker stays
+  // tripped until they age out — but routing is silently broken in the
+  // meantime. This probe is the half-open step: cheap HTTP check; on
+  // success, record a small synthetic latency to dilute p95 and let the
+  // breaker self-close. Cooldown prevents probe storms.
+  private lastProbeAt = 0;
+  private static readonly PROBE_COOLDOWN_MS = 60_000;
+  private static readonly PROBE_RECOVERY_LATENCY_MS = 50;
+
+  async tryProbeAndRecover(
+    ollamaHost: string,
+    nowMs: number = Date.now(),
+    fetchImpl: typeof fetch = fetch,
+  ): Promise<boolean> {
+    if (nowMs - this.lastProbeAt < HealthMonitor.PROBE_COOLDOWN_MS) {
+      return false;
+    }
+    this.lastProbeAt = nowMs;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2000);
+      try {
+        const res = await fetchImpl(`${ollamaHost}/api/version`, {
+          signal: controller.signal,
+        });
+        if (!res.ok) return false;
+      } finally {
+        clearTimeout(timer);
+      }
+      this.recordOllamaLatency(HealthMonitor.PROBE_RECOVERY_LATENCY_MS);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   getStatus(): Record<string, unknown> {
     const groups = new Set([
       ...this.spawnLog.map((e) => e.group),
