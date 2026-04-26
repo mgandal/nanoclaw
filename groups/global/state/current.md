@@ -53,7 +53,7 @@ Last updated: 2026-04-17 (PM — post-drops: Amtrak, TOPMed cancelled, Rachel OO
 - [ ] Gmail plus-monitor — implement for mgandal+hermes@gmail.com + mgandal+marvin@gmail.com
 
 ### High Priority
-- [ ] Sarah Tishkoff patient referral — ADHD clinic appt (redacted)
+- [ ] Sarah Tishkoff patient referral — ADHD clinic appt (patient details in private notes, not git)
 - [ ] Sylvanus Toikumo — K99/R00 reply (draft in Mail, send)
 - [ ] ChangHui Pak — Zoom for Matt's analysis (draft in Mail, send)
 - [ ] ChangHui Pak — ASD NRXN1 deletion paper (check attachment)
