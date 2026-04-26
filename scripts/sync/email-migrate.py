@@ -123,8 +123,28 @@ signal.signal(signal.SIGTERM, _handle_signal)
 def load_state():
     """Load migration state from JSON file, or return fresh state."""
     if STATE_FILE.exists():
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as exc:
+            # Corruption recovery: rotate the bad file aside so the next run
+            # starts with a fresh state. Gmail's deduper rejects re-uploads
+            # by Message-ID, so re-processing already-uploaded .emlx files is
+            # safe. Without this guard, a single disk-full mid-write or
+            # power-loss-during-tmp-replace wedges the pipeline forever.
+            ts = time.strftime("%Y-%m-%dT%H-%M-%S")
+            corrupt_path = STATE_FILE.parent / f"{STATE_FILE.name}.corrupt-{ts}"
+            try:
+                STATE_FILE.rename(corrupt_path)
+                print(
+                    f"WARN: state file corrupt ({exc}); rotated to {corrupt_path}",
+                    file=sys.stderr,
+                )
+            except OSError as rename_err:
+                print(
+                    f"WARN: state file corrupt ({exc}); could not rotate: {rename_err}",
+                    file=sys.stderr,
+                )
     return {
         "folders": {},
         "bytes_uploaded_today": 0,

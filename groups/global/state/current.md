@@ -160,7 +160,7 @@ Last updated: 2026-04-17 (PM — post-drops: Amtrak, TOPMed cancelled, Rachel OO
 - **QMD** — healthy, 3,197+ docs indexed
 - **Gmail MCP** — active
 - **Morning briefing** — single task at 7:30 AM weekdays
-- **Outlook→Gmail migration** — NO active sync; email-migrate.sh is manual only
+- **Outlook→Gmail migration** — LIVE: 4h cron via `scripts/sync/sync-all.sh` Step 1 (self-hosted in nanoclaw 2026-04-26). Health: `scripts/sync/sync-health-check.sh` (FAILs if `~/.cache/email-migrate/last-success.json` is >8h stale). Manual on-demand: `~/claire-tools/email-migrate.sh run`.
 - **⚠️ Exit 137 OOM** — systemic: all 8-hour context captures + hermes-ai-brief + readwise failing. VM start failures (VZErrorDomain Code=1) on nanoclaw-inbox-monitor and OPS infra check. Needs investigation.
 
 ## Recent Context
