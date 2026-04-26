@@ -84,12 +84,13 @@ echo ""
 # --- Step 1: Exchange email sync (Mac Mail Outlook → mikejg1838@gmail.com) ---
 # Reads .emlx files directly from ~/Library/Mail/V10/<EXCHANGE_UUID>/ and
 # uploads new ones via Gmail API. Dedupes by emlx filename in
-# state/email-migration.json. Reacts to Gmail API quota errors (no
-# preemptive byte cap). Wrapped in `timeout 1800` so a hung upload
-# can't wedge the global sync lock for the next 4h tick.
+# ~/.cache/email-migrate/email-migration.json. Writes a last-success.json
+# marker on clean exit (watched by sync-health-check.sh). Reacts to Gmail
+# API quota errors (no preemptive byte cap). Wrapped in `timeout 1800` so
+# a hung upload can't wedge the global sync lock for the next 4h tick.
 echo ""
 echo "[1/10] Exchange email sync (Mac Mail → mikejg1838@gmail.com)..."
-MIGRATE_SCRIPT="/Users/mgandal/Agents/marvin2/scripts/email-migrate.py"
+MIGRATE_SCRIPT="$SCRIPT_DIR/email-migrate.py"
 if [ -f "$MIGRATE_SCRIPT" ]; then
     timeout 1800 $PYTHON3 "$MIGRATE_SCRIPT" 2>&1
     EC=$?

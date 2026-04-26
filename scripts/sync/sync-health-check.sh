@@ -119,6 +119,33 @@ done
 $PYTHON3 -c "import requests, google.oauth2" 2>/dev/null
 check "Python deps (requests, google-auth)" "missing — run pip install" $?
 
+# 7b. email-migrate.py exists (Step 1 of sync-all.sh depends on this)
+MIGRATE_SCRIPT="$SCRIPT_DIR/email-migrate.py"
+if [ -f "$MIGRATE_SCRIPT" ]; then
+    check "email-migrate.py present" "" 0
+else
+    check "email-migrate.py present" "missing at $MIGRATE_SCRIPT — Outlook→Gmail forwarding will be a no-op" 1
+fi
+
+# 7c. Outlook→Gmail forwarding is fresh (last-success marker within 8h)
+SUCCESS_FILE="$HOME/.cache/email-migrate/last-success.json"
+if [ -f "$SUCCESS_FILE" ]; then
+    LAST_SUCCESS=$($PYTHON3 -c "import json; print(int(json.load(open('$SUCCESS_FILE'))['timestamp']))" 2>/dev/null)
+    NOW=$(date "+%s")
+    if [ -n "$LAST_SUCCESS" ]; then
+        AGE_HOURS=$(( (NOW - LAST_SUCCESS) / 3600 ))
+        if [ "$AGE_HOURS" -lt 8 ]; then
+            check "Outlook→Gmail freshness (<8h)" "" 0
+        else
+            check "Outlook→Gmail freshness (<8h)" "${AGE_HOURS}h since last success — forwarding may be wedged" 1
+        fi
+    else
+        warn "Outlook→Gmail freshness" "marker file present but unparseable"
+    fi
+else
+    warn "Outlook→Gmail freshness" "no last-success marker yet (first run after install?)"
+fi
+
 # 8. Check last sync completed recently (within 24h)
 if [ -f "$SCRIPT_DIR/sync.log" ]; then
     LAST_COMPLETE=$(grep 'SYNC COMPLETE' "$SCRIPT_DIR/sync.log" | tail -1)
