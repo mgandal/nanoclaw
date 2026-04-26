@@ -970,15 +970,24 @@ def main():
     # SIGTERM (ShutdownRequested) both count as success: the script behaved
     # correctly. A staleness watchdog can compare this mtime against now to
     # detect silent failures (e.g. cross-repo path break, OAuth revocation).
-    #
-    # Marker payload includes session-local deltas (bytes_session,
-    # errors_session) so freshness checks can distinguish "ran cleanly
-    # and did work" from "ran cleanly but every upload failed silently"
-    # (e.g. revoked OAuth scope manifests as per-message errors that
-    # accumulate without aborting the loop).
-    #
-    # Atomic write: temp file + os.replace() so a crashed run leaves
-    # either the prior intact marker or no marker — never a 0-byte file.
+    write_success_marker(state, bytes_at_start, errors_at_start)
+
+
+def write_success_marker(state, bytes_at_start, errors_at_start):
+    """Write last-success.json atomically with session-local deltas.
+
+    Extracted from main() so unit tests can exercise the marker logic
+    without spawning Mac Mail scans or Gmail API calls. Public entry point
+    for the test suite at tests/test_email_migrate_marker.py.
+
+    bytes_session and errors_session let freshness checks distinguish
+    "ran cleanly and did work" from "ran cleanly but every upload failed
+    silently" (e.g. revoked OAuth scope manifests as per-message errors
+    that accumulate without aborting the loop).
+
+    Atomic write: temp file + os.replace() so a crashed run leaves either
+    the prior intact marker or no marker — never a 0-byte file.
+    """
     bytes_session = state["bytes_uploaded_today"] - bytes_at_start
     errors_session = sum(
         len(f.get("errors", [])) for f in state.get("folders", {}).values()
