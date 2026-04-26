@@ -31,6 +31,25 @@ cat data/agents/swarm-membership-audit-diffs.json
 3. `error`: read the `detail` field. Network/transient errors will self-clear.
 4. `no_chat`: the group isn't registered in `registered_groups`. Likely a
    stale entry in the YAML — remove it.
+5. **"Swarm audit script did not run today — diffs file mtime stale."**: the
+   agent decided the diffs file was stale and reported it without running the
+   script. Investigate `bun run scripts/swarm-audit.ts` manually — likely
+   something is broken about the script's runtime environment in the agent
+   container (missing bun, missing node_modules, wrong CWD, network).
+
+## Prompt structure (intentional)
+The scheduled task's prompt has 3 explicit steps:
+1. **Run** the audit script. (REQUIRED — the prompt warns the agent not to
+   shortcut this step.)
+2. **Verify** `swarm-membership-audit-diffs.json` mtime is within 5 minutes.
+   If stale, alert CLAIRE that Step 1 silently failed.
+3. **Read** the diffs and alert only if non-empty.
+
+This structure was added 2026-04-26 after the first scheduled fire revealed
+the agent could shortcut Step 1 by reading the previous run's diffs file
+directly. The mtime guard makes silent shortcuts visible. Edit the prompt
+in `store/messages.db` `scheduled_tasks` row `id='swarm-membership-audit'`
+if you need to change the alert behavior.
 
 ## Out of scope
 The audit does not enforce membership. The runtime send path
