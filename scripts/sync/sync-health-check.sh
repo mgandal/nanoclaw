@@ -74,7 +74,7 @@ else
     done
 fi
 
-# 4. Gmail credentials valid
+# 4. Gmail credentials valid (source: mgandal@gmail.com)
 GMAIL_CHECK=$($PYTHON3 -c "
 import json, sys
 import sys
@@ -87,6 +87,31 @@ else:
     print('no working credentials in fallback chain'); sys.exit(1)
 " 2>&1)
 check "Gmail credentials (mgandal)" "$GMAIL_CHECK" $?
+
+# 4b. Gmail credentials for upload target (mikejg1838@gmail.com)
+# Tests the OAuth token used by Step 1 (Outlook→Gmail). If this token is
+# revoked or scope-downgraded, Step 1 silently no-ops; staleness check at
+# 7c eventually catches it (8h lag), but this gives an immediate signal.
+MIKEJG_CHECK=$($PYTHON3 -c "
+import json, sys
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+try:
+    raw = json.load(open('$HOME/.google_workspace_mcp/credentials/mikejg1838@gmail.com.json'))
+    creds = Credentials(token=raw['token'], refresh_token=raw['refresh_token'],
+                        token_uri=raw['token_uri'], client_id=raw['client_id'],
+                        client_secret=raw['client_secret'], scopes=raw['scopes'])
+    if creds.expired or not creds.valid:
+        creds.refresh(Request())
+    if not any(s.endswith('gmail.modify') for s in (creds.scopes or [])):
+        print(f'token missing gmail.modify scope (have: {creds.scopes})'); sys.exit(1)
+    print('OK')
+except FileNotFoundError:
+    print('credentials file missing'); sys.exit(1)
+except Exception as e:
+    print(f'refresh failed: {e}'); sys.exit(1)
+" 2>&1)
+check "Gmail credentials (mikejg1838 — upload target)" "$MIKEJG_CHECK" $?
 
 # 5. Vault path accessible
 if [ -d "/Volumes/sandisk4TB/marvin-vault" ]; then
@@ -130,17 +155,37 @@ fi
 # 7c. Outlook→Gmail forwarding is fresh (last-success marker within 8h)
 SUCCESS_FILE="$HOME/.cache/email-migrate/last-success.json"
 if [ -f "$SUCCESS_FILE" ]; then
-    LAST_SUCCESS=$($PYTHON3 -c "import json; print(int(json.load(open('$SUCCESS_FILE'))['timestamp']))" 2>/dev/null)
-    NOW=$(date "+%s")
-    if [ -n "$LAST_SUCCESS" ]; then
+    # Parse all needed fields in one Python invocation. Outputs:
+    #   <timestamp> <bytes_session> <errors_session>
+    # Older marker files (pre-2026-04-26) lack the session fields; they're
+    # filled with -1 to mean "unknown" and 7d skips the silent-degrade check.
+    PARSE=$($PYTHON3 -c "
+import json
+d = json.load(open('$SUCCESS_FILE'))
+print(int(d['timestamp']), d.get('bytes_session', -1), d.get('errors_session', -1))
+" 2>/dev/null)
+    if [ -n "$PARSE" ]; then
+        LAST_SUCCESS=$(echo "$PARSE" | awk '{print $1}')
+        BYTES_SESSION=$(echo "$PARSE" | awk '{print $2}')
+        ERRORS_SESSION=$(echo "$PARSE" | awk '{print $3}')
+        NOW=$(date "+%s")
         AGE_HOURS=$(( (NOW - LAST_SUCCESS) / 3600 ))
         if [ "$AGE_HOURS" -lt 8 ]; then
             check "Outlook→Gmail freshness (<8h)" "" 0
         else
             check "Outlook→Gmail freshness (<8h)" "${AGE_HOURS}h since last success — forwarding may be wedged" 1
         fi
+        # 7d. Silent-degrade detection: marker fresh but last run failed every
+        # upload it attempted. Catches OAuth scope downgrade, account
+        # suspension, etc. that manifest as per-message errors which the
+        # script logs but does NOT abort on.
+        if [ "$ERRORS_SESSION" -gt 0 ] 2>/dev/null && [ "$BYTES_SESSION" -eq 0 ] 2>/dev/null; then
+            check "Outlook→Gmail last run did work" "$ERRORS_SESSION errors and 0 bytes uploaded — silent degrade?" 1
+        elif [ "$ERRORS_SESSION" -ge 0 ] 2>/dev/null; then
+            check "Outlook→Gmail last run did work" "" 0
+        fi
     else
-        warn "Outlook→Gmail freshness" "marker file present but unparseable"
+        check "Outlook→Gmail freshness (<8h)" "marker file unparseable — atomic write failed?" 1
     fi
 else
     warn "Outlook→Gmail freshness" "no last-success marker yet (first run after install?)"

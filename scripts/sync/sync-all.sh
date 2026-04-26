@@ -76,9 +76,19 @@ export GMAIL_MIGRATE_USER="mikejg1838@gmail.com"
 ERRORS=0
 
 # --- Pre-flight: verify dependencies are reachable ---
+# Health check exit (1 = one or more checks failed) is captured into ERRORS
+# so the final banner reflects pre-flight failures. We do NOT hard-abort:
+# a failing prerequisite for one step (e.g. Apple Notes unmounted) shouldn't
+# block mission-critical steps like Step 1 (Outlook→Gmail forwarding).
+# `set -o pipefail` (line 4) ensures the pipe exit reflects the script exit.
 echo ""
 echo "[pre-flight] Checking sync dependencies..."
 bash "$SCRIPT_DIR/sync-health-check.sh" 2>&1 | grep -E '✓|✗|⚠|Results'
+HEALTH_EC=${PIPESTATUS[0]}
+if [ "$HEALTH_EC" -ne 0 ]; then
+    echo "[pre-flight] WARNING: health check reported failures (exit $HEALTH_EC)"
+    ERRORS=$((ERRORS + 1))
+fi
 echo ""
 
 # --- Step 1: Exchange email sync (Mac Mail Outlook → mikejg1838@gmail.com) ---

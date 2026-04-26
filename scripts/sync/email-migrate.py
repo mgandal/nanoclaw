@@ -938,6 +938,14 @@ def main():
         creds = load_gmail_api_credentials()
         uploader = GmailApiUploader(creds, API_UPLOAD_WORKERS)
 
+    # Snapshot pre-loop counters so we can compute session-local deltas
+    # for the success marker. Without this, the marker only proves the
+    # process exited cleanly — not that it did any work or hit any errors.
+    bytes_at_start = state["bytes_uploaded_today"]
+    errors_at_start = sum(
+        len(f.get("errors", [])) for f in state.get("folders", {}).values()
+    )
+
     try:
         for name, _, files in folders:
             if _shutdown_event.is_set():
@@ -962,12 +970,30 @@ def main():
     # SIGTERM (ShutdownRequested) both count as success: the script behaved
     # correctly. A staleness watchdog can compare this mtime against now to
     # detect silent failures (e.g. cross-repo path break, OAuth revocation).
-    success_file = STATE_DIR / "last-success.json"
-    success_file.write_text(json.dumps({
+    #
+    # Marker payload includes session-local deltas (bytes_session,
+    # errors_session) so freshness checks can distinguish "ran cleanly
+    # and did work" from "ran cleanly but every upload failed silently"
+    # (e.g. revoked OAuth scope manifests as per-message errors that
+    # accumulate without aborting the loop).
+    #
+    # Atomic write: temp file + os.replace() so a crashed run leaves
+    # either the prior intact marker or no marker — never a 0-byte file.
+    bytes_session = state["bytes_uploaded_today"] - bytes_at_start
+    errors_session = sum(
+        len(f.get("errors", [])) for f in state.get("folders", {}).values()
+    ) - errors_at_start
+    payload = json.dumps({
         "timestamp": time.time(),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "bytes_uploaded_today": state["bytes_uploaded_today"],
-    }, indent=2))
+        "bytes_session": bytes_session,
+        "errors_session": errors_session,
+    }, indent=2)
+    success_file = STATE_DIR / "last-success.json"
+    tmp_file = success_file.with_suffix(".json.tmp")
+    tmp_file.write_text(payload)
+    os.replace(tmp_file, success_file)
 
 
 if __name__ == "__main__":
