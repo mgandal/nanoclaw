@@ -74,6 +74,105 @@ export interface AuditDiff {
   kind: 'regression' | 'new_miss' | 'recovery';
 }
 
+/**
+ * Meta-alert about audit infrastructure health (not a per-persona regression).
+ * Distinct shape (kind: 'meta', no group_folder/persona) so downstream
+ * consumers — the scheduled-task prompt that surfaces diffs to CLAIRE —
+ * can route this to OPS rather than treating it as N false-positive
+ * regression alerts. See loadPriorReport() for the corruption-recovery
+ * pattern this enables.
+ */
+export interface MetaAlert {
+  kind: 'meta';
+  reason: 'prior_unreadable';
+  detail: string;
+  rotated_to?: string;
+  detected_at: string;
+}
+
+export interface PriorLoadResult {
+  report: AuditReport | null;
+  recovered: boolean;
+  rotatedTo?: string;
+  error?: string;
+}
+
+/**
+ * Load the prior audit report, auto-quarantining a corrupt file aside
+ * (`<original>.corrupt-<ISO-timestamp>`). Mirrors the pattern in
+ * scripts/sync/email-migrate.py:load_state.
+ *
+ * Returns `recovered: true` when the prior was unreadable (parse error,
+ * read error) — callers should then suppress per-persona diffs and emit
+ * a single meta-alert, otherwise a schema drift would spam N
+ * false-positive `new_miss` alerts to CLAIRE.
+ *
+ * If the rotation itself fails (read-only fs, permissions), we log and
+ * still return `recovered: true` so the caller's recovery path runs;
+ * we just don't have a `rotatedTo` to report.
+ */
+export function loadPriorReport(priorPath: string): PriorLoadResult {
+  if (!fs.existsSync(priorPath)) {
+    return { report: null, recovered: false };
+  }
+  try {
+    const raw = fs.readFileSync(priorPath, 'utf8');
+    const report = JSON.parse(raw) as AuditReport;
+    return { report, recovered: false };
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    // Format matches scripts/sync/email-migrate.py:load_state — hyphens not
+    // colons (filesystem-safe), local time via Date.toISOString → strip ms+Z.
+    const ts = new Date()
+      .toISOString()
+      .replace(/\..+$/, '')
+      .replace(/:/g, '-');
+    const rotatedTo = `${priorPath}.corrupt-${ts}`;
+    try {
+      fs.renameSync(priorPath, rotatedTo);
+      logger.warn(
+        { err: errMsg, rotatedTo },
+        'Prior audit JSON unreadable; rotated aside, treating as first-run',
+      );
+      return { report: null, recovered: true, rotatedTo, error: errMsg };
+    } catch (renameErr) {
+      const renameMsg =
+        renameErr instanceof Error ? renameErr.message : String(renameErr);
+      logger.warn(
+        { err: errMsg, renameErr: renameMsg },
+        'Prior audit JSON unreadable; could not rotate, treating as first-run',
+      );
+      return { report: null, recovered: true, error: errMsg };
+    }
+  }
+}
+
+/**
+ * Compute alert payload for one audit run: returns per-persona diffs (only
+ * if prior was healthy) and an optional meta-alert (only if prior was
+ * corrupt and got quarantined).
+ */
+export function computeAuditAlerts(
+  priorPath: string,
+  currentReport: AuditReport,
+): { diffs: AuditDiff[]; meta: MetaAlert | null } {
+  const prior = loadPriorReport(priorPath);
+  if (prior.recovered) {
+    return {
+      diffs: [],
+      meta: {
+        kind: 'meta',
+        reason: 'prior_unreadable',
+        detail: `Prior audit JSON at ${priorPath} was unreadable (${prior.error ?? 'unknown error'}); per-persona diffs suppressed for this run.`,
+        rotated_to: prior.rotatedTo,
+        detected_at: new Date().toISOString(),
+      },
+    };
+  }
+  const diffs = diffAudits(prior.report?.rows ?? [], currentReport.rows);
+  return { diffs, meta: null };
+}
+
 export function diffAudits(prev: AuditRow[], curr: AuditRow[]): AuditDiff[] {
   const key = (r: AuditRow) => `${r.group_folder}::${r.persona}`;
   const prevMap = new Map(prev.map((r) => [key(r), r.status] as const));
@@ -225,16 +324,15 @@ async function main() {
   };
   const report: AuditReport = { generated_at: probedAt, rows: auditRows, summary };
 
-  // 6. Diff against previous run for alert-worthy changes
-  let prevReport: AuditReport | null = null;
-  try {
-    if (fs.existsSync(JSON_OUT)) {
-      prevReport = JSON.parse(fs.readFileSync(JSON_OUT, 'utf8')) as AuditReport;
-    }
-  } catch (err) {
-    logger.warn({ err }, 'Could not parse previous audit JSON, treating as empty');
+  // 6. Diff against previous run for alert-worthy changes.
+  // computeAuditAlerts auto-quarantines a corrupt prior to
+  // <path>.corrupt-<ts> and returns a single meta-alert in lieu of N
+  // false-positive new_miss rows. See loadPriorReport().
+  const { diffs, meta } = computeAuditAlerts(JSON_OUT, report);
+  if (meta) {
+    logger.warn({ meta }, 'Swarm audit meta-alert: prior unreadable');
+    console.log('META:', JSON.stringify(meta, null, 2));
   }
-  const diffs = diffAudits(prevReport?.rows ?? [], auditRows);
   if (diffs.length > 0) {
     logger.info({ diffs }, 'Swarm membership audit diffs detected');
     console.log('DIFFS:', JSON.stringify(diffs, null, 2));
@@ -244,7 +342,7 @@ async function main() {
   // Also write the diffs alongside the report so the scheduled-task prompt can read them
   fs.writeFileSync(
     path.join(RUNTIME_ROOT, 'data/agents/swarm-membership-audit-diffs.json'),
-    JSON.stringify({ generated_at: probedAt, diffs }, null, 2),
+    JSON.stringify({ generated_at: probedAt, diffs, meta }, null, 2),
   );
 
   // 7. Write JSON
@@ -252,7 +350,7 @@ async function main() {
   fs.writeFileSync(JSON_OUT, JSON.stringify(report, null, 2));
 
   // 8. Write Markdown digest
-  const md = renderMarkdown(report);
+  const md = renderMarkdown(report, meta ?? undefined);
   fs.mkdirSync(path.dirname(MD_OUT), { recursive: true });
   fs.writeFileSync(MD_OUT, md);
 
@@ -260,7 +358,7 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-export function renderMarkdown(report: AuditReport): string {
+export function renderMarkdown(report: AuditReport, meta?: MetaAlert): string {
   const { generated_at, rows, summary } = report;
   const groups = new Map<string, AuditRow[]>();
   for (const r of rows) {
@@ -274,6 +372,17 @@ export function renderMarkdown(report: AuditReport): string {
     `**Summary:** ${summary.member}/${summary.total} reachable · ${summary.not_member} not_member · ${summary.error} error · ${summary.unpinned} unpinned · ${summary.no_chat} no_chat`,
   );
   lines.push('');
+  if (meta) {
+    // Distinct section so OPS can route this differently from per-persona
+    // regression alerts. Scheduled-task prompt should match on this header.
+    lines.push('## Audit health');
+    lines.push(
+      `- ⚠ **prior file unreadable** — ${meta.detail}${
+        meta.rotated_to ? ` Rotated to \`${meta.rotated_to}\`.` : ''
+      }`,
+    );
+    lines.push('');
+  }
   for (const [groupFolder, groupRows] of groups) {
     lines.push(`## ${groupFolder}`);
     for (const r of groupRows) {
