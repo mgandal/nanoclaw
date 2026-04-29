@@ -116,6 +116,10 @@ class _FakeGmailService:
     def users(self):
         return _FakeUsers(self)
 
+    @property
+    def label_cache(self):
+        return self._label_id_for_name
+
 
 class _FakeUsers:
     def __init__(self, svc):
@@ -210,7 +214,7 @@ def test_seed_noop_when_migrated_files_already_populated(migrate_module, tmp_pat
     fake_gmail = _FakeGmailService()  # would error if we hit it (no preseeded label)
 
     seeded = migrate_module.seed_migrated_files_from_gmail(
-        folder_state, "Outlook/Inbox", [emlx], fake_gmail
+        folder_state, "Outlook/Inbox", [emlx], fake_gmail.label_cache, fake_gmail
     )
     assert seeded == 0
     assert folder_state["migrated_files"] == ["1.emlx"]
@@ -230,7 +234,7 @@ def test_seed_populates_from_gmail_when_state_empty(migrate_module, tmp_path):
     folder_state = {"migrated_files": [], "total": 3, "migrated": 0, "errors": []}
 
     seeded = migrate_module.seed_migrated_files_from_gmail(
-        folder_state, "Outlook/Inbox", [e1, e2, e3], fake_gmail
+        folder_state, "Outlook/Inbox", [e1, e2, e3], fake_gmail.label_cache, fake_gmail
     )
 
     assert seeded == 2
@@ -245,7 +249,7 @@ def test_seed_noop_when_label_does_not_exist_in_gmail(migrate_module, tmp_path):
     folder_state = {"migrated_files": [], "total": 1, "migrated": 0, "errors": []}
 
     seeded = migrate_module.seed_migrated_files_from_gmail(
-        folder_state, "Outlook/Inbox", [emlx], fake_gmail
+        folder_state, "Outlook/Inbox", [emlx], fake_gmail.label_cache, fake_gmail
     )
 
     assert seeded == 0
@@ -280,7 +284,7 @@ def test_corruption_rerun_does_not_double_import(migrate_module, tmp_path):
 
     # The fix: seed runs before the walk
     migrate_module.seed_migrated_files_from_gmail(
-        folder_state, "Outlook/Inbox", [e1, e2], fake_gmail
+        folder_state, "Outlook/Inbox", [e1, e2], fake_gmail.label_cache, fake_gmail
     )
 
     # The walk that migrate_folder does (lines 446-447, 699-700)
@@ -321,7 +325,7 @@ def test_seed_paginates_through_multi_page_label(migrate_module, tmp_path):
     folder_state = {"migrated_files": [], "total": 1, "migrated": 0, "errors": []}
 
     seeded = migrate_module.seed_migrated_files_from_gmail(
-        folder_state, "Outlook/Inbox", [target_emlx], fake_gmail
+        folder_state, "Outlook/Inbox", [target_emlx], fake_gmail.label_cache, fake_gmail
     )
 
     assert seeded == 1, (

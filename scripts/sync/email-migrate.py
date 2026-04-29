@@ -245,18 +245,14 @@ def extract_message_id(rfc822_bytes):
     return mid.strip()
 
 
-def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, gmail_service):
+def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, label_cache, gmail_service):
     """Populate `migrated_files` from Gmail-side state when local state was lost.
 
-    Fires only when (a) local `migrated_files` is empty AND (b) the Gmail
-    label already exists with messages. The intersection of local
-    Message-IDs and Gmail-side Message-IDs becomes the seeded set.
-
-    Background: load_state() rotates a corrupt state file aside and returns
-    fresh state. Without this seed, every .emlx then looks unprocessed and
-    the upload loop re-imports messages that already landed in Gmail.
-    The Gmail API reference for messages.import does not document
-    Message-ID dedup, so we cannot rely on Gmail to silently drop dupes.
+    The Gmail API reference for messages.import does not document Message-ID
+    dedup, so we cannot rely on Gmail to silently drop re-uploads after a
+    state-file corruption recovery. This seed bridges the gap: when local
+    `migrated_files` is empty AND the Gmail label exists, intersect local
+    Message-IDs with Gmail's and mark the matches as already-migrated.
 
     Returns the number of files seeded. No-op (returns 0) on the normal
     path where `migrated_files` is non-empty.
@@ -264,21 +260,10 @@ def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, gmail_s
     if folder_state.get("migrated_files"):
         return 0
 
-    # Find the Gmail label ID, if any.
-    try:
-        labels_resp = gmail_service.users().labels().list(userId="me").execute()
-    except Exception as exc:
-        log.warning("  Seed: could not list Gmail labels: %s", exc)
-        return 0
-    label_id = None
-    for lbl in labels_resp.get("labels", []):
-        if lbl.get("name") == label_name:
-            label_id = lbl.get("id")
-            break
+    label_id = label_cache.get(label_name)
     if not label_id:
-        return 0  # First-ever run for this folder — nothing to seed.
+        return 0
 
-    # Build the Message-ID -> .emlx-filename index from local files.
     local_index = {}
     for emlx_path in emlx_files:
         parsed = parse_emlx(emlx_path)
@@ -292,8 +277,8 @@ def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, gmail_s
     if not local_index:
         return 0
 
-    # Page through messages on this label and pull Message-ID via metadata get.
-    seeded = []
+    migrated_files = folder_state.setdefault("migrated_files", [])
+    seeded_count = 0
     page_token = None
     try:
         while True:
@@ -320,25 +305,25 @@ def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, gmail_s
                         gmail_mid = (h.get("value") or "").strip()
                         break
                 if gmail_mid and gmail_mid in local_index:
-                    seeded.append(local_index[gmail_mid])
+                    migrated_files.append(local_index[gmail_mid])
+                    seeded_count += 1
             page_token = resp.get("nextPageToken")
             if not page_token:
                 break
     except Exception as exc:
         log.warning(
             "  Seed: error querying Gmail for %s (got %d so far): %s",
-            label_name, len(seeded), exc,
+            label_name, seeded_count, exc,
         )
 
-    if seeded:
-        folder_state.setdefault("migrated_files", []).extend(seeded)
-        folder_state["migrated"] = len(folder_state["migrated_files"])
+    if seeded_count:
+        folder_state["migrated"] = len(migrated_files)
         log.info(
             "  Seed: recovered %d already-migrated files from Gmail (%s)",
-            len(seeded), label_name,
+            seeded_count, label_name,
         )
 
-    return len(seeded)
+    return seeded_count
 
 
 def discover_folders():
@@ -555,11 +540,11 @@ class GmailApiUploader:
         total = len(emlx_files)
         folder_state["total"] = total
 
-        # Recover from local-state loss before walking: if migrated_files
-        # is empty but Gmail already has messages for this label, seed
-        # migrated_files from Gmail-side Message-IDs so we don't re-import.
+        # Corruption-recovery seed: if migrated_files is empty but Gmail
+        # already has messages on this label, fill from Gmail-side state.
         seed_migrated_files_from_gmail(
-            folder_state, label_name, emlx_files, self._admin_service
+            folder_state, label_name, emlx_files,
+            self._label_cache, self._admin_service,
         )
 
         # Always re-scan: the `completed` flag is informational only.
