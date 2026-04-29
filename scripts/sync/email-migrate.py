@@ -128,10 +128,12 @@ def load_state():
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as exc:
             # Corruption recovery: rotate the bad file aside so the next run
-            # starts with a fresh state. Gmail's deduper rejects re-uploads
-            # by Message-ID, so re-processing already-uploaded .emlx files is
-            # safe. Without this guard, a single disk-full mid-write or
-            # power-loss-during-tmp-replace wedges the pipeline forever.
+            # starts with a fresh state. The next call to migrate_folder()
+            # then runs seed_migrated_files_from_gmail() to repopulate
+            # migrated_files from messages already in Gmail (matched by
+            # Message-ID), so we don't double-import. Without this guard,
+            # a single disk-full mid-write or power-loss-during-tmp-replace
+            # wedges the pipeline forever.
             ts = time.strftime("%Y-%m-%dT%H-%M-%S")
             corrupt_path = STATE_FILE.parent / f"{STATE_FILE.name}.corrupt-{ts}"
             try:
@@ -224,6 +226,119 @@ def parse_emlx(emlx_path):
     except Exception as e:
         log.warning("  Failed to parse %s: %s", emlx_path, e)
         return None
+
+
+def extract_message_id(rfc822_bytes):
+    """Extract the Message-ID header from an RFC 822 byte string.
+
+    Returns the header value (typically `<id@host>`) verbatim, or None if
+    the header is missing or unparseable. Used by the corruption-recovery
+    seed path to match local .emlx files against messages already in Gmail.
+    """
+    try:
+        msg = email.message_from_bytes(rfc822_bytes)
+    except Exception:
+        return None
+    mid = msg.get("Message-ID") or msg.get("Message-Id") or msg.get("message-id")
+    if not mid:
+        return None
+    return mid.strip()
+
+
+def seed_migrated_files_from_gmail(folder_state, label_name, emlx_files, gmail_service):
+    """Populate `migrated_files` from Gmail-side state when local state was lost.
+
+    Fires only when (a) local `migrated_files` is empty AND (b) the Gmail
+    label already exists with messages. The intersection of local
+    Message-IDs and Gmail-side Message-IDs becomes the seeded set.
+
+    Background: load_state() rotates a corrupt state file aside and returns
+    fresh state. Without this seed, every .emlx then looks unprocessed and
+    the upload loop re-imports messages that already landed in Gmail.
+    The Gmail API reference for messages.import does not document
+    Message-ID dedup, so we cannot rely on Gmail to silently drop dupes.
+
+    Returns the number of files seeded. No-op (returns 0) on the normal
+    path where `migrated_files` is non-empty.
+    """
+    if folder_state.get("migrated_files"):
+        return 0
+
+    # Find the Gmail label ID, if any.
+    try:
+        labels_resp = gmail_service.users().labels().list(userId="me").execute()
+    except Exception as exc:
+        log.warning("  Seed: could not list Gmail labels: %s", exc)
+        return 0
+    label_id = None
+    for lbl in labels_resp.get("labels", []):
+        if lbl.get("name") == label_name:
+            label_id = lbl.get("id")
+            break
+    if not label_id:
+        return 0  # First-ever run for this folder — nothing to seed.
+
+    # Build the Message-ID -> .emlx-filename index from local files.
+    local_index = {}
+    for emlx_path in emlx_files:
+        parsed = parse_emlx(emlx_path)
+        if parsed is None:
+            continue
+        rfc822, _is_read, _ts = parsed
+        mid = extract_message_id(rfc822)
+        if mid:
+            local_index[mid] = emlx_path.name
+
+    if not local_index:
+        return 0
+
+    # Page through messages on this label and pull Message-ID via metadata get.
+    seeded = []
+    page_token = None
+    try:
+        while True:
+            list_kwargs = {"userId": "me", "labelIds": [label_id], "maxResults": 500}
+            if page_token:
+                list_kwargs["pageToken"] = page_token
+            resp = gmail_service.users().messages().list(**list_kwargs).execute()
+            for stub in resp.get("messages", []):
+                msg = (
+                    gmail_service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=stub["id"],
+                        format="metadata",
+                        metadataHeaders=["Message-ID"],
+                    )
+                    .execute()
+                )
+                headers = msg.get("payload", {}).get("headers", [])
+                gmail_mid = None
+                for h in headers:
+                    if h.get("name", "").lower() == "message-id":
+                        gmail_mid = (h.get("value") or "").strip()
+                        break
+                if gmail_mid and gmail_mid in local_index:
+                    seeded.append(local_index[gmail_mid])
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+    except Exception as exc:
+        log.warning(
+            "  Seed: error querying Gmail for %s (got %d so far): %s",
+            label_name, len(seeded), exc,
+        )
+
+    if seeded:
+        folder_state.setdefault("migrated_files", []).extend(seeded)
+        folder_state["migrated"] = len(folder_state["migrated_files"])
+        log.info(
+            "  Seed: recovered %d already-migrated files from Gmail (%s)",
+            len(seeded), label_name,
+        )
+
+    return len(seeded)
 
 
 def discover_folders():
@@ -439,6 +554,13 @@ class GmailApiUploader:
 
         total = len(emlx_files)
         folder_state["total"] = total
+
+        # Recover from local-state loss before walking: if migrated_files
+        # is empty but Gmail already has messages for this label, seed
+        # migrated_files from Gmail-side Message-IDs so we don't re-import.
+        seed_migrated_files_from_gmail(
+            folder_state, label_name, emlx_files, self._admin_service
+        )
 
         # Always re-scan: the `completed` flag is informational only.
         # Mac Mail can write new .emlx into any folder (incl. ones marked
@@ -692,6 +814,11 @@ class ImapUploadPool:
 
         total = len(emlx_files)
         folder_state["total"] = total
+
+        # NOTE: The seed_migrated_files_from_gmail() recovery path is wired
+        # into the API uploader only — IMAP path has no cheap Gmail metadata
+        # query. State-corruption recovery on the IMAP path can still
+        # double-deliver; that's a known limitation. Prefer the API path.
 
         # Always re-scan: the `completed` flag is informational only.
         # Mac Mail can write new .emlx into any folder (incl. ones marked
