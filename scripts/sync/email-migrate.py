@@ -17,6 +17,7 @@ Usage:
 import argparse
 import base64
 import email
+import fcntl
 import imaplib
 import json
 import logging
@@ -156,12 +157,22 @@ def load_state():
 
 
 def save_state(state):
-    """Persist migration state to JSON file."""
+    """Persist migration state to JSON file.
+
+    Cross-process safe: holds an fcntl.flock(LOCK_EX) on a sidecar
+    `.lock` file for the duration of write+replace. Prevents two
+    concurrent cron invocations (launchd 4h tick + 30-min timeout
+    overlap) from racing on the shared `.tmp` filename and producing
+    a torn / wrong-payload final file.
+    """
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = STATE_FILE.with_suffix(".lock")
     tmp = STATE_FILE.with_suffix(".tmp")
-    with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
-    tmp.replace(STATE_FILE)
+    with open(lock_path, "w") as lock_f:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        with open(tmp, "w") as f:
+            json.dump(state, f, indent=2)
+        tmp.replace(STATE_FILE)
 
 
 def reset_daily_counter(state):
