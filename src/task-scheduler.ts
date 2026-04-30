@@ -164,7 +164,11 @@ export function runGuardScript(
   );
 
   return new Promise((resolve) => {
-    execFile(
+    // FD note: execFile inherits 3 parent pipes per spawn (stdin/stdout/stderr)
+    // and ignores the `stdio` option — to release the unused stdin FD early
+    // we close child.stdin explicitly below. (See 2026-04-30 ENFILE incident:
+    // 12 fires in 8s during inbox-convert burst.)
+    const child = execFile(
       '/bin/bash',
       ['-c', script],
       { timeout: timeoutMs, env: { ...process.env, PATH: process.env.PATH } },
@@ -203,6 +207,9 @@ export function runGuardScript(
         }
       },
     );
+    // Release the parent's stdin pipe FD immediately. The guard never reads
+    // stdin; holding the pipe just consumes one FD per concurrent guard.
+    child.stdin?.end();
   });
 }
 
