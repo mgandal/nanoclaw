@@ -125,6 +125,56 @@ const senderBotMap = new Map<string, number>();
 // Maps sender name → pool Api index for pinned senders (global — a pinned bot's
 // Telegram display name is global, so one pin covers every group that bot is in).
 const pinnedSenderIdx = new Map<string, number>();
+// Per-bot setMyName cache. Telegram throttles setMyName at ~1 call / 30s per
+// bot; once a bot's display name is set it stays, so duplicate calls are
+// pure waste. On 429, suppressUntil prevents retry storms.
+//   key: pool-Api array index → { name: last-set name, suppressUntil: ms epoch }
+const setMyNameCache = new Map<
+  number,
+  { name?: string; suppressUntil?: number }
+>();
+
+/**
+ * Apply setMyName with in-memory caching to avoid Telegram's 429 rate limit
+ * (~1 call / 30s per bot). Resolves true if the name is now known to be set
+ * (either it matched the cache, or the API call succeeded). Resolves false if
+ * the API call failed for a non-rate-limit reason. On 429, suppresses
+ * subsequent attempts on this bot for `retry_after` seconds and returns false
+ * silently (no warning).
+ */
+async function applyCachedSetMyName(
+  poolIdx: number,
+  api: { setMyName: Api['setMyName'] },
+  name: string,
+): Promise<boolean> {
+  const entry = setMyNameCache.get(poolIdx) ?? {};
+  if (entry.name === name) return true;
+  if (entry.suppressUntil && entry.suppressUntil > Date.now()) return false;
+
+  try {
+    await api.setMyName(name);
+    setMyNameCache.set(poolIdx, { name });
+    return true;
+  } catch (err) {
+    const errorCode =
+      err && typeof err === 'object' && 'error_code' in err
+        ? (err as { error_code: number }).error_code
+        : 0;
+    if (errorCode === 429) {
+      const params = (err as any).parameters as
+        | { retry_after?: number }
+        | undefined;
+      const retryAfter = params?.retry_after ?? 60;
+      setMyNameCache.set(poolIdx, {
+        ...entry,
+        suppressUntil: Date.now() + retryAfter * 1000,
+      });
+      // Suppress silently — these get spammy (retry_after can be hours)
+      return false;
+    }
+    throw err;
+  }
+}
 
 /**
  * Read-only accessor for audit/diagnostic code: returns the Grammy `Api`
@@ -157,6 +207,7 @@ export function _resetPoolStateForTests(): void {
   poolApis.length = 0;
   senderBotMap.clear();
   pinnedSenderIdx.clear();
+  setMyNameCache.clear();
   nextPoolIndex = 0;
   poolOpts = null;
 }
@@ -230,11 +281,18 @@ export async function initBotPool(
           );
         } else {
           try {
-            await api.setMyName(pinnedSender);
-            logger.info(
-              { botUsername: me.username, pinnedSender, poolIndex: idx },
-              'Pool bot pinned and pre-renamed',
-            );
+            const ok = await applyCachedSetMyName(idx, api, pinnedSender);
+            if (ok) {
+              logger.info(
+                { botUsername: me.username, pinnedSender, poolIndex: idx },
+                'Pool bot pinned and pre-renamed',
+              );
+            } else {
+              logger.info(
+                { botUsername: me.username, pinnedSender, poolIndex: idx },
+                'Pool bot pinned (rename skipped — rate-limited, will send anyway)',
+              );
+            }
           } catch (err) {
             logger.warn(
               { botUsername: me.username, pinnedSender, err },
@@ -312,12 +370,20 @@ export async function sendPoolMessage(
 
       if (!pinnedIndices.has(idx)) {
         try {
-          await poolApis[idx].setMyName(sender);
-          await new Promise((r) => setTimeout(r, 2000));
-          logger.info(
-            { sender, groupFolder, poolIndex: idx },
-            'Assigned and renamed pool bot',
+          const renamed = await applyCachedSetMyName(
+            idx,
+            poolApis[idx],
+            sender,
           );
+          if (renamed) {
+            await new Promise((r) => setTimeout(r, 2000));
+            logger.info(
+              { sender, groupFolder, poolIndex: idx },
+              'Assigned and renamed pool bot',
+            );
+          }
+          // If renamed === false, the cache hit (same name) or the bot is in
+          // a 429-suppression window — either way, send anyway without warn.
         } catch (err) {
           logger.warn(
             { sender, err },
