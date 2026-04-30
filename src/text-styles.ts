@@ -331,6 +331,16 @@ function transformSegment(text: string, channel: ChannelType): string {
   // 4. Links
   if (channel === 'slack') {
     t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
+  } else if (channel === 'telegram') {
+    // Telegram Markdown v1 natively supports [text](url) — leave intact.
+    // Also rewrite Perplexity-style citations:
+    //   "[1] Title text https://url"  →  "*[1]* [Title text](https://url)"
+    // so the bare citation token becomes a clickable link with the URL preserved.
+    t = transformTelegramCitations(t);
+    // Compact blank lines between consecutive bullet items so digests render
+    // as tight lists (user complaint: "with the bullet format you don't need
+    // spaces between each story").
+    t = compactBulletBlankLines(t);
   } else {
     t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
   }
@@ -339,6 +349,72 @@ function transformSegment(text: string, channel: ChannelType): string {
   t = t.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
 
   return t;
+}
+
+// ---------------------------------------------------------------------------
+// Telegram-specific helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Rewrite Perplexity-style citation lines so the URL becomes a clickable link
+ * and the bare `[N]` token is preserved as a bold marker.
+ *
+ *   [1] K-Dense-AI/skills - GitHub https://github.com/...
+ *     → *[1]* [K-Dense-AI/skills - GitHub](https://github.com/...)
+ *
+ * Only matches when the line begins with `[N]` (digits) and ends with a URL.
+ * Lines like "see note [1] for details" are untouched.
+ */
+function transformTelegramCitations(text: string): string {
+  // ^[N] <title> <whitespace> <URL>$
+  //   N      = one or more digits
+  //   title  = anything that isn't a URL prefix (lazy)
+  //   URL    = http(s)://... up to end-of-line whitespace
+  const CITATION = /^(\s*)\[(\d+)\]\s+(.+?)\s+(https?:\/\/\S+)\s*$/gm;
+  return text.replace(
+    CITATION,
+    (_match, lead: string, n: string, title: string, url: string) =>
+      `${lead}*[${n}]* [${title.trim()}](${url})`,
+  );
+}
+
+/**
+ * Collapse blank lines that appear *between* consecutive bullet items so a
+ * Markdown list renders as a single tight block on Telegram.
+ *
+ *   - a\n\n- b\n\n- c   →   - a\n- b\n- c
+ *
+ * A "bullet" is `-`, `*`, or `•` followed by a space.  Blank lines between a
+ * bullet and a non-bullet paragraph are preserved.
+ */
+function compactBulletBlankLines(text: string): string {
+  const BULLET = /^\s*([-*•])\s+/;
+  const lines = text.split('\n');
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // If this is a blank line sandwiched between two bullet items, drop it.
+    if (line.trim() === '') {
+      // Find the previous non-blank line.
+      let prev = out.length - 1;
+      while (prev >= 0 && out[prev].trim() === '') prev--;
+      // Find the next non-blank line.
+      let next = i + 1;
+      while (next < lines.length && lines[next].trim() === '') next++;
+
+      const prevIsBullet = prev >= 0 && BULLET.test(out[prev]);
+      const nextIsBullet = next < lines.length && BULLET.test(lines[next]);
+      if (prevIsBullet && nextIsBullet) {
+        // Skip every blank line in this run.
+        i = next - 1;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+
+  return out.join('\n');
 }
 
 // ---------------------------------------------------------------------------
