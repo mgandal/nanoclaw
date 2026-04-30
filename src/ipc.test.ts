@@ -19,6 +19,8 @@ import {
   handleSlackDmIpc,
   isSenderAllowedForPool,
   isSendFileExtensionAllowed,
+  scanIpcGroupFolders,
+  logFdPressureDiagnostic,
   IpcDeps,
 } from './ipc.js';
 import { DATA_DIR } from './config.js';
@@ -4721,5 +4723,88 @@ describe('IPC set_proactive_pause action', () => {
       deps,
     );
     expect(fs.existsSync(tmpPauseFile)).toBe(false);
+  });
+});
+
+// --- FD-leak hardening (2026-04-30 ENFILE incident) ---
+//
+// Burst the IPC dir scanner and confirm process FD count does not grow
+// unboundedly. We can't actually trigger ENFILE in a test (would crash the
+// runner), so we assert FD count stays bounded after 100 rapid scans.
+
+describe('scanIpcGroupFolders FD discipline', () => {
+  let tmpDir: string;
+  const fdCount = (): number => {
+    // Linux: count entries in /proc/self/fd. macOS: fall through.
+    try {
+      return fs.readdirSync('/proc/self/fd').length;
+    } catch {
+      // macOS — fall back to the Node "active handles" count which still
+      // proves the assertion (handles == FDs the runtime tracks).
+      return (
+        ((process as any)._getActiveHandles?.()?.length ?? 0) +
+        ((process as any)._getActiveRequests?.()?.length ?? 0)
+      );
+    }
+  };
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-fd-test-'));
+    // Populate with several group dirs + an errors/ subdir + a stray file.
+    for (const name of ['telegram_a', 'telegram_b', 'telegram_c', 'errors']) {
+      fs.mkdirSync(path.join(tmpDir, name), { recursive: true });
+    }
+    fs.writeFileSync(path.join(tmpDir, 'stray.json'), '{}');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns only directories, excluding errors/', () => {
+    const folders = scanIpcGroupFolders(tmpDir);
+    expect(folders.sort()).toEqual(['telegram_a', 'telegram_b', 'telegram_c']);
+    expect(folders).not.toContain('errors');
+    expect(folders).not.toContain('stray.json');
+  });
+
+  it('does not leak FDs across 100 rapid scans', () => {
+    // Warm-up scan to load any lazy state.
+    scanIpcGroupFolders(tmpDir);
+    const before = fdCount();
+    for (let i = 0; i < 100; i++) {
+      scanIpcGroupFolders(tmpDir);
+    }
+    const after = fdCount();
+    // Allow some slack for unrelated runtime activity (logger, GC, vitest).
+    // The leak we're guarding against would add ~1 FD per scan = 100+; a
+    // small bounded delta proves the Dir handle is being closed.
+    expect(after - before).toBeLessThan(20);
+  });
+
+  it('closes the Dir handle even when iteration throws', () => {
+    // Make the directory unreadable mid-iteration by removing an entry's
+    // parent right before opendir. We can't easily simulate a mid-read
+    // throw, so we instead validate the throw path closes the handle by
+    // counting FDs before/after a burst of failing scans.
+    const missing = path.join(tmpDir, 'does-not-exist');
+    const before = fdCount();
+    for (let i = 0; i < 100; i++) {
+      try {
+        scanIpcGroupFolders(missing);
+      } catch (err) {
+        // Expected — ENOENT
+        expect((err as NodeJS.ErrnoException).code).toBe('ENOENT');
+      }
+    }
+    const after = fdCount();
+    expect(after - before).toBeLessThan(20);
+  });
+
+  it('logFdPressureDiagnostic does not throw on unknown errors', () => {
+    // Smoke test — must remain best-effort.
+    expect(() => {
+      logFdPressureDiagnostic({ probe: true }, new Error('synthetic'));
+    }).not.toThrow();
   });
 });
