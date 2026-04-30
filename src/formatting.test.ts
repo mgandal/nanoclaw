@@ -432,9 +432,9 @@ describe('parseTextStyles — links', () => {
     );
   });
 
-  it('converts [text](url) to text (url) on telegram', () => {
+  it('preserves [text](url) on telegram (Markdown v1 supports it natively)', () => {
     expect(parseTextStyles('[Link](https://example.com)', 'telegram')).toBe(
-      'Link (https://example.com)',
+      '[Link](https://example.com)',
     );
   });
 

@@ -344,3 +344,116 @@ describe('parseTextStyles — GFM tables', () => {
     expect(parseTextStyles(input, 'telegram')).toBe(input);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 15. Telegram — Markdown links preserved natively
+// User complaint (2026-04-29 VAULT-claw): "this is not formatted correctly
+// for telegram. always include the url link when available"
+// Telegram Markdown v1 natively supports [text](url) — DO NOT flatten.
+// ---------------------------------------------------------------------------
+describe('parseTextStyles — telegram preserves markdown links', () => {
+  it('keeps [text](url) intact on telegram', () => {
+    expect(parseTextStyles('[Link](https://example.com)', 'telegram')).toBe(
+      '[Link](https://example.com)',
+    );
+  });
+
+  it('keeps multiple markdown links intact on telegram', () => {
+    const input = '[A](https://a.com) and [B](https://b.com)';
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+
+  it('preserves links inside bullet items on telegram', () => {
+    const input = '- [Story](https://a.com) - summary\n- [Other](https://b.com) - other summary';
+    const result = parseTextStyles(input, 'telegram');
+    expect(result).toContain('[Story](https://a.com)');
+    expect(result).toContain('[Other](https://b.com)');
+  });
+
+  it('still flattens [text](url) on whatsapp (no native link support)', () => {
+    expect(parseTextStyles('[Link](https://example.com)', 'whatsapp')).toBe(
+      'Link (https://example.com)',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. Telegram — Perplexity-style citation tokens
+// User complaint (2026-04-29 CLAIRE DM): "This is not formatted properly for
+// telegram" — followed by a Perplexity-style sources block with [1] tokens
+// each followed by a bare URL on the same line. Convert to clickable links.
+// ---------------------------------------------------------------------------
+describe('parseTextStyles — telegram citation tokens', () => {
+  it('converts "[1] text https://url" to a markdown link on telegram', () => {
+    const input = '[1] K-Dense-AI/scientific-agent-skills - GitHub https://github.com/K-Dense-AI/scientific-agent-skills';
+    const result = parseTextStyles(input, 'telegram');
+    expect(result).toContain('*[1]*');
+    expect(result).toContain('[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)');
+  });
+
+  it('converts a Sources block with multiple [N] tokens on telegram', () => {
+    const input = [
+      'Sources',
+      '[1] K-Dense-AI/scientific-agent-skills - GitHub https://github.com/K-Dense-AI/scientific-agent-skills',
+      '[2] OmicsClaw https://github.com/example/omicsclaw',
+    ].join('\n');
+    const result = parseTextStyles(input, 'telegram');
+    expect(result).toContain('[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)');
+    expect(result).toContain('[OmicsClaw](https://github.com/example/omicsclaw)');
+    // Bare "[1]" / "[2]" tokens must be rewrapped (not orphaned)
+    expect(result).not.toMatch(/^\[1\] K-Dense-AI/m);
+    expect(result).not.toMatch(/^\[2\] OmicsClaw/m);
+  });
+
+  it('does not transform [N] tokens without a trailing URL', () => {
+    const input = 'See note [1] for details.';
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+
+  it('does not affect citation transform on whatsapp/slack', () => {
+    const input = '[1] Title https://example.com';
+    // WhatsApp and Slack go through their existing link transforms, but
+    // bare-URL citation rewriting is telegram-specific.
+    expect(parseTextStyles(input, 'whatsapp')).toBe(input);
+    expect(parseTextStyles(input, 'slack')).toBe(input);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. Telegram — bullet-list compaction (digests want tight bullets)
+// User complaint (2026-04-26): "with the bullet format you don't need spaces
+// between each story"
+// ---------------------------------------------------------------------------
+describe('parseTextStyles — telegram tight bullets', () => {
+  it('compacts blank lines between bullet items on telegram', () => {
+    const input = '- first item\n\n- second item\n\n- third item';
+    expect(parseTextStyles(input, 'telegram')).toBe(
+      '- first item\n- second item\n- third item',
+    );
+  });
+
+  it('compacts blank lines between * bullet items on telegram', () => {
+    const input = '* one\n\n* two\n\n* three';
+    expect(parseTextStyles(input, 'telegram')).toBe(
+      '* one\n* two\n* three',
+    );
+  });
+
+  it('preserves blank lines between non-bullet paragraphs on telegram', () => {
+    const input = 'paragraph one\n\nparagraph two';
+    expect(parseTextStyles(input, 'telegram')).toBe(input);
+  });
+
+  it('preserves blank line between bullet list and following prose on telegram', () => {
+    const input = '- item one\n- item two\n\nFollow-up paragraph.';
+    const result = parseTextStyles(input, 'telegram');
+    expect(result).toContain('- item one\n- item two');
+    expect(result).toContain('\n\nFollow-up paragraph.');
+  });
+
+  it('does not compact bullets on whatsapp/slack (telegram-specific)', () => {
+    const input = '- a\n\n- b';
+    expect(parseTextStyles(input, 'whatsapp')).toBe(input);
+    expect(parseTextStyles(input, 'slack')).toBe(input);
+  });
+});
