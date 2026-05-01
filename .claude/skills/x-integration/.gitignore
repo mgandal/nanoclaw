@@ -2,3 +2,12 @@
 *.js.map
 *.d.ts
 *.d.ts.map
+
+# host.js / host.d.ts are loaded by src/ipc.ts at runtime — they ARE the
+# entry point for x-integration, not transient build output. Track them so
+# the runtime artifact never drifts from host.ts. Regenerate after editing
+# host.ts via:  cd .claude/skills/x-integration && npx tsc host.ts \
+#   --target ES2022 --module NodeNext --moduleResolution NodeNext --strict \
+#   --esModuleInterop --skipLibCheck --sourceMap --declaration --declarationMap
+!host.js
+!host.d.ts

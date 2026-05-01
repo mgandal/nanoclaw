@@ -32,6 +32,7 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
         NANOCLAW_ROOT: process.cwd(),
         PATH: nodeBinDir + ':' + (process.env.PATH || ''),
         HOME: process.env.HOME || '',
+        CHROME_PATH: process.env.CHROME_PATH || '',
       },
       stdio: ['pipe', 'pipe', 'pipe']
     });

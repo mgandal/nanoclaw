@@ -1179,6 +1179,8 @@ export async function runContainerAgent(
         // Collect tool calls and insert into action_log
         const toolCalls = collectToolCalls(path.join(groupIpcDir, 'output'));
         if (toolCalls.length > 0) {
+          // .catch() lives on the IIFE's returned promise (not inside the
+          // async body) so it also catches a failure of the dynamic import.
           (async () => {
             const { insertActionLogEntries } = await import('./db.js');
             insertActionLogEntries(group.folder, toolCalls);
