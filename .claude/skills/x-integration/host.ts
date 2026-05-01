@@ -23,9 +23,16 @@ async function runScript(script: string, args: object): Promise<SkillResult> {
 
   return new Promise((resolve) => {
     const nodeBinDir = '/Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/bin';
+    // Restricted env: never spread process.env — that would leak host secrets
+    // (CLAUDE_CODE_OAUTH_TOKEN, GITHUB_TOKEN, Slack tokens, etc.) into the
+    // tsx subprocess. Allowlist only what the script genuinely needs.
     const proc = spawn(nodeBinDir + '/npx', ['tsx', scriptPath], {
       cwd: process.cwd(),
-      env: { ...process.env, NANOCLAW_ROOT: process.cwd(), PATH: nodeBinDir + ':' + (process.env.PATH || '') },
+      env: {
+        NANOCLAW_ROOT: process.cwd(),
+        PATH: nodeBinDir + ':' + (process.env.PATH || ''),
+        HOME: process.env.HOME || '',
+      },
       stdio: ['pipe', 'pipe', 'pipe']
     });
 

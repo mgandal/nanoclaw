@@ -1179,17 +1179,15 @@ export async function runContainerAgent(
         // Collect tool calls and insert into action_log
         const toolCalls = collectToolCalls(path.join(groupIpcDir, 'output'));
         if (toolCalls.length > 0) {
-          void (async () => {
-            try {
-              const { insertActionLogEntries } = await import('./db.js');
-              insertActionLogEntries(group.folder, toolCalls);
-            } catch (err) {
-              logger.warn(
-                { err, groupFolder: group.folder },
-                'Failed to collect tool calls into action_log',
-              );
-            }
-          })();
+          (async () => {
+            const { insertActionLogEntries } = await import('./db.js');
+            insertActionLogEntries(group.folder, toolCalls);
+          })().catch((err) => {
+            logger.warn(
+              { err, groupFolder: group.folder },
+              'Failed to collect tool calls into action_log',
+            );
+          });
         }
 
         logger.info(
