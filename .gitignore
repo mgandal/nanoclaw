@@ -72,6 +72,9 @@ graphify-out/
 # ByteRover local context cache
 .brv/
 
+# Local retro/context cache (per-machine snapshots from /retro skill)
+.context/
+
 agents-sdk-docs
 
 # Python venvs
