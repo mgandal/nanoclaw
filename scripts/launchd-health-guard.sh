@@ -11,9 +11,20 @@
 # (the scheduler does NOT forward guard stdout to the container).
 set -u
 OUT=/Users/mgandal/Agents/nanoclaw/data/launchd-health.json
+TMP="$OUT.tmp.$$"
 mkdir -p "$(dirname "$OUT")"
-python3 /Users/mgandal/Agents/nanoclaw/scripts/check-launchd-health.py >"$OUT" 2>/dev/null
+# Atomic write: stage to .tmp.<pid>, rename only on healthy exit (0 or 2).
+# Prevents a concurrent reader (the woken container agent) from ever seeing
+# a partially-written JSON. On launchctl failure (rc=3) the partial tmp is
+# discarded so the previous good file remains as fallback. mv is atomic on
+# the same filesystem.
+python3 /Users/mgandal/Agents/nanoclaw/scripts/check-launchd-health.py >"$TMP" 2>/dev/null
 rc=$?
+if [ $rc -eq 0 ] || [ $rc -eq 2 ]; then
+  mv "$TMP" "$OUT"
+else
+  rm -f "$TMP"
+fi
 case $rc in
   0) exit 1 ;;
   2) exit 0 ;;
