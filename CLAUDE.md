@@ -48,21 +48,13 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 | File | Purpose |
 |------|---------|
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/registry.ts` | Channel registry (self-registration at startup) |
 | `src/ipc.ts` | IPC watcher and task processing |
-| `src/router.ts` | Message formatting and outbound routing |
-| `src/config.ts` | Trigger pattern, paths, intervals, session timeouts |
 | `src/container-runner.ts` | Spawns agent containers with mounts and MCP env vars |
-| `src/container-runtime.ts` | Apple Container abstraction (runtime, gateway, orphan cleanup) |
-| `src/mount-security.ts` | Validates additional mounts against external allowlist |
-| `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations and schema migrations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/agent-runner/src/index.ts` | Agent runner inside container (MCP servers, SDK query loop) |
-| `container/agent-runner/src/ipc-mcp-stdio.ts` | All `nanoclaw.*` MCP tools exposed to in-container agents. Before editing a tool description, read `docs/context-engineering/tool-design.md` for the four-question rubric (what / when / inputs / returns). |
-| `container/skills/` | Skills loaded inside agent containers (browser, status, formatting) |
-| `docs/context-engineering/` | Vendored design-rubric docs (memory systems, multi-agent patterns, tool design, filesystem context). Consult before architecture work; refresh every 3-6 months per that folder's README. |
-| `scripts/sync/sync-all.sh` | Email + calendar sync (every 8h via launchd) |
+| `container/agent-runner/src/ipc-mcp-stdio.ts` | All `nanoclaw.*` MCP tools exposed to in-container agents. Before editing a tool description, read `docs/context-engineering/tool-design.md` (what / when / inputs / returns rubric). |
+
+For the full tour of `src/`, `container/`, and `scripts/sync/`, see [README.md](README.md). For architecture-level rationale, see [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
@@ -93,24 +85,13 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 ## Development
 
-Run commands directly—don't tell the user to run them.
+Run commands directly—don't tell the user to run them. Build/run/test commands are in `package.json`. Container rebuild: `./container/build.sh`.
 
+Service restart:
 ```bash
-bun run dev          # Run with hot reload
-bun run build        # Compile TypeScript
-./container/build.sh # Rebuild agent container
-```
-
-Service management:
-```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
-
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
+# macOS
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+# Linux
 systemctl --user restart nanoclaw
 ```
 
