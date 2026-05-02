@@ -239,7 +239,7 @@ fi
 
 echo ""
 echo "=========================================="
-echo "SYNC COMPLETE: $(date) (errors: $ERRORS)"
+echo "SYNC COMPLETE: $(date '+%a %b %d %H:%M:%S %Z %Y') (errors: $ERRORS)"
 echo "=========================================="
 
 # C8: trim ALL live sync-area logs if over 1 MB, not just sync.log.
