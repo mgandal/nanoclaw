@@ -102,9 +102,13 @@ echo ""
 echo "[1/10] Exchange email sync (Mac Mail → mikejg1838@gmail.com)..."
 MIGRATE_SCRIPT="$SCRIPT_DIR/email-migrate.py"
 if [ -f "$MIGRATE_SCRIPT" ]; then
-    timeout 1800 $PYTHON3 "$MIGRATE_SCRIPT" 2>&1
+    # Use /usr/bin/perl (Apple-signed platform binary) instead of homebrew
+    # `timeout` so TCC's responsibility check resolves to a binary it trusts.
+    # See 2026-05-02 incident: gtimeout in /opt/homebrew/Cellar caused
+    # Mail.app FDA reads to fail under launchd despite python having FDA.
+    /usr/bin/perl -e 'alarm 1800; exec @ARGV' $PYTHON3 "$MIGRATE_SCRIPT" 2>&1
     EC=$?
-    if [ $EC -eq 124 ]; then
+    if [ $EC -eq 142 ]; then
         echo "[1/10] WARNING: Exchange sync timed out after 1800s (lock released)"
         ERRORS=$((ERRORS + 1))
     elif [ $EC -ne 0 ]; then
