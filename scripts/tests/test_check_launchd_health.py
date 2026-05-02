@@ -72,7 +72,12 @@ class TestClassify:
         monkeypatch.setattr(
             mod,
             "EXPECTED_NONZERO",
-            {"com.nanoclaw.flaky": "reason — exits 1 when no work to do"},
+            {
+                "com.nanoclaw.flaky": {
+                    "codes": [1],
+                    "reason": "exits 1 when no work to do",
+                }
+            },
         )
         jobs = {
             "com.nanoclaw.flaky": ("-", "1"),
@@ -80,6 +85,27 @@ class TestClassify:
         }
         issues = mod.classify(jobs)
         assert [i["label"] for i in issues] == ["com.nanoclaw.sync"]
+
+    def test_allowlist_does_not_swallow_unexpected_codes(self, mod, monkeypatch, stub_state):
+        # Critical safety property: allowlist permits ONLY the listed codes.
+        # If the same job ever crashes (exit 137 OOM, exit 139 segfault, exit 1
+        # ImportError), the alert must still fire.
+        monkeypatch.setattr(
+            mod,
+            "EXPECTED_NONZERO",
+            {
+                "com.nanoclaw.flaky": {
+                    "codes": [2],
+                    "reason": "exit 2 = work-found by design",
+                }
+            },
+        )
+        jobs = {
+            "com.nanoclaw.flaky": ("-", "137"),  # OOM kill — must surface
+        }
+        issues = mod.classify(jobs)
+        assert [i["label"] for i in issues] == ["com.nanoclaw.flaky"]
+        assert issues[0]["last_exit"] == 137
 
     def test_unloaded_jobs_never_appear(self, mod, stub_state):
         # The script's contract is that classify() only sees loaded jobs.
@@ -95,7 +121,10 @@ class TestLiveAllowlist:
     def test_error_audit_is_allowlisted(self, mod):
         # Plist explicitly documents that exit 2 = "audit found actionable
         # issues" (working as designed, not a regression).
-        assert "com.nanoclaw.error-audit" in mod.EXPECTED_NONZERO
+        entry = mod.EXPECTED_NONZERO.get("com.nanoclaw.error-audit")
+        assert entry is not None
+        # Specifically code 2 only — not "any nonzero" (would swallow real crashes).
+        assert entry["codes"] == [2]
 
 
 class TestListLoadedJobs:

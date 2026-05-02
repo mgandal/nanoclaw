@@ -20,16 +20,20 @@ from pathlib import Path
 LAUNCHAGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 LABEL_PREFIX = "com.nanoclaw."
 
-# Per-job allowlist: jobs that are *expected* to exit nonzero on at least
-# some fires. Skip them rather than alert. Add reasoning here so the next
-# reader knows why each entry exists.
-EXPECTED_NONZERO = {
+# Per-job allowlist: jobs that are *expected* to exit with specific nonzero
+# codes. Skip ONLY those specific codes — any other nonzero exit still alerts,
+# so a real crash (ImportError → 1, OOM → 137, segfault → 139, etc.) is not
+# silently swallowed. Add reasoning per entry.
+EXPECTED_NONZERO: dict[str, dict] = {
     # error-audit's plist explicitly documents: "The script itself exits 2
     # when actionable issues exist, 0 otherwise — downstream alert routing
     # should read the JSON output rather than trigger on exit code alone."
     # The script's own JSON-driven alert path runs separately, so a "issues
-    # found" exit here is not a launchd regression.
-    "com.nanoclaw.error-audit": "exit 2 = audit found actionable issues (by design)",
+    # found" exit here is not a launchd regression — but a crash IS.
+    "com.nanoclaw.error-audit": {
+        "codes": [2],
+        "reason": "exit 2 = audit found actionable issues (by design)",
+    },
 }
 
 
@@ -87,13 +91,16 @@ def find_plist_path(label: str) -> str:
 def classify(jobs: dict[str, tuple[str, str]]) -> list[dict]:
     issues = []
     for label, (pid, last_exit) in sorted(jobs.items()):
-        if label in EXPECTED_NONZERO:
-            continue
         try:
             exit_code = int(last_exit)
         except ValueError:
             continue  # "-" or other non-numeric placeholder
         if exit_code == 0:
+            continue
+        # Only allowlist the *specific* exit codes documented as by-design.
+        # Any other nonzero (crash, OOM, segfault, etc.) still alerts.
+        allowed = EXPECTED_NONZERO.get(label)
+        if allowed and exit_code in allowed["codes"]:
             continue
         issues.append(
             {
