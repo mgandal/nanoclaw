@@ -111,6 +111,12 @@ if [ -f "$MIGRATE_SCRIPT" ]; then
     if [ $EC -eq 142 ]; then
         echo "[1/10] WARNING: Exchange sync timed out after 1800s (lock released)"
         ERRORS=$((ERRORS + 1))
+    elif [ $EC -eq 143 ]; then
+        # 128 + SIGTERM (15). Sent by `launchctl kickstart -k` mid-step or by
+        # launchd's ExitTimeOut. Distinct from a 1800s alarm so the operator
+        # can tell "alarm fired" from "we got killed externally."
+        echo "[1/10] WARNING: Exchange sync killed (SIGTERM — kickstart -k or launchd ExitTimeOut)"
+        ERRORS=$((ERRORS + 1))
     elif [ $EC -ne 0 ]; then
         echo "[1/10] WARNING: Exchange sync had errors (exit $EC)"
         ERRORS=$((ERRORS + 1))
