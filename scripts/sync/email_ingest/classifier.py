@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 
 import requests
 
@@ -15,6 +16,8 @@ PROFILE_FILE = STATE_DIR / "classifier-profile.json"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "phi4-mini"  # Explicit — does NOT use OLLAMA_MODEL env var
 OLLAMA_TIMEOUT = 30  # seconds per call
+OLLAMA_MAX_ATTEMPTS = 3  # 1 + 2 retries; absorbs Electron-app hiccups (sleep/wake, model swap)
+OLLAMA_BACKOFF_SEC = (1, 2)  # waits between attempts: 1s, then 2s; total worst-case ~3s overhead
 
 
 def _sanitize_email_body(body: str, limit: int = 8192) -> str:
@@ -274,33 +277,41 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
     else:
         prompt = build_exchange_prompt(email)
 
-    try:
-        resp = requests.post(OLLAMA_URL, json={
-            "model": OLLAMA_MODEL,
-            "system": system,
-            "prompt": prompt,
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 512},
-        }, timeout=OLLAMA_TIMEOUT)
-        resp.raise_for_status()
-        result = parse_classification(resp.json().get("response", ""))
+    last_err = None
+    for attempt in range(OLLAMA_MAX_ATTEMPTS):
+        try:
+            resp = requests.post(OLLAMA_URL, json={
+                "model": OLLAMA_MODEL,
+                "system": system,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 512},
+            }, timeout=OLLAMA_TIMEOUT)
+            resp.raise_for_status()
+            result = parse_classification(resp.json().get("response", ""))
 
-        if result.skip_reason:
+            if result.skip_reason:
+                return result
+
+            # Apply personalized weight adjustments
+            original = result.relevance
+            result.relevance = _apply_weights(result.relevance, email, result.topic, PROFILE)
+            if PROFILE and original != result.relevance:
+                domain = _extract_domain(email.from_addr)
+                log.debug("[%.2f → %.2f] %s: %s (sender: %s, topic: %s)",
+                          original, result.relevance, email.source, email.subject[:50],
+                          domain, result.topic)
+
             return result
+        except requests.RequestException as e:
+            last_err = e
+            if attempt < OLLAMA_MAX_ATTEMPTS - 1:
+                log.warning("Ollama request failed (attempt %d/%d): %s — retrying",
+                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                time.sleep(OLLAMA_BACKOFF_SEC[attempt])
 
-        # Apply personalized weight adjustments
-        original = result.relevance
-        result.relevance = _apply_weights(result.relevance, email, result.topic, PROFILE)
-        if PROFILE and original != result.relevance:
-            domain = _extract_domain(email.from_addr)
-            log.debug("[%.2f → %.2f] %s: %s (sender: %s, topic: %s)",
-                      original, result.relevance, email.source, email.subject[:50],
-                      domain, result.topic)
-
-        return result
-    except requests.RequestException as e:
-        log.error("Ollama request failed: %s", e)
-        return ClassificationResult(
-            relevance=0.0, topic="unknown", summary="",
-            entities=[], action_items=[], skip_reason="ollama_error",
-        )
+    log.error("Ollama request failed after %d attempts: %s", OLLAMA_MAX_ATTEMPTS, last_err)
+    return ClassificationResult(
+        relevance=0.0, topic="unknown", summary="",
+        entities=[], action_items=[], skip_reason="ollama_error",
+    )

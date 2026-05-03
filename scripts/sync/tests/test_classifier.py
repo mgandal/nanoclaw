@@ -1,5 +1,7 @@
 """Tests for Ollama classifier + fast-skip rules."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from email_ingest.classifier import (
     should_fast_skip, classify_email, build_gmail_prompt, build_exchange_prompt,
@@ -92,3 +94,80 @@ def test_parse_classification_missing_fields():
     assert result.relevance == 0.5
     assert result.summary == ""
     assert result.entities == []
+
+
+# --- Ollama transient-failure retry ---
+# Background: ~24 connection-refused events were observed in sync logs since
+# launchd-stdout.log began. Each is a single-shot Ollama hiccup that retries
+# would absorb. Tests below require classify_email() to retry transient
+# requests.RequestException failures before giving up.
+
+def _ollama_success_payload(relevance: float = 0.8) -> dict:
+    """Shape the Ollama /api/generate response that classify_email parses."""
+    import json as _json
+    return {
+        "response": _json.dumps({
+            "relevance": relevance,
+            "topic": "research",
+            "summary": "Test summary",
+            "entities": ["Alice"],
+            "action_items": [],
+        }),
+    }
+
+
+def test_classify_retries_on_transient_failure(monkeypatch):
+    """Two transient ConnectionErrors then success → returns parsed result, not ollama_error."""
+    import requests
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise requests.ConnectionError("Failed to establish a new connection")
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = _ollama_success_payload(relevance=0.8)
+        return resp
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    # Skip backoff sleeps so the test is fast. Patch the global `time.sleep`
+    # so the test doesn't presuppose how the retry imports time.
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t1")
+    result = classify_email(email)
+
+    assert result.skip_reason is None, (
+        f"expected successful classification after retries, got skip_reason={result.skip_reason!r}"
+    )
+    assert call_count["n"] == 3, (
+        f"expected 3 attempts (2 fail + 1 success), got {call_count['n']}"
+    )
+
+
+def test_classify_returns_ollama_error_after_all_retries_exhausted(monkeypatch):
+    """All attempts fail with ConnectionError → returns skip_reason='ollama_error'."""
+    import requests
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        raise requests.ConnectionError("permanently down")
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t2")
+    result = classify_email(email)
+
+    assert result.skip_reason == "ollama_error"
+    assert call_count["n"] >= 2, (
+        f"expected at least 2 attempts before giving up, got {call_count['n']}"
+    )
