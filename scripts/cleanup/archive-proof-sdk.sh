@@ -107,7 +107,45 @@ DIR_SIZE_KB=$(du -sk "$PROOF_SDK_DIR" | awk '{print $1}')
 DIR_FILE_COUNT=$(find "$PROOF_SDK_DIR" -type f | wc -l | tr -d ' ')
 echo "  pre-flight OK: $DIR_FILE_COUNT files, ${DIR_SIZE_KB}K"
 
-# Phase 2-4 follow in subsequent tasks
+# ----------------------------------------------------------------------------
+# Phase 2: Archive to keychain with round-trip integrity check
+# ----------------------------------------------------------------------------
+
 echo ""
-echo "=== Phases 2-4 stubbed in this task; see tasks 2-4 ==="
+echo "=== Phase 2: archive to keychain ==="
+
+for key in "${EXPECTED_KEYS[@]}"; do
+  # Extract the value (everything after the first '='). Handles values
+  # that themselves contain '=' (e.g. base64-padded API keys).
+  value=$(grep "^${key}=" "$ENV_FILE" | head -1 | cut -d'=' -f2-)
+  if [ -z "$value" ]; then
+    echo "FAIL: $key has empty value in .env" >&2
+    exit 3
+  fi
+
+  # Write
+  if ! security add-generic-password \
+         -a "$key" -s "$SERVICE" -w "$value" -U >/dev/null 2>&1; then
+    echo "FAIL: keychain add failed for $key" >&2
+    exit 3
+  fi
+
+  # Read back
+  readback=$(security find-generic-password -gw -a "$key" -s "$SERVICE" 2>/dev/null) || {
+    echo "FAIL: keychain readback failed for $key" >&2
+    exit 3
+  }
+
+  # Byte-compare
+  if [ "$readback" != "$value" ]; then
+    echo "FAIL: round-trip mismatch for $key (wrote ${#value} bytes, read ${#readback})" >&2
+    exit 3
+  fi
+
+  echo "  archived: $key (${#value} bytes, round-trip verified)"
+done
+
+# Phase 3-4 follow in subsequent tasks
+echo ""
+echo "=== Phases 3-4 stubbed in this task; see tasks 3-4 ==="
 exit 0
