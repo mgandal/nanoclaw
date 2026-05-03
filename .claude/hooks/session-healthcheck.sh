@@ -36,17 +36,29 @@ else
   LINES+=("Ollama: DOWN")
 fi
 
-# Apple Notes MCP (port 8184) — 405 on GET means UP
+# Apple Notes / Todoist / Calendar MCPs are bearer-auth gated (B1 bridge
+# enforcement, see memory: project_b1_bridge_enforcement.md). An unauthenticated
+# GET/POST returns 401 — that means the server is bound and serving, which is
+# what we want this liveness probe to surface as UP. 405 (older proxy
+# behavior) and 200 (no-auth fallback) are both treated as UP.
+mcp_up() {
+  case "$1" in
+    200|401|405) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Apple Notes MCP (port 8184)
 AN=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://localhost:8184/mcp 2>/dev/null)
-if [ "$AN" = "405" ] || [ "$AN" = "200" ]; then
+if mcp_up "$AN"; then
   LINES+=("Apple Notes MCP: UP (8184)")
 else
   LINES+=("Apple Notes MCP: DOWN")
 fi
 
-# Todoist MCP (port 8186) — 405 on GET means UP
+# Todoist MCP (port 8186)
 TODO=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://localhost:8186/mcp 2>/dev/null)
-if [ "$TODO" = "405" ] || [ "$TODO" = "200" ]; then
+if mcp_up "$TODO"; then
   LINES+=("Todoist MCP: UP (8186)")
 else
   LINES+=("Todoist MCP: DOWN")
@@ -54,7 +66,7 @@ fi
 
 # Calendar MCP (port 8188)
 CAL=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 http://localhost:8188/mcp 2>/dev/null)
-if [ "$CAL" = "405" ] || [ "$CAL" = "200" ]; then
+if mcp_up "$CAL"; then
   LINES+=("Calendar MCP: UP (8188)")
 else
   LINES+=("Calendar MCP: DOWN")
