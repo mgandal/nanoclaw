@@ -32,6 +32,7 @@ import {
 } from './db.js';
 import { loadAgentTrust } from './agent-registry.js';
 import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
+import { firePostHocNotify } from './trust-notify.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -602,12 +603,9 @@ export async function processIpcMessage(
     const { group: baseGroupFolder, agent: agentName } =
       parseCompoundKey(baseKey);
     if (isMain || (targetGroup && targetGroup.folder === baseGroupFolder)) {
-      // Trust enforcement for compound groups (agents). Uses the shared
-      // checkTrustAndStage helper; the only reason this branch is not a
-      // one-liner like the other retrofits is that `send_message` also
-      // fires a post-hoc notify (further down) when trust.level = notify,
-      // so we capture `decision.notify` for use after delivery succeeds.
-      let trustDecisionForNotify: { notify: boolean } | null = null;
+      // Trust enforcement for compound groups (agents). Capture decision
+      // so we can fire a post-hoc notify after delivery succeeds.
+      let notify = false;
       if (agentName) {
         const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
         const decision = checkTrustAndStage({
@@ -625,7 +623,7 @@ export async function processIpcMessage(
           },
           trust,
         });
-        trustDecisionForNotify = { notify: decision.notify };
+        notify = decision.notify;
         if (!decision.allowed) return;
       }
 
@@ -641,27 +639,21 @@ export async function processIpcMessage(
         sourceGroup,
       );
 
-      // Post-hoc notification: if the trust level was 'notify', surface a
-      // short receipt in the main group so the user sees what happened
-      // without needing to check the group directly. Best-effort; failure
-      // to notify does not roll back the already-sent message.
-      if (trustDecisionForNotify?.notify && agentName) {
-        try {
-          const mainJid = Object.entries(registeredGroups).find(
-            ([, g]) => g.isMain,
-          )?.[0];
-          if (mainJid && mainJid !== data.chatJid) {
-            await deps.sendMessage(
-              mainJid,
-              `ℹ️ ${agentName} → ${registeredGroups[data.chatJid]?.name || data.chatJid}: ${data.text.slice(0, 200)}`,
-            );
-          }
-        } catch (err) {
-          logger.warn(
-            { err, agentName, chatJid: data.chatJid },
-            'notify-level post-hoc notification failed',
-          );
-        }
+      // Skip the notify if its target jid IS the main jid (would echo back
+      // into the same chat we just sent to). The shared helper has no way
+      // to know about the message's chatJid, so we guard inline.
+      const mainJidForSelfCheck = Object.entries(registeredGroups).find(
+        ([, g]) => g.isMain,
+      )?.[0];
+      if (notify && agentName && mainJidForSelfCheck !== data.chatJid) {
+        await firePostHocNotify({
+          notify,
+          agentName,
+          actionType: 'send_message',
+          summary: `→ ${registeredGroups[data.chatJid]?.name || data.chatJid}: ${data.text}`,
+          registeredGroups,
+          deps,
+        });
       }
     } else {
       logger.warn(
@@ -1057,6 +1049,8 @@ export async function processTaskIpc(
         const { agent: sourceAgent } = parseCompoundKey(
           fsPathToCompoundKey(sourceGroup),
         );
+        let scheduleNotify = false;
+        let scheduleNotifyAgent: string | null = null;
         if (sourceAgent) {
           const trust = loadAgentTrust(path.join(AGENTS_DIR, sourceAgent));
           const trustDecision = checkTrustAndStage({
@@ -1078,9 +1072,8 @@ export async function processTaskIpc(
             trust,
           });
           if (!trustDecision.allowed) break;
-          // TODO: wire post-hoc notify when trustDecision.notify is true.
-          // schedule_task isn't the highest-priority action for notify; most
-          // agents will carry 'draft' or 'autonomous' by default.
+          scheduleNotify = trustDecision.notify;
+          scheduleNotifyAgent = sourceAgent;
         }
 
         createTask({
@@ -1102,6 +1095,15 @@ export async function processTaskIpc(
           'Task created via IPC',
         );
         deps.onTasksChanged();
+        await firePostHocNotify({
+          notify: scheduleNotify,
+          agentName: scheduleNotifyAgent,
+          actionType: 'schedule_task',
+          summary: `added task '${String(data.prompt).slice(0, 80)}' (${scheduleType})`,
+          target: taskId,
+          registeredGroups,
+          deps,
+        });
       }
       break;
 
@@ -1113,6 +1115,7 @@ export async function processTaskIpc(
         );
         if (task && (isMain || task.group_folder === ptBaseGroup)) {
           // C13: trust enforcement for agent callers.
+          let pauseNotify = false;
           if (ptAgent) {
             const trust = loadAgentTrust(path.join(AGENTS_DIR, ptAgent));
             const trustDecision = checkTrustAndStage({
@@ -1128,6 +1131,7 @@ export async function processTaskIpc(
               trust,
             });
             if (!trustDecision.allowed) break;
+            pauseNotify = trustDecision.notify;
           }
           updateTask(data.taskId, { status: 'paused' });
           logger.info(
@@ -1135,6 +1139,15 @@ export async function processTaskIpc(
             'Task paused via IPC',
           );
           deps.onTasksChanged();
+          await firePostHocNotify({
+            notify: pauseNotify,
+            agentName: ptAgent || null,
+            actionType: 'pause_task',
+            summary: `paused task ${data.taskId}`,
+            target: data.taskId,
+            registeredGroups,
+            deps,
+          });
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -1150,6 +1163,7 @@ export async function processTaskIpc(
         const { group: rtBaseGroup, agent: rtAgent } = parseCompoundKey(
           fsPathToCompoundKey(sourceGroup),
         );
+        let resumeNotify = false;
         if (task && (isMain || task.group_folder === rtBaseGroup)) {
           // C13: trust enforcement for agent callers.
           if (rtAgent) {
@@ -1167,6 +1181,7 @@ export async function processTaskIpc(
               trust,
             });
             if (!trustDecision.allowed) break;
+            resumeNotify = trustDecision.notify;
           }
           // Recompute next_run when resuming
           const updates: Parameters<typeof updateTask>[1] = {
@@ -1198,6 +1213,15 @@ export async function processTaskIpc(
             'Task resumed via IPC',
           );
           deps.onTasksChanged();
+          await firePostHocNotify({
+            notify: resumeNotify,
+            agentName: rtAgent || null,
+            actionType: 'resume_task',
+            summary: `resumed task ${data.taskId}`,
+            target: data.taskId,
+            registeredGroups,
+            deps,
+          });
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -1215,6 +1239,7 @@ export async function processTaskIpc(
         );
         if (task && (isMain || task.group_folder === ctBaseGroup)) {
           // C13: trust enforcement for agent callers.
+          let cancelNotify = false;
           if (ctAgent) {
             const trust = loadAgentTrust(path.join(AGENTS_DIR, ctAgent));
             const trustDecision = checkTrustAndStage({
@@ -1230,6 +1255,7 @@ export async function processTaskIpc(
               trust,
             });
             if (!trustDecision.allowed) break;
+            cancelNotify = trustDecision.notify;
           }
           deleteTask(data.taskId);
           logger.info(
@@ -1237,6 +1263,15 @@ export async function processTaskIpc(
             'Task cancelled via IPC',
           );
           deps.onTasksChanged();
+          await firePostHocNotify({
+            notify: cancelNotify,
+            agentName: ctAgent || null,
+            actionType: 'cancel_task',
+            summary: `cancelled task ${data.taskId}`,
+            target: data.taskId,
+            registeredGroups,
+            deps,
+          });
         } else {
           logger.warn(
             { taskId: data.taskId, sourceGroup },
@@ -1281,6 +1316,7 @@ export async function processTaskIpc(
         }
 
         // C13: trust enforcement for agent callers.
+        let updateNotify = false;
         if (utAgent) {
           const trust = loadAgentTrust(path.join(AGENTS_DIR, utAgent));
           const trustDecision = checkTrustAndStage({
@@ -1300,6 +1336,7 @@ export async function processTaskIpc(
             trust,
           });
           if (!trustDecision.allowed) break;
+          updateNotify = trustDecision.notify;
         }
 
         const updates: Parameters<typeof updateTask>[1] = {};
@@ -1363,6 +1400,15 @@ export async function processTaskIpc(
           'Task updated via IPC',
         );
         deps.onTasksChanged();
+        await firePostHocNotify({
+          notify: updateNotify,
+          agentName: utAgent || null,
+          actionType: 'update_task',
+          summary: `updated task ${data.taskId}`,
+          target: data.taskId,
+          registeredGroups,
+          deps,
+        });
       }
       break;
 
@@ -1458,6 +1504,7 @@ export async function processTaskIpc(
 
       // C13: trust enforcement for agent callers. sourceAgent + pubBaseGroup
       // already extracted above (line 1117). Main-group bypass via agent null.
+      let publishNotify = false;
       if (sourceAgent) {
         const safePubSummary =
           typeof d.summary === 'string' ? d.summary.slice(0, 500) : '';
@@ -1482,6 +1529,7 @@ export async function processTaskIpc(
           trust,
         });
         if (!trustDecision.allowed) break;
+        publishNotify = trustDecision.notify;
       }
 
       if (deps.messageBus) {
@@ -1515,6 +1563,15 @@ export async function processTaskIpc(
           'Bus message published via IPC',
         );
       }
+      await firePostHocNotify({
+        notify: publishNotify,
+        agentName: sourceAgent || null,
+        actionType: 'publish_to_bus',
+        summary: `→ ${toAgent}@${targetGroup}: ${typeof d.summary === 'string' ? d.summary.slice(0, 120) : '(no summary)'}`,
+        target: `${targetGroup}--${toAgent}`,
+        registeredGroups,
+        deps,
+      });
       break;
     }
 
@@ -1533,6 +1590,7 @@ export async function processTaskIpc(
       const { group: kpBaseGroup, agent: kpAgent } = parseCompoundKey(
         fsPathToCompoundKey(sourceGroup),
       );
+      let knowledgeNotify = false;
       if (kpAgent) {
         const trust = loadAgentTrust(path.join(AGENTS_DIR, kpAgent));
         const trustDecision = checkTrustAndStage({
@@ -1551,6 +1609,7 @@ export async function processTaskIpc(
           trust,
         });
         if (!trustDecision.allowed) break;
+        knowledgeNotify = trustDecision.notify;
       }
 
       const filePath = publishKnowledge(entry, sourceGroup, knowledgeDir);
@@ -1569,6 +1628,15 @@ export async function processTaskIpc(
           priority: 'low',
         });
       }
+      await firePostHocNotify({
+        notify: knowledgeNotify,
+        agentName: kpAgent || null,
+        actionType: 'knowledge_publish',
+        summary: `published "${entry.topic}"`,
+        target: 'agent-knowledge',
+        registeredGroups,
+        deps,
+      });
       break;
     }
 
@@ -1633,6 +1701,7 @@ export async function processTaskIpc(
       // C13: trust enforcement. Only fires when the caller is an agent
       // (compound key). Main-group payload_agent_name callers bypass — this
       // is the admin escape hatch from the C4 tests at line 2305.
+      let memoryNotify = false;
       if (compoundAgent) {
         const trust = loadAgentTrust(agentDir);
         const section = (d.section as string) || '(full)';
@@ -1651,6 +1720,7 @@ export async function processTaskIpc(
           trust,
         });
         if (!trustDecision.allowed) break;
+        memoryNotify = trustDecision.notify;
       }
 
       const memoryPath = path.join(agentDir, 'memory.md');
@@ -1684,6 +1754,15 @@ export async function processTaskIpc(
         { agent: agentName, section: section || '(full)' },
         'Agent memory updated via IPC',
       );
+      await firePostHocNotify({
+        notify: memoryNotify,
+        agentName: compoundAgent || null,
+        actionType: 'write_agent_memory',
+        summary: `wrote memory.md ${section ? `(section "${section}")` : '(full)'} for ${agentName}`,
+        target: agentName,
+        registeredGroups,
+        deps,
+      });
       break;
     }
 
@@ -1724,6 +1803,7 @@ export async function processTaskIpc(
 
       // C13: trust enforcement. The handler already rejects non-compound
       // callers (line 1352), so every execution reaches here only for agents.
+      let stateNotify = false;
       {
         const { group: wasBaseGroup } = parseCompoundKey(
           fsPathToCompoundKey(sourceGroup),
@@ -1743,6 +1823,7 @@ export async function processTaskIpc(
           trust,
         });
         if (!trustDecision.allowed) break;
+        stateNotify = trustDecision.notify;
       }
 
       const statePath = path.join(AGENTS_DIR, agent, 'state.md');
@@ -1757,6 +1838,15 @@ export async function processTaskIpc(
       fs.writeFileSync(tmpPath, finalContent);
       fs.renameSync(tmpPath, statePath);
       logger.info({ agent }, 'Agent state updated via IPC');
+      await firePostHocNotify({
+        notify: stateNotify,
+        agentName: agent,
+        actionType: 'write_agent_state',
+        summary: `${d.append ? 'appended to' : 'replaced'} state.md`,
+        target: agent,
+        registeredGroups,
+        deps,
+      });
       break;
     }
 
@@ -1769,6 +1859,7 @@ export async function processTaskIpc(
           fsPathToCompoundKey(sourceGroup),
         );
         let dmAllowed = true;
+        let dmNotify = false;
         if (dmAgent) {
           const d = data as Record<string, unknown>;
           const trust = loadAgentTrust(path.join(AGENTS_DIR, dmAgent));
@@ -1790,6 +1881,7 @@ export async function processTaskIpc(
             trust,
           });
           dmAllowed = trustDecision.allowed;
+          dmNotify = trustDecision.notify;
         } else if (!isMain) {
           // C1: trust-enforcement is the primary gate for agent callers.
           // Bare-group callers (no agent component) bypass that gate, so
@@ -1807,6 +1899,15 @@ export async function processTaskIpc(
             isMain,
             DATA_DIR,
           );
+          await firePostHocNotify({
+            notify: dmNotify,
+            agentName: dmAgent || null,
+            actionType: 'deploy_mini_app',
+            summary: `deployed ${typeof (data as Record<string, unknown>).appName === 'string' ? ((data as Record<string, unknown>).appName as string).slice(0, 80) : '(unnamed)'}`,
+            target: 'vercel',
+            registeredGroups,
+            deps,
+          });
         } else {
           handled = true; // staged/blocked, not passed through
         }
@@ -1818,6 +1919,7 @@ export async function processTaskIpc(
           fsPathToCompoundKey(sourceGroup),
         );
         let dqAllowed = true;
+        let dqNotify = false;
         if (dqAgent) {
           const d = data as Record<string, unknown>;
           const trust = loadAgentTrust(path.join(AGENTS_DIR, dqAgent));
@@ -1837,6 +1939,7 @@ export async function processTaskIpc(
             trust,
           });
           dqAllowed = trustDecision.allowed;
+          dqNotify = trustDecision.notify;
         }
         if (dqAllowed) {
           handled = await handleDashboardIpc(
@@ -1845,6 +1948,15 @@ export async function processTaskIpc(
             isMain,
             DATA_DIR,
           );
+          await firePostHocNotify({
+            notify: dqNotify,
+            agentName: dqAgent || null,
+            actionType: 'dashboard_query',
+            summary: `queried ${typeof (data as Record<string, unknown>).view === 'string' ? ((data as Record<string, unknown>).view as string).slice(0, 80) : '(view)'}`,
+            target: 'dashboard',
+            registeredGroups,
+            deps,
+          });
         } else {
           handled = true;
         }
@@ -1892,6 +2004,7 @@ export async function processTaskIpc(
           fsPathToCompoundKey(sourceGroup),
         );
         let kqAllowed = true;
+        let kqNotify = false;
         if (kqAgent) {
           const d = data as Record<string, unknown>;
           const trust = loadAgentTrust(path.join(AGENTS_DIR, kqAgent));
@@ -1911,6 +2024,7 @@ export async function processTaskIpc(
             trust,
           });
           kqAllowed = trustDecision.allowed;
+          kqNotify = trustDecision.notify;
         }
         if (kqAllowed) {
           handled = await handleKgIpc(
@@ -1919,6 +2033,15 @@ export async function processTaskIpc(
             isMain,
             DATA_DIR,
           );
+          await firePostHocNotify({
+            notify: kqNotify,
+            agentName: kqAgent || null,
+            actionType: 'kg_query',
+            summary: `queried KG: ${typeof (data as Record<string, unknown>).query === 'string' ? ((data as Record<string, unknown>).query as string).slice(0, 80) : '(query)'}`,
+            target: 'knowledge-graph',
+            registeredGroups,
+            deps,
+          });
         } else {
           handled = true;
         }
@@ -1957,6 +2080,7 @@ export async function processTaskIpc(
           data as Record<string, unknown>,
           sourceGroup,
           isMain,
+          { registeredGroups, deps },
         );
       }
       if (
@@ -2192,6 +2316,10 @@ export async function handleSlackDmIpc(
   data: Record<string, unknown>,
   sourceGroup: string,
   _isMain: boolean,
+  notifyContext?: {
+    registeredGroups: Record<string, { isMain?: boolean; name?: string }>;
+    deps: { sendMessage: (jid: string, text: string) => Promise<void> | void };
+  },
 ): Promise<boolean> {
   // Trust enforcement: extract agent name from compound key. Uses the
   // shared checkTrustAndStage helper so draft/ask levels stage in
@@ -2199,6 +2327,7 @@ export async function handleSlackDmIpc(
   const baseKey = fsPathToCompoundKey(sourceGroup);
   const { group: baseGroupFolder, agent: agentName } =
     parseCompoundKey(baseKey);
+  let slackNotify = false;
   if (agentName) {
     const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
     const decision = checkTrustAndStage({
@@ -2217,6 +2346,7 @@ export async function handleSlackDmIpc(
       trust,
     });
     if (!decision.allowed) return true;
+    slackNotify = decision.notify;
   }
 
   const requestId = data.requestId as string | undefined;
@@ -2271,6 +2401,17 @@ export async function handleSlackDmIpc(
         message: (result.message as string) || 'Slack DM sent',
         data: result,
       });
+      if (notifyContext) {
+        await firePostHocNotify({
+          notify: slackNotify,
+          agentName: agentName || null,
+          actionType: 'send_slack_dm',
+          summary: `Slack DM → ${userEmail || userId || '?'}: ${(text || '').slice(0, 120)}`,
+          target: userEmail || userId,
+          registeredGroups: notifyContext.registeredGroups,
+          deps: notifyContext.deps,
+        });
+      }
     } else {
       writeResult({
         success: false,
