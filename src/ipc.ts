@@ -99,7 +99,8 @@ export function logFdPressureDiagnostic(
     processFdCount = fs.readdirSync('/proc/self/fd').length;
   } catch {
     try {
-      const { spawnSync } = require('child_process') as typeof import('child_process');
+      const { spawnSync } =
+        require('child_process') as typeof import('child_process');
       const result = spawnSync('lsof', ['-p', String(process.pid)], {
         encoding: 'utf-8',
         timeout: 2000,
@@ -2401,6 +2402,52 @@ async function handleSlackDmReadIpc(
 }
 
 /**
+ * Maximum size of a SKILL.md saved via save_skill IPC (64 KB). The agent
+ * writes the body itself, so this is a soft DoS bound rather than a
+ * structural limit. Existing builtins fit comfortably under 16 KB.
+ */
+const MAX_SKILL_CONTENT_BYTES = 64 * 1024;
+
+/**
+ * Discover the active builtin skill names by listing container/skills/.
+ * Cached per-process; the directory is read-only at runtime, so a single
+ * read at first invocation is sufficient. A reload helper is exposed for
+ * tests that swap the cwd between cases.
+ */
+let builtinSkillsCache: Set<string> | null = null;
+function getBuiltinSkillNames(): Set<string> {
+  if (builtinSkillsCache) return builtinSkillsCache;
+  const skillsDir = path.join(process.cwd(), 'container', 'skills');
+  try {
+    const entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    builtinSkillsCache = new Set(
+      entries.filter((e) => e.isDirectory()).map((e) => e.name),
+    );
+  } catch {
+    // No container/skills/ directory at startup: nothing to protect, fall
+    // through with an empty set rather than crashing.
+    builtinSkillsCache = new Set();
+  }
+  return builtinSkillsCache;
+}
+
+/** @internal — for tests only. Forces re-scan on next getBuiltinSkillNames(). */
+export function _resetBuiltinSkillsCacheForTests(): void {
+  builtinSkillsCache = null;
+}
+
+/**
+ * A4 of the 2026-04-18 hardening audit: reject save_skill content whose
+ * frontmatter declares Bash in `allowed-tools`. Mirrors the `isGroupSkillAllowed`
+ * check in container-runner.ts (A2 enforcement).
+ */
+function skillContentDeclaresBash(content: string): boolean {
+  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!fmMatch) return false;
+  return /allowed-tools[^\n]*\bBash\b/i.test(fmMatch[1]);
+}
+
+/**
  * Handle save_skill IPC: persist a container-created skill to host's
  * container/skills/ so it survives session resets and is available to all groups.
  */
@@ -2431,15 +2478,23 @@ function handleSaveSkillIpc(
     return true;
   }
 
-  // Prevent overwriting built-in skills
-  const builtinSkills = [
-    'agent-browser',
-    'capabilities',
-    'slack-formatting',
-    'status',
-    'skill-creator',
-  ];
-  if (builtinSkills.includes(skillName)) {
+  // A4: cap content size before any other write-side work.
+  const contentBytes = Buffer.byteLength(skillContent, 'utf-8');
+  if (contentBytes > MAX_SKILL_CONTENT_BYTES) {
+    logger.warn(
+      { skillName, sourceGroup, contentBytes },
+      'save_skill IPC rejected: content exceeds size cap',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message: `Skill content (${contentBytes} bytes) exceeds the ${MAX_SKILL_CONTENT_BYTES}-byte cap.`,
+    });
+    return true;
+  }
+
+  // A4: dynamic builtin allowlist — derived from container/skills/ at startup
+  // so new builtins are protected without a code edit.
+  if (getBuiltinSkillNames().has(skillName)) {
     logger.warn(
       { skillName, sourceGroup },
       'save_skill IPC rejected: cannot overwrite built-in skill',
@@ -2447,6 +2502,21 @@ function handleSaveSkillIpc(
     writeSkillResult(sourceGroup, requestId, {
       success: false,
       message: `Cannot overwrite built-in skill "${skillName}".`,
+    });
+    return true;
+  }
+
+  // A4: defense-in-depth — refuse to persist a skill that declares Bash in
+  // its frontmatter `allowed-tools`. Symmetric with A2 (container-runner.ts).
+  if (skillContentDeclaresBash(skillContent)) {
+    logger.warn(
+      { skillName, sourceGroup },
+      'save_skill IPC rejected: frontmatter declares allowed-tools containing Bash',
+    );
+    writeSkillResult(sourceGroup, requestId, {
+      success: false,
+      message:
+        'Skill frontmatter declares allowed-tools: Bash. Bash-using skills must be vetted and added to the operator-managed allowlist, not persisted via save_skill.',
     });
     return true;
   }

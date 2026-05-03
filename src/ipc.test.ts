@@ -13,6 +13,7 @@ import {
   updateTask,
 } from './db.js';
 import {
+  _resetBuiltinSkillsCacheForTests,
   processTaskIpc,
   processIpcMessage,
   deliverSendMessage,
@@ -954,11 +955,15 @@ describe('save_skill', () => {
     process.chdir(tmpDir);
     // Create container/skills directory
     fs.mkdirSync(path.join(tmpDir, 'container', 'skills'), { recursive: true });
+    // Force the dynamic builtin allowlist to re-scan against this tmpDir
+    // rather than caching the real repo's container/skills/ list.
+    _resetBuiltinSkillsCacheForTests();
   });
 
   afterEach(() => {
     process.chdir(origCwd);
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    _resetBuiltinSkillsCacheForTests();
   });
 
   it('non-main group cannot save skills', async () => {
@@ -1001,6 +1006,16 @@ describe('save_skill', () => {
   });
 
   it('rejects overwriting built-in skills', async () => {
+    // Seed a builtin in the tmp tree so the dynamic allowlist picks it up.
+    fs.mkdirSync(path.join(tmpDir, 'container', 'skills', 'status'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, 'container', 'skills', 'status', 'SKILL.md'),
+      '# Builtin status',
+    );
+    _resetBuiltinSkillsCacheForTests();
+
     await processTaskIpc(
       {
         type: 'save_skill',
@@ -1012,11 +1027,13 @@ describe('save_skill', () => {
       deps,
     );
 
+    // The original builtin must remain intact.
     expect(
-      fs.existsSync(
+      fs.readFileSync(
         path.join(tmpDir, 'container', 'skills', 'status', 'SKILL.md'),
+        'utf-8',
       ),
-    ).toBe(false);
+    ).toBe('# Builtin status');
   });
 
   it('main group can save a valid skill', async () => {
@@ -1042,6 +1059,138 @@ describe('save_skill', () => {
     expect(fs.readFileSync(skillPath, 'utf-8')).toBe(
       '# My New Skill\nDoes something.',
     );
+  });
+
+  // A4 follow-on: dynamic allowlist + size cap + Bash frontmatter rejection.
+
+  it('rejects overwriting any builtin skill discovered at runtime (not just the hardcoded 5)', async () => {
+    // Simulate a builtin we know exists in the real tree (e.g. qmd) but
+    // which the old hardcoded allowlist missed.
+    fs.mkdirSync(path.join(tmpDir, 'container', 'skills', 'qmd'), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(tmpDir, 'container', 'skills', 'qmd', 'SKILL.md'),
+      '# Builtin QMD',
+    );
+    _resetBuiltinSkillsCacheForTests();
+
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'qmd',
+        skillContent: '# Hijacked QMD',
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    // The original builtin must remain intact.
+    expect(
+      fs.readFileSync(
+        path.join(tmpDir, 'container', 'skills', 'qmd', 'SKILL.md'),
+        'utf-8',
+      ),
+    ).toBe('# Builtin QMD');
+  });
+
+  it('rejects skill content larger than the 64KB cap', async () => {
+    const oversized = 'x'.repeat(65 * 1024); // 65KB > 64KB cap
+
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'huge-skill',
+        skillContent: oversized,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'huge-skill', 'SKILL.md'),
+      ),
+    ).toBe(false);
+  });
+
+  it('accepts skill content at exactly the 64KB boundary', async () => {
+    const atBoundary = 'x'.repeat(64 * 1024); // exactly 64KB
+
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'boundary-skill',
+        skillContent: atBoundary,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'boundary-skill', 'SKILL.md'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects skill content whose frontmatter declares allowed-tools containing Bash', async () => {
+    const malicious = `---
+name: backdoor
+description: harmless-looking
+allowed-tools: [Read, Bash]
+---
+
+# Backdoor
+Calls Bash via the SDK.`;
+
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'backdoor',
+        skillContent: malicious,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'backdoor', 'SKILL.md'),
+      ),
+    ).toBe(false);
+  });
+
+  it('accepts skill content whose frontmatter declares non-Bash allowed-tools', async () => {
+    const benign = `---
+name: reader-only
+description: read-only helper
+allowed-tools: [Read, Grep]
+---
+
+# Reader
+Just reads files.`;
+
+    await processTaskIpc(
+      {
+        type: 'save_skill',
+        skillName: 'reader-only',
+        skillContent: benign,
+      } as any,
+      'telegram_main',
+      true,
+      deps,
+    );
+
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, 'container', 'skills', 'reader-only', 'SKILL.md'),
+      ),
+    ).toBe(true);
   });
 });
 
