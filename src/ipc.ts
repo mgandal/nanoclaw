@@ -48,6 +48,7 @@ import {
 } from './proactive-log.js';
 import { isPaused, writePause } from './proactive-pause.js';
 import { isInQuietHours, nextQuietEnd } from './quiet-hours.js';
+import { frontmatterDeclaresBash } from './skill-frontmatter.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -2423,9 +2424,16 @@ function getBuiltinSkillNames(): Set<string> {
     builtinSkillsCache = new Set(
       entries.filter((e) => e.isDirectory()).map((e) => e.name),
     );
-  } catch {
-    // No container/skills/ directory at startup: nothing to protect, fall
-    // through with an empty set rather than crashing.
+  } catch (err) {
+    // No container/skills/ directory: log loudly so a misconfigured deploy
+    // is visible in startup logs rather than silently fail-open. The empty
+    // set lets save_skill calls succeed; in a real deploy this means an
+    // attacker who reaches the IPC could create any skill name. The isMain
+    // gate at the dispatcher remains the primary defense.
+    logger.error(
+      { skillsDir, err: err instanceof Error ? err.message : String(err) },
+      'getBuiltinSkillNames: container/skills/ unreadable — save_skill builtin protection is fail-open',
+    );
     builtinSkillsCache = new Set();
   }
   return builtinSkillsCache;
@@ -2434,17 +2442,6 @@ function getBuiltinSkillNames(): Set<string> {
 /** @internal — for tests only. Forces re-scan on next getBuiltinSkillNames(). */
 export function _resetBuiltinSkillsCacheForTests(): void {
   builtinSkillsCache = null;
-}
-
-/**
- * A4 of the 2026-04-18 hardening audit: reject save_skill content whose
- * frontmatter declares Bash in `allowed-tools`. Mirrors the `isGroupSkillAllowed`
- * check in container-runner.ts (A2 enforcement).
- */
-function skillContentDeclaresBash(content: string): boolean {
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return false;
-  return /allowed-tools[^\n]*\bBash\b/i.test(fmMatch[1]);
 }
 
 /**
@@ -2508,7 +2505,7 @@ function handleSaveSkillIpc(
 
   // A4: defense-in-depth — refuse to persist a skill that declares Bash in
   // its frontmatter `allowed-tools`. Symmetric with A2 (container-runner.ts).
-  if (skillContentDeclaresBash(skillContent)) {
+  if (frontmatterDeclaresBash(skillContent)) {
     logger.warn(
       { skillName, sourceGroup },
       'save_skill IPC rejected: frontmatter declares allowed-tools containing Bash',

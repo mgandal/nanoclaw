@@ -501,6 +501,23 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
   const loop = async () => {
     try {
+      // Heal any active cron/interval tasks whose next_run drifted to NULL
+      // since the last tick (out-of-band SQL update, partial migration, etc).
+      // The query is indexed and the table is small, so this is sub-ms in
+      // practice. Catches the runtime-corruption case the startup-only heal
+      // would otherwise leave silent until the next process restart.
+      const healed = healOrphanedNextRun();
+      for (const row of healed) {
+        logger.warn(
+          {
+            taskId: row.id,
+            scheduleValue: row.schedule_value,
+            nextRun: row.next_run,
+          },
+          'Healed orphaned task with NULL next_run (mid-loop)',
+        );
+      }
+
       const dueTasks = getDueTasks();
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');

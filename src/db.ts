@@ -831,17 +831,21 @@ export function recoverRunningTasks(): number {
 }
 
 /**
- * Startup recovery: active cron/interval tasks with NULL next_run are
- * silently skipped by getDueTasks (`next_run IS NOT NULL` filter) and never
- * fire. Recompute next_run for those rows so they re-enter the scheduler.
+ * Active cron/interval tasks with NULL next_run are silently skipped by
+ * getDueTasks (`next_run IS NOT NULL` filter) and never fire. Recompute
+ * next_run for those rows so they re-enter the scheduler.
  *
  * Surfaces the class of orphan where a task was inserted directly via SQL
- * or by a buggy registration path that didn't compute next_run. once-tasks
- * legitimately have null next_run after firing (the row stays as audit
- * evidence with status='completed'); active once-tasks would also be
- * skipped if they carried a null next_run, but the IPC schedule_task path
- * always populates it on insert, so they're not a realistic heal target —
- * we conservatively skip them rather than guess at a sentinel value.
+ * or by a buggy registration path that didn't compute next_run.
+ *
+ * We deliberately do not heal once-tasks: an active once-task with a null
+ * next_run is ambiguous — it could be a never-fired one (would need a
+ * future timestamp we cannot guess) or a stale row that should have been
+ * flipped to status='completed'. Without more context we leave them alone.
+ *
+ * Called from the scheduler at startup AND on every loop tick. Per-tick
+ * cost is sub-ms (indexed query, tiny working set), and it catches the
+ * runtime-corruption case the startup-only path would miss.
  *
  * Returns one entry per healed row so the caller can log them individually.
  */
@@ -886,7 +890,11 @@ export function healOrphanedNextRun(): Array<{
         nextRun = iso;
       } catch (err) {
         logger.warn(
-          { taskId: row.id, scheduleValue: row.schedule_value, err },
+          {
+            taskId: row.id,
+            scheduleValue: row.schedule_value,
+            errMsg: err instanceof Error ? err.message : String(err),
+          },
           'Skipping orphaned task with malformed cron — left for manual review',
         );
         continue;

@@ -25,6 +25,7 @@ import {
 import { writeContextPacket } from './context-assembler.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
+import { frontmatterDeclaresBash } from './skill-frontmatter.js';
 import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
@@ -86,8 +87,10 @@ function redactContainerArgs(args: string[]): string[] {
 
 /**
  * Inspect a skill directory's SKILL.md frontmatter. Return false if it
- * declares Bash in `allowed-tools`. Conservative parse: any frontmatter
- * line matching /allowed-tools.*Bash/i rejects the skill.
+ * declares Bash in `allowed-tools`. Uses a real YAML parser so it catches
+ * all five forms the field appears in (flow array, multi-line list, block
+ * string, comma-string, space-string). The previous single-line regex
+ * missed multi-line and block-string forms.
  *
  * Per A2 of the 2026-04-18 hardening audit.
  */
@@ -95,11 +98,7 @@ function isGroupSkillAllowed(skillDir: string): boolean {
   const skillMd = path.join(skillDir, 'SKILL.md');
   if (!fs.existsSync(skillMd)) return true;
   const content = fs.readFileSync(skillMd, 'utf-8');
-  const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!fmMatch) return true;
-  const frontmatter = fmMatch[1];
-  if (/allowed-tools[^\n]*\bBash\b/i.test(frontmatter)) return false;
-  return true;
+  return !frontmatterDeclaresBash(content);
 }
 
 export interface SyncSkillsOpts {
