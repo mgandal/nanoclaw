@@ -20,6 +20,7 @@ import {
   getDueTasks,
   getLastSuccessTime,
   getTaskById,
+  healOrphanedNextRun,
   logTaskRun,
   markTaskRunning,
   recoverRunningTasks,
@@ -479,6 +480,21 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   const recovered = recoverRunningTasks();
   if (recovered > 0) {
     logger.info({ recovered }, 'Recovered orphaned running tasks to active');
+  }
+
+  // Heal active cron/interval tasks where next_run is NULL (would otherwise
+  // be silently skipped by getDueTasks forever — a single corrupt write or
+  // out-of-band INSERT puts a task in permanent limbo).
+  const healed = healOrphanedNextRun();
+  for (const row of healed) {
+    logger.warn(
+      {
+        taskId: row.id,
+        scheduleValue: row.schedule_value,
+        nextRun: row.next_run,
+      },
+      'Healed orphaned task with NULL next_run',
+    );
   }
 
   logger.info('Scheduler loop started');

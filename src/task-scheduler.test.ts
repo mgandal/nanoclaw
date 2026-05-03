@@ -1411,3 +1411,142 @@ describe('computeNextRun — cron safety-net boundary', () => {
     expect(gapMs).toBeGreaterThanOrEqual(30 * 60 * 1000);
   });
 });
+
+describe('healOrphanedNextRun — startup recovery for null next_run', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('recomputes next_run for active cron tasks where it is NULL', async () => {
+    const { healOrphanedNextRun } = await import('./db.js');
+
+    createTask({
+      id: 'task-orphan-cron',
+      group_folder: 'telegram_ops-claw',
+      chat_jid: 'tg:-1',
+      prompt: 'guard-only',
+      script: '/tmp/some-guard.sh',
+      schedule_type: 'cron',
+      schedule_value: '5 12 * * *',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      agent_name: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const healed = healOrphanedNextRun();
+    expect(healed.length).toBe(1);
+    expect(healed[0].id).toBe('task-orphan-cron');
+
+    const task = getTaskById('task-orphan-cron');
+    expect(task?.next_run).toBeTruthy();
+    expect(new Date(task!.next_run!).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it('also heals active interval tasks with null next_run', async () => {
+    const { healOrphanedNextRun } = await import('./db.js');
+
+    createTask({
+      id: 'task-orphan-interval',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:1',
+      prompt: 'p',
+      schedule_type: 'interval',
+      schedule_value: String(60 * 60 * 1000),
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      agent_name: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const healed = healOrphanedNextRun();
+    expect(healed.length).toBe(1);
+
+    const task = getTaskById('task-orphan-interval');
+    expect(task?.next_run).toBeTruthy();
+  });
+
+  it('skips once-tasks (correctly nullable next_run after completion)', async () => {
+    const { healOrphanedNextRun } = await import('./db.js');
+
+    createTask({
+      id: 'task-once-completed',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:1',
+      prompt: 'p',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'active',
+      agent_name: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const healed = healOrphanedNextRun();
+    expect(healed.length).toBe(0);
+
+    const task = getTaskById('task-once-completed');
+    expect(task?.next_run).toBeNull();
+  });
+
+  it('skips inactive tasks (paused/completed/cancelled)', async () => {
+    const { healOrphanedNextRun } = await import('./db.js');
+
+    createTask({
+      id: 'task-paused-orphan',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:1',
+      prompt: 'p',
+      schedule_type: 'cron',
+      schedule_value: '0 9 * * *',
+      context_mode: 'isolated',
+      next_run: null,
+      status: 'paused',
+      agent_name: null,
+      created_at: new Date().toISOString(),
+    });
+
+    const healed = healOrphanedNextRun();
+    expect(healed.length).toBe(0);
+  });
+
+  it('returns empty array when no orphans exist (idempotent)', async () => {
+    const { healOrphanedNextRun } = await import('./db.js');
+
+    const healed = healOrphanedNextRun();
+    expect(healed).toEqual([]);
+  });
+
+  it('skips cron tasks with malformed schedule_value (logs but does not crash)', async () => {
+    const { healOrphanedNextRun, _getTestDb } = await import('./db.js');
+
+    // Bypass validateTaskSchedule by inserting raw — we're simulating an
+    // already-corrupted row (the realistic shape of a heal target).
+    _getTestDb()
+      .prepare(
+        `INSERT INTO scheduled_tasks (id, group_folder, chat_jid, prompt, script, schedule_type, schedule_value, context_mode, next_run, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'task-bad-cron',
+        'telegram_claire',
+        'tg:1',
+        'p',
+        null,
+        'cron',
+        'not-a-cron',
+        'isolated',
+        null,
+        'active',
+        new Date().toISOString(),
+      );
+
+    expect(() => healOrphanedNextRun()).not.toThrow();
+
+    const task = getTaskById('task-bad-cron');
+    expect(task?.next_run).toBeNull();
+  });
+});

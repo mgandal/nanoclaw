@@ -3,7 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { ASSISTANT_NAME, DATA_DIR, STORE_DIR, TIMEZONE } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -828,6 +828,95 @@ export function recoverRunningTasks(): number {
     )
     .run();
   return result.changes as number;
+}
+
+/**
+ * Startup recovery: active cron/interval tasks with NULL next_run are
+ * silently skipped by getDueTasks (`next_run IS NOT NULL` filter) and never
+ * fire. Recompute next_run for those rows so they re-enter the scheduler.
+ *
+ * Surfaces the class of orphan where a task was inserted directly via SQL
+ * or by a buggy registration path that didn't compute next_run. once-tasks
+ * legitimately have null next_run after firing (the row stays as audit
+ * evidence with status='completed'); active once-tasks would also be
+ * skipped if they carried a null next_run, but the IPC schedule_task path
+ * always populates it on insert, so they're not a realistic heal target —
+ * we conservatively skip them rather than guess at a sentinel value.
+ *
+ * Returns one entry per healed row so the caller can log them individually.
+ */
+export function healOrphanedNextRun(): Array<{
+  id: string;
+  schedule_value: string;
+  next_run: string;
+}> {
+  const orphans = db
+    .prepare(
+      `SELECT id, schedule_type, schedule_value FROM scheduled_tasks
+       WHERE status = 'active'
+         AND next_run IS NULL
+         AND schedule_type IN ('cron', 'interval')`,
+    )
+    .all() as Array<{
+    id: string;
+    schedule_type: 'cron' | 'interval';
+    schedule_value: string;
+  }>;
+
+  const healed: Array<{
+    id: string;
+    schedule_value: string;
+    next_run: string;
+  }> = [];
+  const now = Date.now();
+
+  for (const row of orphans) {
+    let nextRun: string;
+    if (row.schedule_type === 'cron') {
+      try {
+        const interval = CronExpressionParser.parse(row.schedule_value, {
+          tz: TIMEZONE,
+        });
+        const iso = interval.next().toISOString();
+        if (!iso) {
+          // CronDate.toISOString() can return null for unrepresentable dates;
+          // skip rather than write a bogus value.
+          continue;
+        }
+        nextRun = iso;
+      } catch (err) {
+        logger.warn(
+          { taskId: row.id, scheduleValue: row.schedule_value, err },
+          'Skipping orphaned task with malformed cron — left for manual review',
+        );
+        continue;
+      }
+    } else {
+      // interval
+      const ms = parseInt(row.schedule_value, 10);
+      if (!ms || ms <= 0) {
+        logger.warn(
+          { taskId: row.id, scheduleValue: row.schedule_value },
+          'Skipping orphaned interval task with malformed value',
+        );
+        continue;
+      }
+      nextRun = new Date(now + ms).toISOString();
+    }
+
+    db.prepare(`UPDATE scheduled_tasks SET next_run = ? WHERE id = ?`).run(
+      nextRun,
+      row.id,
+    );
+
+    healed.push({
+      id: row.id,
+      schedule_value: row.schedule_value,
+      next_run: nextRun,
+    });
+  }
+
+  return healed;
 }
 
 export function logTaskRun(log: TaskRunLog): void {
