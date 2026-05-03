@@ -145,7 +145,50 @@ for key in "${EXPECTED_KEYS[@]}"; do
   echo "  archived: $key (${#value} bytes, round-trip verified)"
 done
 
-# Phase 3-4 follow in subsequent tasks
+# ----------------------------------------------------------------------------
+# Phase 3: Destructive rm
+# ----------------------------------------------------------------------------
+
 echo ""
-echo "=== Phases 3-4 stubbed in this task; see tasks 3-4 ==="
-exit 0
+echo "=== Phase 3: rm -rf $PROOF_SDK_DIR ==="
+
+# Last sanity check immediately before destruction
+if [ ! -d "$PROOF_SDK_DIR/.git" ]; then
+  echo "FAIL: pre-rm sanity check — .git no longer present, refusing to delete" >&2
+  exit 4
+fi
+
+rm -rf "$PROOF_SDK_DIR"
+
+# ----------------------------------------------------------------------------
+# Phase 4: Post-verify
+# ----------------------------------------------------------------------------
+
+echo ""
+echo "=== Phase 4: post-verify ==="
+
+# 4a. Directory is gone
+if [ -d "$PROOF_SDK_DIR" ]; then
+  echo "FAIL: directory still exists after rm — partial deletion?" >&2
+  exit 5
+fi
+echo "  PASS: directory removed"
+
+# 4b. All 4 keychain entries still readable
+for key in "${EXPECTED_KEYS[@]}"; do
+  if ! security find-generic-password -gw -a "$key" -s "$SERVICE" >/dev/null 2>&1; then
+    echo "FAIL: keychain entry $key no longer readable — DATA LOSS" >&2
+    exit 5
+  fi
+done
+echo "  PASS: all 4 keychain entries still readable"
+
+# 4c. Print recovery commands
+echo ""
+echo "=== Recovery (copy-paste if you ever need these values back) ==="
+for key in "${EXPECTED_KEYS[@]}"; do
+  echo "security find-generic-password -gw -a $key -s $SERVICE"
+done
+
+echo ""
+echo "Done. proof-sdk removed; secrets archived under keychain service '$SERVICE'."
