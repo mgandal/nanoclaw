@@ -303,12 +303,26 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
                           domain, result.topic)
 
             return result
+        except requests.HTTPError as e:
+            # 4xx is deterministic (malformed prompt, model name typo, oversized
+            # num_predict). Don't burn ~3s of retry on a misconfiguration that
+            # the next sync will hit identically. 5xx falls through to the
+            # transient-retry path.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is not None and 400 <= status < 500:
+                last_err = e
+                break
+            last_err = e
+            if attempt < OLLAMA_MAX_ATTEMPTS - 1:
+                log.warning("Ollama request failed (attempt %d/%d): %s — retrying",
+                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
         except requests.RequestException as e:
             last_err = e
             if attempt < OLLAMA_MAX_ATTEMPTS - 1:
                 log.warning("Ollama request failed (attempt %d/%d): %s — retrying",
                             attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
-                time.sleep(OLLAMA_BACKOFF_SEC[attempt])
+                time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
 
     log.error("Ollama request failed after %d attempts: %s", OLLAMA_MAX_ATTEMPTS, last_err)
     return ClassificationResult(

@@ -160,3 +160,89 @@ def test_parse_fence_without_language_tag():
     r = _parse_response(raw)
     assert r is not None
     assert r.kind == "i-owe"
+
+
+# --- Ollama transient-failure retry (parity with classifier.py fix) ---
+# extract() shares the single-shot Ollama call shape that classifier.py had
+# before commit 514f991. Same fix applies: retry transient errors, fast-fail
+# on 4xx misconfiguration.
+
+def _extract_ok_response(kind: str = "none") -> dict:
+    return {
+        "response": json.dumps({
+            "kind": kind, "who": "", "what": "",
+            "due": "none", "significant": False, "decision_summary": "",
+        }),
+    }
+
+
+def test_extract_retries_on_transient_failure(monkeypatch):
+    """Two transient ConnectionErrors then success → returns parsed result, not None."""
+    import requests
+    from email_ingest import extractor
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise requests.ConnectionError("transient")
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = _extract_ok_response("i-owe")
+        return resp
+
+    monkeypatch.setattr(extractor.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    result = extract(_email(), direction="sent")
+    assert result is not None, "expected successful extraction after retries"
+    assert call_count["n"] == 3
+
+
+def test_extract_returns_none_after_all_retries_exhausted(monkeypatch):
+    """All attempts fail → returns None (existing failure shape)."""
+    import requests
+    from email_ingest import extractor
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        raise requests.ConnectionError("permanently down")
+
+    monkeypatch.setattr(extractor.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    result = extract(_email(), direction="sent")
+    assert result is None
+    assert call_count["n"] == extractor.OLLAMA_MAX_ATTEMPTS
+
+
+def test_extract_does_not_retry_on_4xx_client_error(monkeypatch):
+    """4xx is deterministic; fast-fail without burning retry time."""
+    import requests
+    from email_ingest import extractor
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        resp = MagicMock()
+        resp.status_code = 400
+        err = requests.HTTPError("400 Client Error: Bad Request")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
+        return resp
+
+    monkeypatch.setattr(extractor.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    result = extract(_email(), direction="sent")
+    assert result is None
+    assert call_count["n"] == 1, (
+        f"4xx is deterministic and must NOT retry, got {call_count['n']} attempts"
+    )

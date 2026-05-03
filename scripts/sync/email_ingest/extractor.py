@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -17,6 +18,11 @@ _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "phi4-mini"
 OLLAMA_TIMEOUT = 30
+# Mirror classifier.py's retry policy — same Ollama, same blip risk
+# (Electron-app sleep/wake, model swap, transient 5xx). 4xx is deterministic
+# and fast-fails. See commit 514f991 for the original justification.
+OLLAMA_MAX_ATTEMPTS = 3
+OLLAMA_BACKOFF_SEC = (1, 2)
 
 BODY_CAP = 2000
 
@@ -97,21 +103,41 @@ def extract(email: NormalizedEmail, direction: str) -> Optional[ExtractionResult
     if not email.body:
         return None
     prompt = build_prompt(email, direction)
-    try:
-        resp = requests.post(
-            OLLAMA_URL,
-            json={
-                "model": OLLAMA_MODEL,
-                "system": _SYSTEM_PROMPT,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"temperature": 0.1, "num_predict": 256},
-            },
-            timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-        raw = resp.json().get("response", "")
-    except requests.RequestException as e:
-        log.warning("extractor: Ollama request failed: %s", e)
-        return None
-    return _parse_response(raw)
+    last_err = None
+    for attempt in range(OLLAMA_MAX_ATTEMPTS):
+        try:
+            resp = requests.post(
+                OLLAMA_URL,
+                json={
+                    "model": OLLAMA_MODEL,
+                    "system": _SYSTEM_PROMPT,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.1, "num_predict": 256},
+                },
+                timeout=OLLAMA_TIMEOUT,
+            )
+            resp.raise_for_status()
+            raw = resp.json().get("response", "")
+            return _parse_response(raw)
+        except requests.HTTPError as e:
+            # 4xx is deterministic — fast-fail without burning retry time.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status is not None and 400 <= status < 500:
+                last_err = e
+                break
+            last_err = e
+            if attempt < OLLAMA_MAX_ATTEMPTS - 1:
+                log.warning("extractor: Ollama request failed (attempt %d/%d): %s — retrying",
+                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
+        except requests.RequestException as e:
+            last_err = e
+            if attempt < OLLAMA_MAX_ATTEMPTS - 1:
+                log.warning("extractor: Ollama request failed (attempt %d/%d): %s — retrying",
+                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
+
+    log.warning("extractor: Ollama request failed after %d attempts: %s",
+                OLLAMA_MAX_ATTEMPTS, last_err)
+    return None

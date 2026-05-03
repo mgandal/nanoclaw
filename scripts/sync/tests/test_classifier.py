@@ -168,6 +168,41 @@ def test_classify_returns_ollama_error_after_all_retries_exhausted(monkeypatch):
     result = classify_email(email)
 
     assert result.skip_reason == "ollama_error"
-    assert call_count["n"] >= 2, (
-        f"expected at least 2 attempts before giving up, got {call_count['n']}"
+    # M6 (review): tightened from `>= 2` to exact match against the constant —
+    # a regression that retried only twice would previously slip past `>= 2`.
+    from email_ingest import classifier as _c
+    assert call_count["n"] == _c.OLLAMA_MAX_ATTEMPTS, (
+        f"expected exactly {_c.OLLAMA_MAX_ATTEMPTS} attempts, got {call_count['n']}"
+    )
+
+
+def test_classify_does_not_retry_on_4xx_client_error(monkeypatch):
+    """4xx HTTPError (e.g. malformed prompt, model name typo) is deterministic;
+    fast-fail without burning ~3s of retry on misconfiguration. Only retry on
+    transport errors (ConnectionError/Timeout) and 5xx (server-side recoverable)."""
+    import requests
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        resp = MagicMock()
+        resp.status_code = 400
+        # raise_for_status raises HTTPError with `.response` attached
+        err = requests.HTTPError("400 Client Error: Bad Request")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
+        return resp
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t3")
+    result = classify_email(email)
+
+    assert result.skip_reason == "ollama_error"
+    assert call_count["n"] == 1, (
+        f"4xx is deterministic and must NOT retry, got {call_count['n']} attempts"
     )
