@@ -63,9 +63,16 @@ When email activity makes it obvious a task is complete, NanoClaw closes the tas
         └── task-closure-profile.json (read by matcher; written by trainer)
 
    ┌──────────────────────────────────────┐
-   │ Weekly trainer (cron Sun 2am):        │
-   │ scripts/sync/email_ingest/            │
+   │ Weekly trainer (Sun 2am via launchd): │
+   │ ~/Library/LaunchAgents/               │
+   │   com.nanoclaw.train-task-closure     │
+   │ runs scripts/sync/email_ingest/       │
    │   task_closure_trainer.py             │
+   │ Plist uses StartCalendarInterval      │
+   │ (NOT StartInterval) for clock-time    │
+   │ scheduling, mirroring the existing    │
+   │ com.nanoclaw.train-classifier.plist.  │
+   │                                       │
    │ JSONL → per-counterparty trust scores │
    │       → per-rule precision            │
    │ → writes task-closure-profile.json    │
@@ -109,9 +116,13 @@ When email activity makes it obvious a task is complete, NanoClaw closes the tas
 ### Path A — Provenance match (highest confidence)
 
 - **Trigger:** `task.source = 'email'` AND `task.source_ref` is set.
-- **Action:** scan that exact thread for any activity since `task.created_at`.
-- **Score:** 1.0 if any activity. Auto-close threshold met immediately.
-- **Rationale:** zero ambiguity — task was born from this thread, thread moved, work is done.
+- **Action:** scan that exact thread for activity since `task.created_at`. Mirror the i-owe / they-owe-me distinction from `closure.py`:
+  - For tasks whose title or context indicates **i-owe** (e.g., "Respond to…", "Reply to…", "Send… to…"): closes only on a **user-sent message** in the thread since `task.created_at`.
+  - For tasks indicating **they-owe-me** (e.g., "Awaiting…", "Follow up with… for…"): closes only on a **counterparty reply** since `task.created_at`.
+  - When the kind cannot be inferred from the title/context, default to requiring a user-sent message (more conservative — matches the typical task pattern in the existing 28 open rows).
+- **Score:** 1.0 if the matching activity exists. Auto-close threshold met immediately.
+- **Activity-window guard:** Path A also requires the qualifying activity to be within the last **90 days** of the scan time, OR more recent than `task.created_at` if the task is newer than that. Prevents stale-thread-revival closures (e.g., a months-old task whose thread gets a tangential CC today).
+- **Rationale:** zero ambiguity — task was born from this thread, thread moved in the right direction, work is done.
 
 ### Path B — Retroactive match (the existing 28 open tasks)
 
@@ -151,11 +162,16 @@ Empty reasoning → drop to suggested-tier (defensive against scoring bugs).
 
 ### Cross-reference with `followups.md`
 
-If an open follow-up exists pointing at the same `thread_ref` AND it's still open, **task closure is held** and the task drops to suggested-tier. The followup's own closure logic runs first; if it stays open, that's a signal the underlying commitment isn't actually resolved.
+The `FollowUp.thread` field is shaped `"gmail:<id>" | "exchange:<id>"` (per `email_ingest/types.py`); `task.source_ref` uses the same convention when set.
+
+- **Path A (provenance match):** join is direct. If `task.source_ref == followup.thread` AND that followup is still `open`, the task closure is **held** and the task drops to suggested-tier.
+- **Path B (retroactive match):** the task has no `source_ref`, so the cross-reference is applied **per candidate thread** during scoring. For each candidate, look up whether any open followup points at that thread; if so, that candidate's score is capped at the suggest tier (cannot auto-close), regardless of total score.
+- **Why the per-candidate version of the rule:** in Path B the matcher might pick the wrong thread among multiple candidates. We don't want a high-scoring-but-wrong candidate to bypass the held-closure rule just because the *correct* candidate (the one with the open followup) happened to score lower. Capping per-candidate avoids that pathology.
+- The followup's own closure logic always runs first (existing behavior in `closure.py`); if the followup gets auto-closed in the same run, the held task closure can fire on the next run.
 
 ## Components & file layout
 
-### New code (5 files)
+### New code (8 files)
 
 ```
 scripts/sync/email_ingest/
@@ -166,11 +182,23 @@ scripts/sync/
 └── email-ingest.py          MODIFIED — invokes task_closure after followups
 
 src/
-└── ipc-actions.ts           MODIFIED — adds task_reopen action
+├── tasks.ts                 MODIFIED — adds reopenTask() helper sibling to closeTask()
+├── tasks-ipc.ts             MODIFIED — registers 'task_reopen' request type, handler
+└── tasks-ipc.test.ts        MODIFIED — adds tests for the reopen path
+
+container/agent-runner/src/
+└── ipc-mcp-stdio.ts         MODIFIED — exposes nanoclaw.task_reopen MCP tool to in-container agents
 
 scripts/sync/tests/
 └── test_task_closure.py     NEW — unit tests for matcher
+
+~/Library/LaunchAgents/
+└── com.nanoclaw.train-task-closure.plist   NEW — weekly trainer cron
+                                            (StartCalendarInterval, NOT StartInterval —
+                                             matches existing com.nanoclaw.train-classifier.plist)
 ```
+
+**Note on the IPC change:** `task_reopen` is not a single-file addition. The full surface is the host helper (`tasks.ts`), the host-side IPC dispatcher (`tasks-ipc.ts`), the container-side MCP wrapper (`ipc-mcp-stdio.ts`, where all `nanoclaw.*` tools are exposed), and the test file. Symmetric to how `task_close` is wired today.
 
 ### State files (`~/.cache/email-ingest/`)
 
@@ -252,6 +280,8 @@ The `reopened` event with the user's reason verbatim is what powers the trainer'
 
 1. **Tasks closed manually between scans.** Handled by `WHERE status='open'` filter. No special logic.
 2. **Tasks reopened, then thread activity again.** Any task reopened within the last **7 days** is excluded from auto-closure (cooling-off window). Logged as `action:"cooling_off"`.
+   - **How the matcher detects this:** no schema change. The matcher reads `task-closures.jsonl` at start of each scan and builds an in-memory set of `task_id`s with `action:"reopened"` events in the last 7 days. Any task in that set is automatically masked from Path A and Path B regardless of score. This keeps with the design's "JSONL is the audit trail" principle and avoids a tasks-table migration.
+   - The `--rollback <task_id>` command also writes a `reopened` event so manual rollbacks trigger the same cooling-off behavior.
 3. **Multiple tasks pointing at the same thread.** Existing −0.30 penalty handles typical case. Hard rule: if 3+ open tasks match the same thread, no auto-closure on any of them — flag all to suggested.
 4. **`source_ref` is stale (thread deleted/archived).** Adapter returns empty for that thread → falls through to retroactive matching. No special handling.
 5. **Automated user-side reply (calendar invite, OOO, canned "thanks").** Heuristic limitation. Trainer learns over time; counterparty/sender trust drops. Acceptable v1 leak.
@@ -264,9 +294,10 @@ The `reopened` event with the user's reason verbatim is what powers the trainer'
 
 - **Dry-run mode** (`--dry-run`): full scan, JSONL with `dry-` prefix, no SQL UPDATEs. Used by tests and first manual validation runs.
 - **Per-run cap**: max 5 auto-closures per scan (3 during initial guarded rollout). Beyond that, drops to suggested-tier with note "(per-run cap exceeded)". Hard ceiling against bad heuristic deployments torching the task list.
-- **Cooling-off window**: 7 days post-reopen.
+- **Cooling-off window**: 7 days post-reopen (mechanism specified in Edge case 2).
 - **Mandatory reasoning string**: empty reasoning → drop to suggested-tier.
-- **Idempotency**: re-running on same data produces same decisions. Re-runs append a `duplicate-decision` event but no second SQL write.
+- **JSONL append safety**: every JSONL append is wrapped in an `fcntl.flock(LOCK_EX)` to prevent interleaved writes if two ingest runs overlap (e.g., post-sleep wakeups firing back-to-back). Trainer reads with `LOCK_SH`.
+- **Idempotency**: closed tasks are excluded from candidate selection by the `WHERE status='open'` filter, so a second run on the same data simply does not re-decide them — no duplicate JSONL entry, no second SQL write. Suggested-tier candidates *are* re-evaluated on each run; the pending file is **rewritten in full** each run (atomic write to `pending.json.tmp` + `os.rename`), and JSONL gets one fresh `suggested` entry per run per still-pending task. Dropping out of the candidate set (e.g., because thread activity expired) removes the entry from pending but does not write a `dropped` event.
 
 ## Testing strategy
 
@@ -313,7 +344,7 @@ Temp SQLite + fixture emails:
 
 ## Failure-recovery commands
 
-- `python -m email_ingest.task_closure --rollback <task_id>` reopens the task, appends a `manual-rollback` JSONL entry. For bad closures found long after the digest reply window.
+- `python -m email_ingest.task_closure --rollback <task_id>` reopens the task, appends a `manual-rollback` JSONL entry plus a `reopened` event (so the cooling-off window kicks in). For bad closures found long after the digest reply window. **Safety check:** before reopening, verifies that the current `tasks.title` matches the `task_title` recorded in the most recent `closed`/`dry-closed` JSONL entry for that id. If they differ (e.g., the id was reused after an `archived → re-add` cycle), the command refuses with a clear error and prints both titles.
 - `python -m email_ingest.task_closure_trainer --recompute --since=14d` re-runs trainer ignoring stale JSONL. Used if profile gets poisoned.
 
 ## Documentation updates
@@ -328,4 +359,4 @@ Temp SQLite + fixture emails:
 - **OOO/canned-reply false positives** rely on training to fix. We don't try to detect them upfront.
 - **Heuristic-only matching.** No LLM disambiguation in v1. If the trainer's per-rule precision shows retroactive matching is the bottleneck, an LLM disambiguator becomes a targeted v2 addition.
 
-Both intentional YAGNI calls. Revisit after 4 weeks of steady-state data.
+All three are intentional YAGNI calls. Revisit after 4 weeks of steady-state data.
