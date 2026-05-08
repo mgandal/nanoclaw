@@ -27,7 +27,12 @@ describe('reopenTask', () => {
       )
       .run(taskId);
 
-    const result = reopenTask({ id: taskId, reason: 'false alarm' });
+    const result = reopenTask({
+      id: taskId,
+      reason: 'false alarm',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
     expect(result.success).toBe(true);
     expect(result.status).toBe('open');
 
@@ -54,7 +59,12 @@ describe('reopenTask', () => {
       )
       .run(taskId);
 
-    reopenTask({ id: taskId, reason: 'retry' });
+    reopenTask({
+      id: taskId,
+      reason: 'retry',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
 
     const row = _getTestDb()
       .query('SELECT context FROM tasks WHERE id=?')
@@ -67,15 +77,104 @@ describe('reopenTask', () => {
     const added = addTask({ title: 'Already open', source: 'manual' });
     const taskId = added.id!;
 
-    const result = reopenTask({ id: taskId, reason: 'try reopen' });
+    const result = reopenTask({
+      id: taskId,
+      reason: 'try reopen',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/already open/);
   });
 
   it('returns error when task id does not exist', () => {
-    const result = reopenTask({ id: 99999, reason: 'ghost' });
+    const result = reopenTask({
+      id: 99999,
+      reason: 'ghost',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/);
+  });
+
+  it('auth: main caller can reopen any group task', () => {
+    const added = addTask({
+      title: 'Lab task',
+      source: 'manual',
+      group_folder: 'telegram_lab-claw',
+    });
+    expect(added.success).toBe(true);
+    const taskId = added.id!;
+
+    _getTestDb()
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?",
+      )
+      .run(taskId);
+
+    const result = reopenTask({
+      id: taskId,
+      reason: 'main override',
+      callerGroup: 'telegram_claire',
+      callerIsMain: true,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('auth: same-group caller can reopen its own task', () => {
+    const added = addTask({
+      title: 'Lab task 2',
+      source: 'manual',
+      group_folder: 'telegram_lab-claw',
+    });
+    expect(added.success).toBe(true);
+    const taskId = added.id!;
+
+    _getTestDb()
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?",
+      )
+      .run(taskId);
+
+    const result = reopenTask({
+      id: taskId,
+      reason: 'same group',
+      callerGroup: 'telegram_lab-claw',
+      callerIsMain: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('auth: cross-group caller is rejected and task remains done', () => {
+    const added = addTask({
+      title: 'Lab task 3',
+      source: 'manual',
+      group_folder: 'telegram_lab-claw',
+    });
+    expect(added.success).toBe(true);
+    const taskId = added.id!;
+
+    _getTestDb()
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?",
+      )
+      .run(taskId);
+
+    const result = reopenTask({
+      id: taskId,
+      reason: 'cross group',
+      callerGroup: 'telegram_other',
+      callerIsMain: false,
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not authorized/);
+
+    // Task must remain done
+    const row = _getTestDb()
+      .query('SELECT status FROM tasks WHERE id=?')
+      .get(taskId) as { status: string } | undefined;
+    expect(row!.status).toBe('done');
   });
 });
 
@@ -104,7 +203,12 @@ describe('handleTasksIpc — task_reopen', () => {
       .run(id);
 
     const handled = await handleTasksIpc(
-      { type: 'task_reopen', requestId: 'req-test-1', id, reason: 'wrong thread' },
+      {
+        type: 'task_reopen',
+        requestId: 'req-test-1',
+        id,
+        reason: 'wrong thread',
+      },
       'telegram_claire',
       true,
       dataDir,
@@ -118,7 +222,10 @@ describe('handleTasksIpc — task_reopen', () => {
       'task_results',
       'req-test-1.json',
     );
-    const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8')) as Record<string, unknown>;
+    const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8')) as Record<
+      string,
+      unknown
+    >;
     expect(result.success).toBe(true);
     expect(result.id).toBe(id);
   });
@@ -132,5 +239,31 @@ describe('handleTasksIpc — task_reopen', () => {
     );
     expect(handled).toBe(true);
     expect(fs.existsSync(path.join(dataDir, 'ipc'))).toBe(false);
+  });
+
+  it('validation error: negative id writes result file with expected error', async () => {
+    const handled = await handleTasksIpc(
+      { type: 'task_reopen', requestId: 'req-validate-1', id: -1, reason: 'x' },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+    expect(handled).toBe(true);
+
+    const resultFile = path.join(
+      dataDir,
+      'ipc',
+      'telegram_claire',
+      'task_results',
+      'req-validate-1.json',
+    );
+    const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8')) as Record<
+      string,
+      unknown
+    >;
+    expect(result).toEqual({
+      success: false,
+      error: 'id must be a positive integer',
+    });
   });
 });

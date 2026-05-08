@@ -88,6 +88,8 @@ export interface TaskCloseResult {
 export interface TaskReopenInput {
   id: number;
   reason: string;
+  callerGroup: string;
+  callerIsMain: boolean;
 }
 
 export interface TaskReopenResult {
@@ -346,9 +348,14 @@ export function reopenTask(input: TaskReopenInput): TaskReopenResult {
   }
 
   const row = db()
-    .query('SELECT id, status, context FROM tasks WHERE id = ?')
+    .query('SELECT id, status, context, group_folder FROM tasks WHERE id = ?')
     .get(input.id) as
-    | { id: number; status: string; context: string | null }
+    | {
+        id: number;
+        status: string;
+        context: string | null;
+        group_folder: string | null;
+      }
     | undefined;
 
   if (!row) {
@@ -359,6 +366,27 @@ export function reopenTask(input: TaskReopenInput): TaskReopenResult {
     return {
       success: false,
       error: `task ${input.id} is already open`,
+    };
+  }
+
+  // Auth: caller must be main, OR task group_folder matches caller, OR task is global (NULL).
+  const allowed =
+    input.callerIsMain ||
+    row.group_folder === null ||
+    row.group_folder === input.callerGroup;
+  if (!allowed) {
+    logger.warn(
+      {
+        taskId: row.id,
+        taskGroup: row.group_folder,
+        callerGroup: input.callerGroup,
+      },
+      'task_reopen: auth denied (caller is not creator/main)',
+    );
+    return {
+      success: false,
+      error:
+        'not authorized: only the creator group or main may reopen this task',
     };
   }
 
@@ -375,7 +403,9 @@ export function reopenTask(input: TaskReopenInput): TaskReopenResult {
          WHERE id = ? AND status != 'open'
          RETURNING id, status`,
     )
-    .get(reasonLine, reasonLine, reasonLine, input.id) as { id: number; status: 'open' } | undefined;
+    .get(reasonLine, reasonLine, reasonLine, input.id) as
+    | { id: number; status: 'open' }
+    | undefined;
 
   if (!updated) {
     return { success: false, error: 'race: task changed status during reopen' };

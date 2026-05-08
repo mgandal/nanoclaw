@@ -15,7 +15,12 @@ import path from 'path';
 import { addTask, closeTask, listTasksDetailed, reopenTask } from './tasks.js';
 import { logger } from './logger.js';
 
-const TASK_TYPES = new Set(['task_add', 'task_list', 'task_close', 'task_reopen']);
+const TASK_TYPES = new Set([
+  'task_add',
+  'task_list',
+  'task_close',
+  'task_reopen',
+]);
 
 export async function handleTasksIpc(
   data: Record<string, unknown>,
@@ -142,13 +147,17 @@ export async function handleTasksIpc(
         writeResult({ success: false, error: 'id must be a positive integer' });
         return true;
       }
-      const reason =
-        typeof data.reason === 'string' ? data.reason.trim() : '';
+      const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
       if (!reason) {
         writeResult({ success: false, error: 'reason is required' });
         return true;
       }
-      const result = reopenTask({ id, reason });
+      const result = reopenTask({
+        id,
+        reason,
+        callerGroup: sourceGroup,
+        callerIsMain: isMain,
+      });
       writeResult(result as unknown as Record<string, unknown>);
       logger.info(
         { sourceGroup, isMain, taskId: id, success: result.success },
