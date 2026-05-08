@@ -370,3 +370,216 @@ def close_task_in_db(db_path: Path, task_id: int, *, reasoning: str) -> bool:
         return cur.rowcount == 1
     finally:
         conn.close()
+
+
+PATH_A_ACTIVITY_WINDOW_DAYS = 90
+COOLING_OFF_DAYS = 7
+
+
+@dataclass
+class ClosureRunReport:
+    closed_count: int = 0
+    suggested_count: int = 0
+    cooling_off_count: int = 0
+    skipped_count: int = 0
+    decisions: list[ClosureDecision] = field(default_factory=list)
+
+
+def _is_user_sent(msg) -> bool:
+    labels = getattr(msg, "labels", None) or []
+    if "SENT" in labels:
+        return True
+    meta = getattr(msg, "metadata", None) or {}
+    return bool(meta.get("is_sent", False))
+
+
+def _classify_kind(task: OpenTask) -> str:
+    text = (task.title or "").lower() + " " + (task.context or "").lower()
+    if any(p in text for p in ["awaiting", "follow up with", "they owe", "waiting for"]):
+        return "they-owe-me"
+    return "i-owe"
+
+
+def _msg_dt(m) -> Optional[datetime]:
+    ts = getattr(m, "timestamp", None) or (getattr(m, "metadata", None) or {}).get("internalDate")
+    if ts is None:
+        return None
+    try:
+        if isinstance(ts, (int, float)) or (isinstance(ts, str) and ts.isdigit()):
+            return datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc)
+        return _parse_db_ts(str(ts))
+    except (ValueError, OSError):
+        return None
+
+
+def _path_a_should_close(task: OpenTask, thread_msgs: list, now: datetime) -> tuple[bool, str, tuple[str, ...]]:
+    cutoff = now - timedelta(days=PATH_A_ACTIVITY_WINDOW_DAYS)
+    relevant = [
+        m for m in thread_msgs
+        if _msg_dt(m) is None or _msg_dt(m) >= max(cutoff, task.created_at)
+    ]
+    if not relevant:
+        return False, "", ()
+    addrs = tuple({(getattr(m, "from_addr", "") or "").lower() for m in relevant if getattr(m, "from_addr", None)} - {""})
+    kind = _classify_kind(task)
+    if kind == "i-owe":
+        for m in relevant:
+            if _is_user_sent(m):
+                return True, f"You sent reply in thread '{getattr(m, 'subject', '')}' since task creation.", addrs
+        return False, "", addrs
+    else:
+        for m in relevant:
+            if not _is_user_sent(m):
+                return True, "Counterparty replied in thread since task creation.", addrs
+        return False, "", addrs
+
+
+def scan_and_close(
+    *,
+    db_path: Path, gmail_adapter, exchange_adapter,
+    profile: ClosureProfile, contacts: dict[str, dict],
+    followups: list, now: datetime,
+    jsonl_path: Path, pending_path: Path,
+    per_run_cap: int = 5, dry_run: bool = False,
+) -> ClosureRunReport:
+    report = ClosureRunReport()
+    cooling_off = read_recent_reopens(jsonl_path, window_days=COOLING_OFF_DAYS, now=now)
+    open_followup_threads = {
+        f.thread for f in followups
+        if getattr(f, "status", "open") == "open" and getattr(f, "thread", None)
+    }
+    open_tasks = fetch_open_tasks(db_path)
+    pending_decisions: list[dict] = []
+    closed_this_run = 0
+
+    for task in open_tasks:
+        if task.id in cooling_off:
+            append_jsonl_event(jsonl_path, {
+                "action": "cooling_off",
+                "task_id": task.id, "task_title": task.title,
+                "reasoning": f"Within {COOLING_OFF_DAYS}-day cooling-off after recent reopen",
+            })
+            report.cooling_off_count += 1
+            continue
+
+        # Path A: provenance match
+        if task.source == "email" and task.source_ref:
+            try:
+                src, tid = task.source_ref.split(":", 1)
+            except ValueError:
+                src, tid = "", task.source_ref
+            adapter = gmail_adapter if src == "gmail" else exchange_adapter if src == "exchange" else None
+            if adapter is None:
+                report.skipped_count += 1
+                continue
+            try:
+                thread_msgs = adapter.fetch_thread_messages(tid, int(task.created_at.timestamp()))
+            except Exception as e:
+                log.warning("task %s: thread fetch failed: %s", task.id, e)
+                report.skipped_count += 1
+                continue
+
+            should_close, reasoning, addrs = _path_a_should_close(task, thread_msgs, now)
+            if not should_close:
+                continue
+
+            if task.source_ref in open_followup_threads:
+                tier = Tier.SUGGEST
+                reasoning += " (held: open followup on same thread)"
+            else:
+                tier = Tier.AUTO_CLOSE
+
+            decision = ClosureDecision(
+                task_id=task.id, task_title=task.title,
+                thread_ref=task.source_ref, thread_addrs=addrs,
+                score=1.0, tier=tier, rule="provenance_match",
+                reasoning=reasoning, candidates_considered=1,
+            )
+            closed_this_run = _emit_decision(
+                decision, jsonl_path, pending_decisions, report,
+                db_path=db_path, dry_run=dry_run,
+                closed_this_run=closed_this_run, per_run_cap=per_run_cap,
+            )
+            continue
+
+        # Path B is added in Task B9.
+
+    # Rewrite pending file atomically
+    pending_payload = {
+        "version": 1,
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "items": pending_decisions,
+    }
+    tmp = pending_path.with_suffix(pending_path.suffix + ".tmp")
+    pending_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(json.dumps(pending_payload, indent=2))
+    tmp.replace(pending_path)
+
+    return report
+
+
+def _emit_decision(
+    decision: ClosureDecision,
+    jsonl_path: Path,
+    pending_decisions: list[dict],
+    report: ClosureRunReport,
+    *,
+    db_path: Path,
+    dry_run: bool,
+    closed_this_run: int,
+    per_run_cap: int,
+) -> int:
+    """Returns updated closed_this_run counter."""
+    prefix = "dry-" if dry_run else ""
+
+    if decision.tier == Tier.AUTO_CLOSE:
+        if closed_this_run >= per_run_cap:
+            event = {
+                "action": f"{prefix}suggested",
+                "task_id": decision.task_id, "task_title": decision.task_title,
+                "thread_ref": decision.thread_ref,
+                "thread_addrs": list(decision.thread_addrs),
+                "score": decision.score, "rule": decision.rule,
+                "reasoning": decision.reasoning + " (per-run cap exceeded)",
+                "candidates_considered": decision.candidates_considered,
+            }
+            append_jsonl_event(jsonl_path, event)
+            pending_decisions.append(event)
+            report.suggested_count += 1
+            return closed_this_run
+
+        if not dry_run:
+            ok = close_task_in_db(db_path, decision.task_id, reasoning=decision.reasoning)
+            if not ok:
+                log.warning("task %s: close failed (status changed); skipping", decision.task_id)
+                report.skipped_count += 1
+                return closed_this_run
+
+        event = {
+            "action": f"{prefix}closed",
+            "task_id": decision.task_id, "task_title": decision.task_title,
+            "thread_ref": decision.thread_ref,
+            "thread_addrs": list(decision.thread_addrs),
+            "score": decision.score, "rule": decision.rule,
+            "reasoning": decision.reasoning,
+            "candidates_considered": decision.candidates_considered,
+        }
+        append_jsonl_event(jsonl_path, event)
+        report.closed_count += 1
+        report.decisions.append(decision)
+        return closed_this_run + (0 if dry_run else 1)
+
+    if decision.tier == Tier.SUGGEST:
+        event = {
+            "action": f"{prefix}suggested",
+            "task_id": decision.task_id, "task_title": decision.task_title,
+            "thread_ref": decision.thread_ref,
+            "thread_addrs": list(decision.thread_addrs),
+            "score": decision.score, "rule": decision.rule,
+            "reasoning": decision.reasoning,
+            "candidates_considered": decision.candidates_considered,
+        }
+        append_jsonl_event(jsonl_path, event)
+        pending_decisions.append(event)
+        report.suggested_count += 1
+    return closed_this_run

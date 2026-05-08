@@ -335,3 +335,122 @@ def test_close_task_idempotent_against_race(tmp_path):
     [task_a] = [t for t in fetch_open_tasks(db_path) if t.title == "Open task A"]
     assert close_task_in_db(db_path, task_a.id, reasoning="r") is True
     assert close_task_in_db(db_path, task_a.id, reasoning="r2") is False
+
+
+from email_ingest.task_closure import scan_and_close, ClosureRunReport
+from unittest.mock import MagicMock
+
+
+class _FakeAdapter:
+    def __init__(self, threads: dict[str, list]):
+        self._threads = threads
+        self.fetch_message = MagicMock(return_value=None)
+
+    def fetch_thread_messages(self, thread_id, since_epoch):
+        return self._threads.get(thread_id, [])
+
+
+def _user_sent_msg():
+    m = MagicMock()
+    m.labels = ["SENT"]
+    m.metadata = {"is_sent": True}
+    m.from_addr = "mike@self"
+    m.id = "m1"
+    m.subject = "Re: thing"
+    return m
+
+
+def test_scan_path_a_auto_closes_when_user_replied(tmp_path):
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, source, source_ref, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("Respond to Elise email", "email", "gmail:t-elise", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    elise_id = conn.execute("SELECT id FROM tasks WHERE title='Respond to Elise email'").fetchone()[0]
+    conn.close()
+
+    gmail = _FakeAdapter({"t-elise": [_user_sent_msg()]})
+    exchange = _FakeAdapter({})
+    jsonl = tmp_path / "task-closures.jsonl"
+    pending = tmp_path / "pending.json"
+
+    report = scan_and_close(
+        db_path=db_path, gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=DEFAULT_PROFILE, contacts={}, followups=[], now=_now(),
+        jsonl_path=jsonl, pending_path=pending, per_run_cap=5, dry_run=False,
+    )
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute("SELECT status FROM tasks WHERE id=?", (elise_id,)).fetchone()[0]
+    conn.close()
+    assert status == "done"
+
+    events = [json.loads(l) for l in jsonl.read_text().splitlines()]
+    closed = [e for e in events if e["action"] == "closed" and e["task_id"] == elise_id]
+    assert len(closed) == 1
+    assert closed[0]["thread_ref"] == "gmail:t-elise"
+    assert report.closed_count == 1
+
+
+def test_scan_dry_run_does_not_mutate_db(tmp_path):
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, source, source_ref, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("Respond to Elise email", "email", "gmail:t-elise", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    gmail = _FakeAdapter({"t-elise": [_user_sent_msg()]})
+    exchange = _FakeAdapter({})
+
+    report = scan_and_close(
+        db_path=db_path, gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=DEFAULT_PROFILE, contacts={}, followups=[], now=_now(),
+        jsonl_path=tmp_path / "events.jsonl", pending_path=tmp_path / "p.json",
+        per_run_cap=5, dry_run=True,
+    )
+    conn = sqlite3.connect(db_path)
+    statuses = [r[0] for r in conn.execute("SELECT status FROM tasks").fetchall()]
+    conn.close()
+    assert statuses.count("open") == 3  # nothing closed
+    events = [json.loads(l) for l in (tmp_path / "events.jsonl").read_text().splitlines()]
+    actions = [e["action"] for e in events]
+    assert any(a.startswith("dry-") for a in actions)
+
+
+def test_scan_respects_cooling_off(tmp_path):
+    """A task with a recent 'reopened' event is masked from auto-close."""
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, source, source_ref, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("Respond to Elise email", "email", "gmail:t-elise", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tasks WHERE title='Respond to Elise email'").fetchone()[0]
+    conn.close()
+
+    jsonl = tmp_path / "events.jsonl"
+    # Pre-seed a 'reopened' event 1 day ago
+    ts = (_now() - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    jsonl.write_text(json.dumps({"ts": ts, "action": "reopened", "task_id": tid}) + "\n")
+
+    gmail = _FakeAdapter({"t-elise": [_user_sent_msg()]})
+    exchange = _FakeAdapter({})
+
+    report = scan_and_close(
+        db_path=db_path, gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=DEFAULT_PROFILE, contacts={}, followups=[], now=_now(),
+        jsonl_path=jsonl, pending_path=tmp_path / "p.json",
+        per_run_cap=5, dry_run=False,
+    )
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()[0]
+    conn.close()
+    assert status == "open"  # still open due to cooling-off
+    assert report.cooling_off_count == 1
