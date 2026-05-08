@@ -10,6 +10,7 @@ See docs/superpowers/specs/2026-05-06-email-task-closure-design.md.
 from __future__ import annotations
 
 import enum
+import fcntl
 import json
 import logging
 import re
@@ -259,3 +260,50 @@ def load_profile(path: Path) -> ClosureProfile:
         rule_precision=dict(data.get("rule_precision", {})),
         version=PROFILE_VERSION,
     )
+
+
+def append_jsonl_event(path: Path, event: dict) -> None:
+    """Append one JSONL event under exclusive file lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if "ts" not in event:
+        event = {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **event}
+    line = json.dumps(event) + "\n"
+    with path.open("a") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            fp.write(line)
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+
+
+def read_recent_reopens(path: Path, *, window_days: int, now: datetime) -> set[int]:
+    if not path.exists():
+        return set()
+    cutoff = now - timedelta(days=window_days)
+    out: set[int] = set()
+    with path.open("r") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_SH)
+        try:
+            for raw in fp:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.warning("corrupt JSONL line skipped: %r", raw[:120])
+                    continue
+                if obj.get("action") != "reopened":
+                    continue
+                ts_str = obj.get("ts", "")
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue
+                if ts >= cutoff:
+                    tid = obj.get("task_id")
+                    if isinstance(tid, int):
+                        out.add(tid)
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+    return out

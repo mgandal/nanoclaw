@@ -234,3 +234,41 @@ def test_profile_newer_version_falls_back(tmp_path, caplog):
     with caplog.at_level(_logging.WARNING):
         p = load_profile(out)
     assert p.contact_base_trust == 0.7
+
+
+def test_append_jsonl_writes_one_line_per_event(tmp_path):
+    from email_ingest.task_closure import append_jsonl_event
+    log_path = tmp_path / "events.jsonl"
+    append_jsonl_event(log_path, {"action": "closed", "task_id": 1})
+    append_jsonl_event(log_path, {"action": "suggested", "task_id": 2})
+    lines = log_path.read_text().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0])["task_id"] == 1
+    assert "ts" in json.loads(lines[0])
+
+
+def test_read_recent_reopens(tmp_path):
+    from email_ingest.task_closure import read_recent_reopens
+    log_path = tmp_path / "events.jsonl"
+    fixed_now = _now()
+    rows = []
+    for i, age_days in enumerate([1, 3, 30]):
+        ts = (fixed_now - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows.append(json.dumps({"ts": ts, "action": "reopened", "task_id": 100 + i}))
+    log_path.write_text("\n".join(rows) + "\n")
+    recent = read_recent_reopens(log_path, window_days=7, now=fixed_now)
+    assert recent == {100, 101}
+
+
+def test_read_recent_reopens_skips_corrupt_lines(tmp_path, caplog):
+    from email_ingest.task_closure import read_recent_reopens
+    log_path = tmp_path / "events.jsonl"
+    log_path.write_text(
+        '{"ts":"2026-05-05T12:00:00Z","action":"reopened","task_id":1}\n'
+        'NOT VALID JSON\n'
+        '{"ts":"2026-05-05T12:00:00Z","action":"reopened","task_id":2}\n'
+    )
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING):
+        recent = read_recent_reopens(log_path, window_days=7, now=_now())
+    assert recent == {1, 2}
