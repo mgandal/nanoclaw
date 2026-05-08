@@ -414,10 +414,12 @@ def _msg_dt(m) -> Optional[datetime]:
 
 def _path_a_should_close(task: OpenTask, thread_msgs: list, now: datetime) -> tuple[bool, str, tuple[str, ...]]:
     cutoff = now - timedelta(days=PATH_A_ACTIVITY_WINDOW_DAYS)
-    relevant = [
-        m for m in thread_msgs
-        if _msg_dt(m) is None or _msg_dt(m) >= max(cutoff, task.created_at)
-    ]
+    floor = max(cutoff, task.created_at)
+    relevant = []
+    for m in thread_msgs:
+        dt = _msg_dt(m)
+        if dt is None or dt >= floor:
+            relevant.append(m)
     if not relevant:
         return False, "", ()
     addrs = tuple({(getattr(m, "from_addr", "") or "").lower() for m in relevant if getattr(m, "from_addr", None)} - {""})
