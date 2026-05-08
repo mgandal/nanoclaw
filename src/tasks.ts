@@ -85,6 +85,18 @@ export interface TaskCloseResult {
   }>;
 }
 
+export interface TaskReopenInput {
+  id: number;
+  reason: string;
+}
+
+export interface TaskReopenResult {
+  success: boolean;
+  id?: number;
+  status?: 'open';
+  error?: string;
+}
+
 function db(): Database {
   return getDb();
 }
@@ -324,4 +336,45 @@ export function closeTask(input: TaskCloseInput): TaskCloseResult {
     status: updated.status,
     completed_at: updated.completed_at,
   };
+}
+
+// --- task_reopen ---------------------------------------------------------
+
+export function reopenTask(input: TaskReopenInput): TaskReopenResult {
+  if (!Number.isInteger(input.id) || input.id < 1) {
+    return { success: false, error: 'id must be a positive integer' };
+  }
+
+  const row = db()
+    .query('SELECT id, status, context FROM tasks WHERE id = ?')
+    .get(input.id) as { id: number; status: string; context: string | null } | undefined;
+
+  if (!row) {
+    return { success: false, error: `task ${input.id} not found` };
+  }
+
+  if (row.status === 'open') {
+    return { success: false, error: `task ${input.id} is not closed (status=${row.status})` };
+  }
+
+  const annotation = `[reopened: ${input.reason.slice(0, 200)}]`;
+  const newContext =
+    row.context != null ? `${row.context}\n${annotation}` : annotation;
+
+  const updated = db()
+    .query(
+      `UPDATE tasks
+         SET status = 'open', completed_at = NULL, context = ?
+         WHERE id = ? AND status != 'open'
+         RETURNING id, status`,
+    )
+    .get(newContext, input.id) as { id: number; status: 'open' } | undefined;
+
+  if (!updated) {
+    return { success: false, error: 'race: task changed status during reopen' };
+  }
+
+  logger.info({ taskId: updated.id, reason: input.reason }, 'reopenTask: task reopened');
+
+  return { success: true, id: updated.id, status: 'open' };
 }
