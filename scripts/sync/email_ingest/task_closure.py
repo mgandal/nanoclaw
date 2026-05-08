@@ -601,6 +601,7 @@ def scan_and_close(
             if other.source_ref:
                 same_thread_other_open[other.source_ref] = same_thread_other_open.get(other.source_ref, 0) + 1
 
+        suggest_threshold = profile.thresholds.get("suggest", 0.55)
         scored: list[tuple[float, ThreadCandidate]] = []
         for c in candidates[:5]:
             ms = _match_strength_for(entities, c, contacts)
@@ -618,6 +619,10 @@ def scan_and_close(
                 profile=profile, now=now,
                 same_thread_other_open_tasks=same_thread_other_open.get(c.thread_ref, 0),
             )
+            # Spec §Cross-reference: cap per-candidate, not winner-only.
+            # Prevents a wrong candidate from beating a followup-held correct one.
+            if c.thread_ref in open_followup_threads:
+                score = min(score, suggest_threshold - 0.001)
             scored.append((score, c))
         if not scored:
             continue
@@ -626,15 +631,18 @@ def scan_and_close(
         runner = scored[1][0] if len(scored) > 1 else None
         tier = assign_tier(top_score=top_score, runner_up=runner, profile=profile)
 
-        if top.thread_ref in open_followup_threads and tier == Tier.AUTO_CLOSE:
-            tier = Tier.SUGGEST
-
+        # Edge case 3: 3+ open tasks on same thread → all flagged to suggest.
         if same_thread_other_open.get(top.thread_ref, 0) >= 2:
             tier = Tier.SUGGEST
 
+        top_addrs = set(top.counterparty_addrs)
+        contact_email_in_top = any(
+            (contacts.get(k, {}).get("email") or "").lower() in top_addrs
+            for k in entities.contact_keys
+        )
         rule = (
-            "retroactive_full_email_match" if any(e in set(top.counterparty_addrs) for e in entities.emails)
-            else "retroactive_full_name_match" if entities.contact_keys
+            "retroactive_full_email_match" if any(e in top_addrs for e in entities.emails)
+            else "retroactive_full_name_match" if contact_email_in_top
             else "retroactive_name_only_match"
         )
         reasoning = (
