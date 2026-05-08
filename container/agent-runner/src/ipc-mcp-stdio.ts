@@ -1035,6 +1035,47 @@ Returns on auth denial: { success: false, error: "not authorized: only the creat
   },
 );
 
+server.tool(
+  'task_reopen',
+  `Reopen a previously closed task, restoring it to open/active status.
+
+Use when:
+- User disputes auto-closure in the morning digest ("that's not done yet", "reopen X").
+- User types /reopen <id> <reason> or an equivalent explicit request.
+- You closed a task in error and need to undo the closure.
+
+Do not use for:
+- Tasks that are already open — check task_list first if unsure.
+- Editing a task in flight — use task_close + task_add to replace it instead.
+
+Inputs:
+- id: exact integer task id (required, unambiguous; use task_list to look up if needed).
+- reason: non-empty string explaining why the task is being reopened (required; used by trainer).
+
+Returns on success: { success: true, id: <id>, title: <title>, status: "open", reopened_at: <iso> }.
+Returns on not-found or already-open: { success: false, error: "<message>" }.
+Returns on auth denial: { success: false, error: "not authorized: ..." }.`,
+  {
+    id: z.number().int().positive().describe('Exact task id to reopen'),
+    reason: z.string().min(1).describe('Why this task is being reopened (used by trainer)'),
+  },
+  async (args) => {
+    const requestId = `treopen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'task_reopen',
+      requestId,
+      ...args,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
+    return {
+      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
+      isError: !(result as { success?: boolean }).success,
+    };
+  },
+);
+
 if (isMain) {
   server.tool(
     'browser_navigate',
