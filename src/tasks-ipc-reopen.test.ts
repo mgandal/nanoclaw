@@ -30,7 +30,9 @@ describe('reopenTask', () => {
     // Verify DB state directly
     const row = _getTestDb()
       .query('SELECT status, completed_at, context FROM tasks WHERE id=?')
-      .get(taskId) as { status: string; completed_at: string | null; context: string } | undefined;
+      .get(taskId) as
+      | { status: string; completed_at: string | null; context: string }
+      | undefined;
 
     expect(row).toBeDefined();
     expect(row!.status).toBe('open');
@@ -63,7 +65,7 @@ describe('reopenTask', () => {
 
     const result = reopenTask({ id: taskId, reason: 'try reopen' });
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/not closed/);
+    expect(result.error).toMatch(/already open/);
   });
 
   it('returns error when task id does not exist', () => {

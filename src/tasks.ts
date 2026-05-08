@@ -347,34 +347,44 @@ export function reopenTask(input: TaskReopenInput): TaskReopenResult {
 
   const row = db()
     .query('SELECT id, status, context FROM tasks WHERE id = ?')
-    .get(input.id) as { id: number; status: string; context: string | null } | undefined;
+    .get(input.id) as
+    | { id: number; status: string; context: string | null }
+    | undefined;
 
   if (!row) {
     return { success: false, error: `task ${input.id} not found` };
   }
 
   if (row.status === 'open') {
-    return { success: false, error: `task ${input.id} is not closed (status=${row.status})` };
+    return {
+      success: false,
+      error: `task ${input.id} is already open`,
+    };
   }
 
-  const annotation = `[reopened: ${input.reason.slice(0, 200)}]`;
-  const newContext =
-    row.context != null ? `${row.context}\n${annotation}` : annotation;
+  const reasonLine = `[reopened: ${input.reason.slice(0, 200)}]`;
 
   const updated = db()
     .query(
       `UPDATE tasks
-         SET status = 'open', completed_at = NULL, context = ?
+         SET status = 'open',
+             completed_at = NULL,
+             context = CASE WHEN ? IS NULL THEN context
+                            WHEN context IS NULL THEN ?
+                            ELSE context || char(10) || ? END
          WHERE id = ? AND status != 'open'
          RETURNING id, status`,
     )
-    .get(newContext, input.id) as { id: number; status: 'open' } | undefined;
+    .get(reasonLine, reasonLine, reasonLine, input.id) as { id: number; status: 'open' } | undefined;
 
   if (!updated) {
     return { success: false, error: 'race: task changed status during reopen' };
   }
 
-  logger.info({ taskId: updated.id, reason: input.reason }, 'reopenTask: task reopened');
+  logger.info(
+    { taskId: updated.id, reason: input.reason },
+    'reopenTask: task reopened',
+  );
 
   return { success: true, id: updated.id, status: 'open' };
 }
