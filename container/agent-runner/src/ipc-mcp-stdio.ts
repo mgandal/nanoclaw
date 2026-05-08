@@ -1052,7 +1052,7 @@ Inputs:
 - id: exact integer task id (required, unambiguous; use task_list to look up if needed).
 - reason: non-empty string explaining why the task is being reopened (required; used by trainer).
 
-Returns on success: { success: true, id: <id>, title: <title>, status: "open", reopened_at: <iso> }.
+Returns on success: { success: true, id: <id>, status: "open" }.
 Returns on not-found or already-open: { success: false, error: "<message>" }.
 Returns on auth denial: { success: false, error: "not authorized: ..." }.`,
   {

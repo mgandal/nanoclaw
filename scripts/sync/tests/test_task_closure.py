@@ -517,3 +517,132 @@ def test_explain_returns_breakdown(tmp_path):
     )
     assert out["task_id"] == tid
     assert "candidates" in out
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 — additional tests: rollback, per-run-cap demotion, ts format compat
+# ---------------------------------------------------------------------------
+
+from email_ingest.task_closure import rollback_task
+
+
+def test_rollback_happy_path(tmp_path):
+    """Rollback reopens a closed task and writes both manual-rollback + reopened events."""
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, status, created_at) VALUES (?, ?, ?)",
+        ("Rollback me", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tasks WHERE title='Rollback me'").fetchone()[0]
+    # Mark closed
+    conn.execute("UPDATE tasks SET status='done', completed_at=? WHERE id=?",
+                 ("2026-05-05T10:00:00Z", tid))
+    conn.commit()
+    conn.close()
+
+    jsonl = tmp_path / "events.jsonl"
+    # Pre-seed a closure event so the title-mismatch check passes
+    jsonl.write_text(json.dumps({
+        "ts": "2026-05-05T10:00:00Z", "action": "closed",
+        "task_id": tid, "task_title": "Rollback me",
+    }) + "\n")
+
+    result = rollback_task(db_path=db_path, task_id=tid, jsonl_path=jsonl)
+    assert result == {"success": True}
+
+    # DB flipped back
+    conn = sqlite3.connect(db_path)
+    status, completed_at = conn.execute(
+        "SELECT status, completed_at FROM tasks WHERE id=?", (tid,)
+    ).fetchone()
+    conn.close()
+    assert status == "open"
+    assert completed_at is None
+
+    # Both events written
+    events = [json.loads(l) for l in jsonl.read_text().splitlines()]
+    actions = [e["action"] for e in events]
+    assert "manual-rollback" in actions
+    assert "reopened" in actions
+
+
+def test_rollback_title_mismatch_aborts(tmp_path):
+    """If task title in DB differs from last closure entry, refuse to rollback."""
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, status, created_at) VALUES (?, ?, ?)",
+        ("Different title now", "done", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tasks WHERE title='Different title now'").fetchone()[0]
+    conn.close()
+
+    jsonl = tmp_path / "events.jsonl"
+    jsonl.write_text(json.dumps({
+        "ts": "2026-05-05T10:00:00Z", "action": "closed",
+        "task_id": tid, "task_title": "Original title",
+    }) + "\n")
+
+    result = rollback_task(db_path=db_path, task_id=tid, jsonl_path=jsonl)
+    assert result["success"] is False
+    assert "safety abort" in result["error"]
+    assert "ID may have been reused" in result["error"]
+
+
+def test_per_run_cap_demotes_to_suggested(tmp_path):
+    """When closed_this_run exceeds per_run_cap, AUTO_CLOSE drops to suggested."""
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    # Insert TWO tasks that would both auto-close
+    conn.execute(
+        "INSERT INTO tasks (title, source, source_ref, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("Respond to A", "email", "gmail:t-a", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.execute(
+        "INSERT INTO tasks (title, source, source_ref, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        ("Respond to B", "email", "gmail:t-b", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    gmail = _FakeAdapter({
+        "t-a": [_user_sent_msg()],
+        "t-b": [_user_sent_msg()],
+    })
+    exchange = _FakeAdapter({})
+    jsonl = tmp_path / "events.jsonl"
+    pending = tmp_path / "pending.json"
+
+    report = scan_and_close(
+        db_path=db_path, gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=DEFAULT_PROFILE, contacts={}, followups=[], now=_now(),
+        jsonl_path=jsonl, pending_path=pending,
+        per_run_cap=1,  # cap at 1, so second auto-close gets demoted
+        dry_run=False,
+    )
+    assert report.closed_count == 1
+    assert report.suggested_count == 1
+
+    events = [json.loads(l) for l in jsonl.read_text().splitlines()]
+    suggested = [e for e in events if e["action"] == "suggested"]
+    assert len(suggested) == 1
+    assert "per-run cap exceeded" in suggested[0]["reasoning"]
+
+
+def test_read_recent_reopens_parses_ts_iso_format(tmp_path):
+    """Round-trip the exact TS-produced ts format ('2026-05-08T14:00:00Z') through the Python parser."""
+    from email_ingest.task_closure import read_recent_reopens as _read_recent_reopens
+    log_path = tmp_path / "events.jsonl"
+    # This is the exact format Date().toISOString().replace(/\.\d{3}Z$/, 'Z') produces
+    ts = "2026-05-08T14:00:00Z"
+    log_path.write_text(json.dumps({
+        "ts": ts, "action": "reopened", "task_id": 99, "reason": "test",
+        "feedback_source": "agent",
+    }) + "\n")
+
+    now = datetime(2026, 5, 8, 15, 0, 0, tzinfo=timezone.utc)
+    recent = _read_recent_reopens(log_path, window_days=7, now=now)
+    assert recent == {99}

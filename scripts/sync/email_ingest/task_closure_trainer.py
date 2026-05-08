@@ -7,6 +7,7 @@ never touches the live tasks table.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import logging
 import sys
@@ -33,18 +34,24 @@ def _load_events(path: Path, lookback_days: int, now: datetime) -> list[dict]:
         return []
     cutoff = now - timedelta(days=lookback_days)
     out: list[dict] = []
-    for raw in path.read_text().splitlines():
-        if not raw.strip():
-            continue
+    with path.open("r") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_SH)
         try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("trainer: corrupt JSONL line: %r", raw[:120])
-            continue
-        ts = _parse_ts(obj.get("ts", ""))
-        if ts is None or ts < cutoff:
-            continue
-        out.append(obj)
+            for raw in fp:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.warning("trainer: corrupt JSONL line: %r", raw[:120])
+                    continue
+                ts = _parse_ts(obj.get("ts", ""))
+                if ts is None or ts < cutoff:
+                    continue
+                out.append(obj)
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
     return out
 
 
