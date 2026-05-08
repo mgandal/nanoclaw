@@ -12,10 +12,10 @@
 import fs from 'fs';
 import path from 'path';
 
-import { addTask, closeTask, listTasksDetailed } from './tasks.js';
+import { addTask, closeTask, listTasksDetailed, reopenTask } from './tasks.js';
 import { logger } from './logger.js';
 
-const TASK_TYPES = new Set(['task_add', 'task_list', 'task_close']);
+const TASK_TYPES = new Set(['task_add', 'task_list', 'task_close', 'task_reopen']);
 
 export async function handleTasksIpc(
   data: Record<string, unknown>,
@@ -133,6 +133,26 @@ export async function handleTasksIpc(
           success: result.success,
         },
         'task_close IPC handled',
+      );
+      return true;
+    }
+    if (type === 'task_reopen') {
+      const id = data.id;
+      if (typeof id !== 'number' || !Number.isInteger(id) || id <= 0) {
+        writeResult({ success: false, error: 'id must be a positive integer' });
+        return true;
+      }
+      const reason =
+        typeof data.reason === 'string' ? data.reason.trim() : '';
+      if (!reason) {
+        writeResult({ success: false, error: 'reason is required' });
+        return true;
+      }
+      const result = reopenTask({ id, reason });
+      writeResult(result as unknown as Record<string, unknown>);
+      logger.info(
+        { sourceGroup, isMain, taskId: id, success: result.success },
+        'task_reopen IPC handled',
       );
       return true;
     }

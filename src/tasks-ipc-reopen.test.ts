@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 import { _initTestDatabase, _closeDatabase, _getTestDb } from './db.js';
 import { addTask, reopenTask } from './tasks.js';
+import { handleTasksIpc } from './tasks-ipc.js';
 
 describe('reopenTask', () => {
   beforeEach(() => {
@@ -72,5 +76,61 @@ describe('reopenTask', () => {
     const result = reopenTask({ id: 99999, reason: 'ghost' });
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/not found/);
+  });
+});
+
+describe('handleTasksIpc — task_reopen', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    _initTestDatabase();
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-ipc-reopen-'));
+  });
+  afterEach(() => {
+    _closeDatabase();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('success path: reopens a closed task and writes result file', async () => {
+    // Add a task and mark it done directly
+    const added = addTask({ title: 'Close me via IPC', source: 'manual' });
+    expect(added.success).toBe(true);
+    const id = added.id!;
+
+    _getTestDb()
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now'), context='[closed: test]' WHERE id=?",
+      )
+      .run(id);
+
+    const handled = await handleTasksIpc(
+      { type: 'task_reopen', requestId: 'req-test-1', id, reason: 'wrong thread' },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+    expect(handled).toBe(true);
+
+    const resultFile = path.join(
+      dataDir,
+      'ipc',
+      'telegram_claire',
+      'task_results',
+      'req-test-1.json',
+    );
+    const result = JSON.parse(fs.readFileSync(resultFile, 'utf-8')) as Record<string, unknown>;
+    expect(result.success).toBe(true);
+    expect(result.id).toBe(id);
+  });
+
+  it('malformed requestId: dropped (handled=true) and IPC dir not created', async () => {
+    const handled = await handleTasksIpc(
+      { type: 'task_reopen', requestId: '../escape', id: 1, reason: 'test' },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+    expect(handled).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, 'ipc'))).toBe(false);
   });
 });
