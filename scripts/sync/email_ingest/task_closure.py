@@ -83,6 +83,47 @@ class ClosureDecision:
     candidates_considered: int
 
 
-def score_candidate(*args, **kwargs) -> float:
-    """Score a (task, thread) pair. Implementation in Task B2."""
-    raise NotImplementedError("filled in Task B2")
+def _recency_factor(last_activity: datetime, now: datetime) -> float:
+    delta = now - last_activity
+    if delta.total_seconds() < 0:
+        return 1.0
+    if delta <= timedelta(hours=24):
+        return 1.0
+    if delta <= timedelta(days=7):
+        return 0.8
+    if delta <= timedelta(days=30):
+        return 0.5
+    return 0.2
+
+
+def score_candidate(
+    *,
+    task: OpenTask,
+    thread: ThreadActivity,
+    match_strength: float,
+    is_known_contact: bool,
+    profile: ClosureProfile,
+    now: datetime,
+    same_thread_other_open_tasks: int,
+) -> float:
+    base_trust = (
+        profile.contact_base_trust if is_known_contact
+        else profile.default_base_trust
+    )
+    cp_trust = base_trust
+    for addr in thread.counterparty_addrs:
+        if addr in profile.counterparty_trust:
+            cp_trust = profile.counterparty_trust[addr]
+            break
+
+    score = 0.0
+    score += match_strength * 0.40
+    score += _recency_factor(thread.last_activity, now) * 0.20
+    score += cp_trust * 0.20
+    if thread.user_sent_count > 0:
+        score += 0.20
+    if thread.counterparty_replied_count > 0:
+        score += 0.10
+    if same_thread_other_open_tasks > 0:
+        score -= 0.30
+    return max(0.0, min(1.0, score))
