@@ -454,3 +454,45 @@ def test_scan_respects_cooling_off(tmp_path):
     conn.close()
     assert status == "open"  # still open due to cooling-off
     assert report.cooling_off_count == 1
+
+
+def test_scan_path_b_known_contact_auto_closes(tmp_path):
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "INSERT INTO tasks (title, status, created_at) VALUES (?, ?, ?)",
+        ("Respond to Lucinda about R01 budget", "open", "2026-05-04T12:00:00Z"),
+    )
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tasks WHERE title LIKE '%Lucinda%'").fetchone()[0]
+    conn.close()
+
+    user_msg = _user_sent_msg()
+    cp_msg = MagicMock()
+    cp_msg.labels = []
+    cp_msg.metadata = {"is_sent": False}
+    cp_msg.from_addr = "lucinda.bertsinger@pennmedicine.upenn.edu"
+    cp_msg.subject = "R01 budget"
+
+    gmail = _FakeAdapter({"t-lucinda": [user_msg, cp_msg]})
+    gmail.search_threads_since = MagicMock(return_value=[
+        {"thread_id": "t-lucinda", "subject": "R01 budget",
+         "addrs": ["lucinda.bertsinger@pennmedicine.upenn.edu", "mike@self"]},
+    ])
+    exchange = _FakeAdapter({})
+    exchange.search_threads_since = MagicMock(return_value=[])
+
+    report = scan_and_close(
+        db_path=db_path, gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=DEFAULT_PROFILE,
+        contacts={"lucinda bertsinger": {"email": "lucinda.bertsinger@pennmedicine.upenn.edu"}},
+        followups=[], now=_now(),
+        jsonl_path=tmp_path / "events.jsonl", pending_path=tmp_path / "p.json",
+        per_run_cap=5, dry_run=False,
+    )
+
+    conn = sqlite3.connect(db_path)
+    status = conn.execute("SELECT status FROM tasks WHERE id=?", (tid,)).fetchone()[0]
+    conn.close()
+    assert status == "done"
+    assert report.closed_count == 1

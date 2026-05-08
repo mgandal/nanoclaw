@@ -376,6 +376,89 @@ PATH_A_ACTIVITY_WINDOW_DAYS = 90
 COOLING_OFF_DAYS = 7
 
 
+@dataclass(frozen=True)
+class ThreadCandidate:
+    thread_ref: str
+    subject: str
+    counterparty_addrs: tuple[str, ...]
+    last_activity: datetime
+    user_sent_count: int
+    counterparty_replied_count: int
+
+
+def _gather_candidate_threads(
+    *,
+    entities: ExtractedEntities,
+    contacts: dict[str, dict],
+    gmail_adapter,
+    exchange_adapter,
+    since: datetime,
+) -> list[ThreadCandidate]:
+    addrs: list[str] = list(entities.emails)
+    for k in entities.contact_keys:
+        email = contacts.get(k, {}).get("email")
+        if email:
+            addrs.append(email.lower())
+    if not addrs:
+        return []
+    epoch = int(since.timestamp())
+    out: list[ThreadCandidate] = []
+    for src, adapter in [("gmail", gmail_adapter), ("exchange", exchange_adapter)]:
+        if not hasattr(adapter, "search_threads_since"):
+            continue
+        try:
+            hits = adapter.search_threads_since(epoch, addrs) or []
+        except Exception as e:
+            log.warning("search_threads_since(%s) failed: %s", src, e)
+            continue
+        for h in hits[:5]:
+            tid = h.get("thread_id")
+            if not tid:
+                continue
+            ref = f"{src}:{tid}"
+            try:
+                msgs = adapter.fetch_thread_messages(tid, epoch)
+            except Exception:
+                msgs = []
+            user_sent = sum(1 for m in msgs if _is_user_sent(m))
+            cp_replied = len(msgs) - user_sent
+            last_dt = max((_msg_dt(m) for m in msgs if _msg_dt(m) is not None), default=since)
+            out.append(ThreadCandidate(
+                thread_ref=ref,
+                subject=h.get("subject", ""),
+                counterparty_addrs=tuple(a.lower() for a in (h.get("addrs") or [])),
+                last_activity=last_dt,
+                user_sent_count=user_sent,
+                counterparty_replied_count=cp_replied,
+            ))
+    return out
+
+
+def _match_strength_for(
+    entities: ExtractedEntities, candidate: ThreadCandidate, contacts: dict[str, dict]
+) -> float:
+    cand_set = set(candidate.counterparty_addrs)
+    if entities.emails and any(e in cand_set for e in entities.emails):
+        return 1.0
+    for k in entities.contact_keys:
+        email = (contacts.get(k, {}).get("email") or "").lower()
+        if email and email in cand_set:
+            return 0.8
+    for code in entities.project_codes:
+        if code.lower() in (candidate.subject or "").lower():
+            return 0.3
+    return 0.5
+
+
+def _is_known_contact(candidate: ThreadCandidate, contacts: dict[str, dict]) -> bool:
+    cand_set = set(candidate.counterparty_addrs)
+    for v in contacts.values():
+        email = (v.get("email") or "").lower()
+        if email and email in cand_set:
+            return True
+    return False
+
+
 @dataclass
 class ClosureRunReport:
     closed_count: int = 0
@@ -504,7 +587,71 @@ def scan_and_close(
             )
             continue
 
-        # Path B is added in Task B9.
+        # Path B: retroactive match
+        entities = extract_entities(title=task.title, context=task.context, contacts=contacts)
+        candidates = _gather_candidate_threads(
+            entities=entities, contacts=contacts,
+            gmail_adapter=gmail_adapter, exchange_adapter=exchange_adapter,
+            since=task.created_at,
+        )
+        same_thread_other_open: dict[str, int] = {}
+        for other in open_tasks:
+            if other.id == task.id:
+                continue
+            if other.source_ref:
+                same_thread_other_open[other.source_ref] = same_thread_other_open.get(other.source_ref, 0) + 1
+
+        scored: list[tuple[float, ThreadCandidate]] = []
+        for c in candidates[:5]:
+            ms = _match_strength_for(entities, c, contacts)
+            score = score_candidate(
+                task=task,
+                thread=ThreadActivity(
+                    thread_ref=c.thread_ref, subject=c.subject,
+                    user_sent_count=c.user_sent_count,
+                    counterparty_replied_count=c.counterparty_replied_count,
+                    last_activity=c.last_activity,
+                    counterparty_addrs=c.counterparty_addrs,
+                ),
+                match_strength=ms,
+                is_known_contact=_is_known_contact(c, contacts),
+                profile=profile, now=now,
+                same_thread_other_open_tasks=same_thread_other_open.get(c.thread_ref, 0),
+            )
+            scored.append((score, c))
+        if not scored:
+            continue
+        scored.sort(key=lambda x: x[0], reverse=True)
+        top_score, top = scored[0]
+        runner = scored[1][0] if len(scored) > 1 else None
+        tier = assign_tier(top_score=top_score, runner_up=runner, profile=profile)
+
+        if top.thread_ref in open_followup_threads and tier == Tier.AUTO_CLOSE:
+            tier = Tier.SUGGEST
+
+        if same_thread_other_open.get(top.thread_ref, 0) >= 2:
+            tier = Tier.SUGGEST
+
+        rule = (
+            "retroactive_full_email_match" if any(e in set(top.counterparty_addrs) for e in entities.emails)
+            else "retroactive_full_name_match" if entities.contact_keys
+            else "retroactive_name_only_match"
+        )
+        reasoning = (
+            f"Matched thread '{top.subject}' (score {top_score:.2f}, rule {rule}). "
+            f"User-sent {top.user_sent_count}, counterparty-replied {top.counterparty_replied_count}."
+        )
+        decision = ClosureDecision(
+            task_id=task.id, task_title=task.title,
+            thread_ref=top.thread_ref, thread_addrs=top.counterparty_addrs,
+            score=top_score, tier=tier, rule=rule,
+            reasoning=reasoning, candidates_considered=len(scored),
+        )
+        closed_this_run = _emit_decision(
+            decision, jsonl_path, pending_decisions, report,
+            db_path=db_path, dry_run=dry_run,
+            closed_this_run=closed_this_run, per_run_cap=per_run_cap,
+        )
 
     # Rewrite pending file atomically
     pending_payload = {
