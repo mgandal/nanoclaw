@@ -14,6 +14,7 @@ import fcntl
 import json
 import logging
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -307,3 +308,65 @@ def read_recent_reopens(path: Path, *, window_days: int, now: datetime) -> set[i
         finally:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
     return out
+
+
+def _parse_db_ts(s: str) -> datetime:
+    s = s.replace(" ", "T")
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    if "+" not in s and "-" not in s[10:]:
+        s = s + "+00:00"
+    return datetime.fromisoformat(s)
+
+
+def fetch_open_tasks(db_path: Path) -> list[OpenTask]:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, title, context, owner, priority, source, source_ref,
+                   group_folder, created_at
+              FROM tasks
+             WHERE status = 'open'
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    out: list[OpenTask] = []
+    for r in rows:
+        try:
+            created = _parse_db_ts(r["created_at"])
+        except ValueError:
+            log.warning("task %s: unparseable created_at %r; skipping", r["id"], r["created_at"])
+            continue
+        out.append(OpenTask(
+            id=r["id"], title=r["title"], context=r["context"],
+            owner=r["owner"], priority=r["priority"],
+            source=r["source"], source_ref=r["source_ref"],
+            group_folder=r["group_folder"], created_at=created,
+        ))
+    return out
+
+
+def close_task_in_db(db_path: Path, task_id: int, *, reasoning: str) -> bool:
+    note = f"[auto-closed: {reasoning[:200]}]"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """
+            UPDATE tasks
+               SET status = 'done',
+                   completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                   context = CASE WHEN context IS NULL THEN ?
+                                  ELSE context || char(10) || ? END
+             WHERE id = ? AND status = 'open'
+            """,
+            (note, note, task_id),
+        )
+        conn.commit()
+        return cur.rowcount == 1
+    finally:
+        conn.close()

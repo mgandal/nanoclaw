@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from email_ingest.task_closure import (
     DEFAULT_PROFILE,
     extract_entities,
     ExtractedEntities,
+    fetch_open_tasks,
+    close_task_in_db,
 )
 
 
@@ -272,3 +275,63 @@ def test_read_recent_reopens_skips_corrupt_lines(tmp_path, caplog):
     with caplog.at_level(_logging.WARNING):
         recent = read_recent_reopens(log_path, window_days=7, now=_now())
     assert recent == {1, 2}
+
+
+def _make_db(tmp_path: Path) -> Path:
+    db_path = tmp_path / "messages.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE tasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          context TEXT,
+          owner TEXT,
+          priority INTEGER NOT NULL DEFAULT 3,
+          due_date TEXT,
+          status TEXT NOT NULL DEFAULT 'open',
+          source TEXT NOT NULL DEFAULT 'manual',
+          source_ref TEXT,
+          group_folder TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          completed_at TEXT,
+          CHECK (status IN ('open','done','archived')),
+          CHECK (priority BETWEEN 1 AND 4)
+        );
+        INSERT INTO tasks (title, status, created_at) VALUES
+          ('Open task A', 'open',  '2026-05-01T12:00:00Z'),
+          ('Open task B', 'open',  '2026-05-02T12:00:00Z'),
+          ('Closed task', 'done', '2026-04-01T12:00:00Z');
+        """
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_fetch_open_tasks_excludes_closed(tmp_path):
+    db_path = _make_db(tmp_path)
+    open_tasks = fetch_open_tasks(db_path)
+    assert {t.title for t in open_tasks} == {"Open task A", "Open task B"}
+
+
+def test_close_task_flips_status_and_writes_completed_at(tmp_path):
+    db_path = _make_db(tmp_path)
+    [task_a] = [t for t in fetch_open_tasks(db_path) if t.title == "Open task A"]
+    ok = close_task_in_db(db_path, task_a.id, reasoning="auto: Lucinda replied")
+    assert ok is True
+    conn = sqlite3.connect(db_path)
+    row = conn.execute("SELECT status, completed_at, context FROM tasks WHERE id=?", (task_a.id,)).fetchone()
+    conn.close()
+    status, completed_at, context = row
+    assert status == "done"
+    assert completed_at is not None
+    assert "auto" in (context or "")
+
+
+def test_close_task_idempotent_against_race(tmp_path):
+    db_path = _make_db(tmp_path)
+    [task_a] = [t for t in fetch_open_tasks(db_path) if t.title == "Open task A"]
+    assert close_task_in_db(db_path, task_a.id, reasoning="r") is True
+    assert close_task_in_db(db_path, task_a.id, reasoning="r2") is False
