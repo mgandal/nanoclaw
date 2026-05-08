@@ -13,6 +13,7 @@ from email_ingest.task_closure import (
     ThreadActivity,
     ClosureDecision,
     score_candidate,
+    assign_tier,
     Tier,
     DEFAULT_PROFILE,
 )
@@ -122,3 +123,23 @@ def test_score_clamps_to_unit_interval():
         same_thread_other_open_tasks=0,
     )
     assert 0.0 <= score <= 1.0
+
+
+def test_tier_auto_close_clear_winner():
+    assert assign_tier(top_score=0.86, runner_up=0.40, profile=DEFAULT_PROFILE) == Tier.AUTO_CLOSE
+
+
+def test_tier_too_close_to_call_drops_to_suggest():
+    assert assign_tier(top_score=0.80, runner_up=0.78, profile=DEFAULT_PROFILE) == Tier.SUGGEST
+
+
+def test_tier_just_above_suggest():
+    assert assign_tier(top_score=0.60, runner_up=0.20, profile=DEFAULT_PROFILE) == Tier.SUGGEST
+
+
+def test_tier_below_floor_drops():
+    assert assign_tier(top_score=0.40, runner_up=0.10, profile=DEFAULT_PROFILE) == Tier.DROP
+
+
+def test_tier_no_runner_up_uses_zero():
+    assert assign_tier(top_score=0.80, runner_up=None, profile=DEFAULT_PROFILE) == Tier.AUTO_CLOSE

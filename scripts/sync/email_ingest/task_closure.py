@@ -127,3 +127,22 @@ def score_candidate(
     if same_thread_other_open_tasks > 0:
         score -= 0.30
     return max(0.0, min(1.0, score))
+
+
+RUNNER_UP_GAP_REQUIRED = 0.20
+
+
+def assign_tier(
+    *,
+    top_score: float,
+    runner_up: Optional[float],
+    profile: ClosureProfile,
+) -> Tier:
+    auto = profile.thresholds.get("auto_close", 0.75)
+    suggest = profile.thresholds.get("suggest", 0.55)
+    runner = runner_up if runner_up is not None else 0.0
+    if top_score >= auto and (top_score - runner) >= RUNNER_UP_GAP_REQUIRED:
+        return Tier.AUTO_CLOSE
+    if top_score >= suggest:
+        return Tier.SUGGEST
+    return Tier.DROP
