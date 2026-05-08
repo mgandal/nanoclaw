@@ -10,6 +10,7 @@
 // container MCP tool polls for the file, parses, returns to the model.
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { addTask, closeTask, listTasksDetailed, reopenTask } from './tasks.js';
@@ -158,6 +159,30 @@ export async function handleTasksIpc(
         callerGroup: sourceGroup,
         callerIsMain: isMain,
       });
+      if (result.success) {
+        try {
+          const jsonlPath = path.join(
+            process.env.HOME ?? os.homedir(),
+            '.cache',
+            'email-ingest',
+            'task-closures.jsonl',
+          );
+          fs.mkdirSync(path.dirname(jsonlPath), { recursive: true });
+          const event = {
+            ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            action: 'reopened',
+            task_id: id,
+            reason,
+            feedback_source: 'agent',
+          };
+          fs.appendFileSync(jsonlPath, JSON.stringify(event) + '\n');
+        } catch (err) {
+          logger.warn(
+            { taskId: id, err },
+            'task_reopen: failed to append cooling-off event (non-fatal)',
+          );
+        }
+      }
       writeResult(result as unknown as Record<string, unknown>);
       logger.info(
         { sourceGroup, isMain, taskId: id, success: result.success },

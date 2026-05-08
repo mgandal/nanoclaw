@@ -325,7 +325,9 @@ def run_followups_passes(
                 project_root / "groups" / "global" / "CLAUDE.md"
             )
             profile = load_profile(profile_path)
-            dry_run = os.environ.get("TASK_CLOSURE_DRY_RUN", "0") == "1"
+            # Default to dry-run; user opts into live closures via TASK_CLOSURE_DRY_RUN=0
+            # (see Stage I3 of docs/superpowers/specs/2026-05-06-email-task-closure-design.md).
+            dry_run = os.environ.get("TASK_CLOSURE_DRY_RUN", "1") == "1"
             per_run_cap = int(os.environ.get("TASK_CLOSURE_CAP", "3"))
             report = scan_and_close(
                 db_path=db_path,

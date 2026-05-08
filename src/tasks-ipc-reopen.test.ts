@@ -190,6 +190,7 @@ describe('handleTasksIpc — task_reopen', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
+
   it('success path: reopens a closed task and writes result file', async () => {
     // Add a task and mark it done directly
     const added = addTask({ title: 'Close me via IPC', source: 'manual' });
@@ -265,5 +266,78 @@ describe('handleTasksIpc — task_reopen', () => {
       success: false,
       error: 'id must be a positive integer',
     });
+  });
+});
+
+describe('handleTasksIpc — task_reopen writes cooling-off event', () => {
+  let dataDir: string;
+  let homeDir: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    _initTestDatabase();
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'taskreopen-cool-'));
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'taskreopen-home-'));
+    originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
+  });
+
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+    _closeDatabase();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
+  });
+
+  it('appends a reopened event to task-closures.jsonl on success', async () => {
+    const add = addTask({ title: 'Cool me off', source: 'manual' });
+    expect(add.success).toBe(true);
+    _getTestDb()
+      .query("UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?")
+      .run(add.id!);
+
+    await handleTasksIpc(
+      {
+        type: 'task_reopen',
+        requestId: 'req-cool-1',
+        id: add.id!,
+        reason: 'morning digest dispute',
+      },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+
+    const jsonlPath = path.join(homeDir, '.cache', 'email-ingest', 'task-closures.jsonl');
+    expect(fs.existsSync(jsonlPath)).toBe(true);
+    const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const event = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(event.action).toBe('reopened');
+    expect(event.task_id).toBe(add.id);
+    expect(event.reason).toBe('morning digest dispute');
+    expect(event.feedback_source).toBe('agent');
+    expect(event.ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  });
+
+  it('does not write a reopened event when reopen fails (already open)', async () => {
+    const add = addTask({ title: 'Already open cool', source: 'manual' });
+    expect(add.success).toBe(true);
+
+    await handleTasksIpc(
+      {
+        type: 'task_reopen',
+        requestId: 'req-cool-2',
+        id: add.id!,
+        reason: 'should not write',
+      },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+
+    const jsonlPath = path.join(homeDir, '.cache', 'email-ingest', 'task-closures.jsonl');
+    expect(fs.existsSync(jsonlPath)).toBe(false);
   });
 });

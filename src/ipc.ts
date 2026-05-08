@@ -2051,7 +2051,8 @@ export async function processTaskIpc(
         typeof data.type === 'string' &&
         (data.type === 'task_add' ||
           data.type === 'task_list' ||
-          data.type === 'task_close')
+          data.type === 'task_close' ||
+          data.type === 'task_reopen')
       ) {
         handled = await handleTasksIpc(
           data as Record<string, unknown>,
