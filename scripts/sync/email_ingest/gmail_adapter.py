@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import re
 from pathlib import Path
 
 from email_ingest.secure_write import write_file_secure
@@ -343,3 +344,51 @@ class GmailAdapter:
         except Exception as e:
             log.warning("Gmail message fetch failed for %s: %s", msg_id, e)
             return None
+
+    def search_threads_since(self, epoch: int, addrs: list[str]) -> list[dict]:
+        """Find Gmail threads with activity since `epoch` involving any `addrs`.
+
+        Returns up to 25 dicts with thread_id, subject, addrs.
+        """
+        if not addrs:
+            return []
+        if not self._service:
+            if not self.connect():
+                return []
+        addr_q = " OR ".join(f"(from:{a} OR to:{a})" for a in addrs[:10])
+        q = f"({addr_q}) after:{epoch}"
+        try:
+            resp = self._service.users().threads().list(
+                userId="me", q=q, maxResults=25,
+            ).execute()
+        except Exception as e:
+            log.warning("search_threads_since list failed: %s", e)
+            return []
+        out: list[dict] = []
+        for t in resp.get("threads", []):
+            tid = t.get("id")
+            if not tid:
+                continue
+            try:
+                full = self._service.users().threads().get(
+                    userId="me", id=tid, format="metadata",
+                    metadataHeaders=["Subject", "From", "To", "Cc"],
+                ).execute()
+            except Exception:
+                continue
+            subject = ""
+            addrs_seen: set[str] = set()
+            for msg in full.get("messages", []):
+                for h in (msg.get("payload") or {}).get("headers", []):
+                    name = h.get("name", "").lower()
+                    val = h.get("value", "")
+                    if name == "subject" and not subject:
+                        subject = val
+                    elif name in ("from", "to", "cc"):
+                        for piece in val.split(","):
+                            m = re.search(r"<([^>]+)>", piece)
+                            addr = (m.group(1) if m else piece).strip().lower()
+                            if "@" in addr:
+                                addrs_seen.add(addr)
+            out.append({"thread_id": tid, "subject": subject, "addrs": sorted(addrs_seen)})
+        return out

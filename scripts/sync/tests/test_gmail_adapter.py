@@ -78,3 +78,28 @@ def test_normalize_missing_headers_uses_defaults():
     assert email.from_addr == ""
     assert email.subject == "(no subject)"
     assert email.body == ""
+
+
+from unittest.mock import MagicMock
+from email_ingest.gmail_adapter import GmailAdapter
+
+
+def test_search_threads_since_uses_query_addrs():
+    g = GmailAdapter()
+    g._service = MagicMock()
+    g._service.users.return_value.threads.return_value.list.return_value.execute.return_value = {
+        "threads": [{"id": "t1", "snippet": "Re: Test"}],
+    }
+    g._service.users.return_value.threads.return_value.get.return_value.execute.return_value = {
+        "id": "t1", "messages": [
+            {"payload": {"headers": [
+                {"name": "Subject", "value": "Re: Test"},
+                {"name": "From", "value": "Lucinda <lucinda@x.com>"},
+                {"name": "To", "value": "mike@self"},
+            ]}},
+        ],
+    }
+    out = g.search_threads_since(epoch=1700000000, addrs=["lucinda@x.com"])
+    assert len(out) == 1
+    assert out[0]["thread_id"] == "t1"
+    assert "lucinda@x.com" in [a.lower() for a in out[0]["addrs"]]

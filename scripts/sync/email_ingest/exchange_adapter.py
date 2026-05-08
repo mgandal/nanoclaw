@@ -291,3 +291,40 @@ class ExchangeAdapter:
             "Exchange conversation fetch not yet implemented in bridge; returning []"
         )
         return []
+
+    def search_threads_since(self, epoch: int, addrs: list[str]) -> list[dict]:
+        """Exchange thread search by participant addresses.
+
+        AppleScript-driven Exchange is slow (~22s/query). v1: scan recent
+        inbox+sent, filter by participant overlap, cap to 25 threads.
+        """
+        if not addrs:
+            return []
+        addrs_lc = {a.lower() for a in addrs}
+        threads: dict[str, dict] = {}
+        try:
+            recent = self.list_recent_messages(epoch=epoch, limit=50)
+        except AttributeError:
+            # list_recent_messages may not exist yet; v1 limitation.
+            log.info("ExchangeAdapter.list_recent_messages not available; skipping")
+            return []
+        except Exception as e:
+            log.warning("exchange search_threads_since failed: %s", e)
+            return []
+        for m in recent:
+            thread_id = getattr(m, "thread_id", None) or m.id
+            m_addrs = set()
+            from_a = (getattr(m, "from_addr", "") or "").lower()
+            if from_a:
+                m_addrs.add(from_a)
+            for r in getattr(m, "to_addrs", None) or []:
+                m_addrs.add(r.lower())
+            if not (m_addrs & addrs_lc):
+                continue
+            if thread_id not in threads:
+                threads[thread_id] = {
+                    "thread_id": thread_id,
+                    "subject": getattr(m, "subject", ""),
+                    "addrs": sorted(m_addrs),
+                }
+        return list(threads.values())[:25]
