@@ -496,3 +496,24 @@ def test_scan_path_b_known_contact_auto_closes(tmp_path):
     conn.close()
     assert status == "done"
     assert report.closed_count == 1
+
+
+def test_explain_returns_breakdown(tmp_path):
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO tasks (title, status, created_at) VALUES (?, ?, ?)",
+                 ("Respond to Lucinda", "open", "2026-05-04T12:00:00Z"))
+    conn.commit()
+    tid = conn.execute("SELECT id FROM tasks WHERE title LIKE '%Lucinda%'").fetchone()[0]
+    conn.close()
+
+    from email_ingest.task_closure import explain_task
+    out = explain_task(
+        db_path=db_path, task_id=tid,
+        gmail_adapter=_FakeAdapter({}), exchange_adapter=_FakeAdapter({}),
+        profile=DEFAULT_PROFILE,
+        contacts={"lucinda bertsinger": {"email": "lucinda@x.com"}},
+        followups=[], now=_now(),
+    )
+    assert out["task_id"] == tid
+    assert "candidates" in out

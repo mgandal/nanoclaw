@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -740,3 +741,185 @@ def _emit_decision(
         pending_decisions.append(event)
         report.suggested_count += 1
     return closed_this_run
+
+
+import argparse
+
+
+def explain_task(
+    *,
+    db_path: Path, task_id: int,
+    gmail_adapter, exchange_adapter,
+    profile: ClosureProfile, contacts: dict[str, dict],
+    followups: list, now: datetime,
+) -> dict:
+    open_tasks = fetch_open_tasks(db_path)
+    target = next((t for t in open_tasks if t.id == task_id), None)
+    if target is None:
+        return {"task_id": task_id, "error": "task not found or not open"}
+    entities = extract_entities(title=target.title, context=target.context, contacts=contacts)
+    candidates = _gather_candidate_threads(
+        entities=entities, contacts=contacts,
+        gmail_adapter=gmail_adapter, exchange_adapter=exchange_adapter,
+        since=target.created_at,
+    )
+    scored = []
+    for c in candidates[:5]:
+        ms = _match_strength_for(entities, c, contacts)
+        s = score_candidate(
+            task=target,
+            thread=ThreadActivity(
+                thread_ref=c.thread_ref, subject=c.subject,
+                user_sent_count=c.user_sent_count,
+                counterparty_replied_count=c.counterparty_replied_count,
+                last_activity=c.last_activity,
+                counterparty_addrs=c.counterparty_addrs,
+            ),
+            match_strength=ms,
+            is_known_contact=_is_known_contact(c, contacts),
+            profile=profile, now=now,
+            same_thread_other_open_tasks=0,
+        )
+        scored.append({
+            "thread_ref": c.thread_ref, "subject": c.subject,
+            "match_strength": ms, "score": round(s, 3),
+        })
+    return {
+        "task_id": task_id, "title": target.title,
+        "entities": {
+            "emails": list(entities.emails),
+            "contact_keys": list(entities.contact_keys),
+            "project_codes": list(entities.project_codes),
+            "unknown_full_names": list(entities.unknown_full_names),
+        },
+        "candidates": scored,
+    }
+
+
+def rollback_task(*, db_path: Path, task_id: int, jsonl_path: Path) -> dict:
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT title, status FROM tasks WHERE id=?", (task_id,)).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {"success": False, "error": f"task {task_id} not found"}
+    cur_title, cur_status = row
+    last_close = None
+    if jsonl_path.exists():
+        for raw in jsonl_path.read_text().splitlines():
+            try:
+                ev = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("task_id") == task_id and ev.get("action") in ("closed", "dry-closed"):
+                last_close = ev
+    if last_close and last_close.get("task_title") and last_close["task_title"] != cur_title:
+        return {
+            "success": False,
+            "error": (
+                f"safety abort: task {task_id} title in DB ({cur_title!r}) does not "
+                f"match title in last closure entry ({last_close['task_title']!r}). "
+                "ID may have been reused."
+            ),
+        }
+    if cur_status == "open":
+        return {"success": False, "error": "already open"}
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE tasks SET status='open', completed_at=NULL WHERE id=? AND status!='open'",
+            (task_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 1:
+        append_jsonl_event(jsonl_path, {
+            "action": "manual-rollback", "task_id": task_id, "task_title": cur_title,
+        })
+        append_jsonl_event(jsonl_path, {
+            "action": "reopened", "task_id": task_id, "task_title": cur_title,
+            "reason": "manual --rollback", "feedback_source": "cli",
+        })
+        return {"success": True}
+    return {"success": False, "error": "race during rollback"}
+
+
+def _load_contacts_from_claude_md(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        log.info("contacts: %s not found, skipping", path)
+        return {}
+    text = path.read_text()
+    out: dict[str, dict] = {}
+    in_table = False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("| Name ") and "Email" in line:
+            in_table = True
+            continue
+        if in_table:
+            if not line.startswith("|"):
+                in_table = False
+                continue
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if len(cells) >= 3 and "@" in cells[2]:
+                out[cells[0].lower()] = {"email": cells[2].lower()}
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO)
+    p = argparse.ArgumentParser()
+    p.add_argument("--db", default=str(Path.cwd() / "store" / "messages.db"))
+    p.add_argument("--jsonl", default=str(Path.home() / ".cache/email-ingest/task-closures.jsonl"))
+    p.add_argument("--pending", default=str(Path.home() / ".cache/email-ingest/task-closures-pending.json"))
+    p.add_argument("--profile", default=str(Path.home() / ".cache/email-ingest/task-closure-profile.json"))
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--explain", type=int)
+    p.add_argument("--rollback", type=int)
+    p.add_argument("--per-run-cap", type=int, default=5)
+    args = p.parse_args(argv)
+
+    profile = load_profile(Path(args.profile))
+    from email_ingest.gmail_adapter import GmailAdapter
+    from email_ingest.exchange_adapter import ExchangeAdapter
+    gmail = GmailAdapter()
+    gmail.connect()
+    exchange = ExchangeAdapter()
+    contacts = _load_contacts_from_claude_md(Path("groups/global/CLAUDE.md"))
+    followups: list = []
+    now = datetime.now(timezone.utc)
+
+    if args.explain is not None:
+        result = explain_task(
+            db_path=Path(args.db), task_id=args.explain,
+            gmail_adapter=gmail, exchange_adapter=exchange,
+            profile=profile, contacts=contacts, followups=followups, now=now,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+
+    if args.rollback is not None:
+        result = rollback_task(
+            db_path=Path(args.db), task_id=args.rollback,
+            jsonl_path=Path(args.jsonl),
+        )
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("success") else 1
+
+    report = scan_and_close(
+        db_path=Path(args.db),
+        gmail_adapter=gmail, exchange_adapter=exchange,
+        profile=profile, contacts=contacts, followups=followups, now=now,
+        jsonl_path=Path(args.jsonl), pending_path=Path(args.pending),
+        per_run_cap=args.per_run_cap, dry_run=args.dry_run,
+    )
+    log.info("task-closure: closed=%d suggested=%d cooling_off=%d skipped=%d",
+             report.closed_count, report.suggested_count,
+             report.cooling_off_count, report.skipped_count)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
