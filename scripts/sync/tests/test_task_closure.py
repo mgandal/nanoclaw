@@ -16,6 +16,8 @@ from email_ingest.task_closure import (
     assign_tier,
     Tier,
     DEFAULT_PROFILE,
+    extract_entities,
+    ExtractedEntities,
 )
 
 
@@ -143,3 +145,47 @@ def test_tier_below_floor_drops():
 
 def test_tier_no_runner_up_uses_zero():
     assert assign_tier(top_score=0.80, runner_up=None, profile=DEFAULT_PROFILE) == Tier.AUTO_CLOSE
+
+
+def test_extract_email_address():
+    e = extract_entities(
+        title="Follow up with lucinda.bertsinger@pennmedicine.upenn.edu re: PO",
+        context=None, contacts={},
+    )
+    assert "lucinda.bertsinger@pennmedicine.upenn.edu" in e.emails
+
+
+def test_extract_known_contact_first_name():
+    e = extract_entities(
+        title="Respond to Lucinda about R01 budget",
+        context=None,
+        contacts={"lucinda bertsinger": {"email": "lucinda.bertsinger@pennmedicine.upenn.edu"}},
+    )
+    assert "lucinda bertsinger" in e.contact_keys
+
+
+def test_extract_project_codes():
+    e = extract_entities(
+        title="Update R01-MH137578 documentation",
+        context="Also covers RIS 97589/00 and the COGEDE-D-26-00011 manuscript",
+        contacts={},
+    )
+    assert any("R01" in p for p in e.project_codes)
+    assert any("RIS 97589" in p for p in e.project_codes)
+    assert any("COGEDE-D-26-00011" in p for p in e.project_codes)
+
+
+def test_extract_unknown_full_name():
+    e = extract_entities(
+        title="Reach out to Joe Buxbaum re: ASD cohort",
+        context=None, contacts={},
+    )
+    assert ("Joe", "Buxbaum") in e.unknown_full_names
+
+
+def test_extract_ignores_common_capitalized_words():
+    e = extract_entities(
+        title="Respond to Elise email",
+        context=None, contacts={},
+    )
+    assert ("Respond", "To") not in e.unknown_full_names

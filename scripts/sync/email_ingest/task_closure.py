@@ -12,6 +12,7 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,6 +69,29 @@ class ClosureProfile:
 
 
 DEFAULT_PROFILE = ClosureProfile.default()
+
+
+EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+PROJECT_PATTERNS = [
+    re.compile(r"\bR0?[01][0-9-]+", re.IGNORECASE),
+    re.compile(r"\bK99/R00\b", re.IGNORECASE),
+    re.compile(r"\bRIS\s+\d+(?:/\d+)?", re.IGNORECASE),
+    re.compile(r"\bT32[\w-]*\b", re.IGNORECASE),
+    re.compile(r"\b[A-Z]{4,}-D-\d{2}-\d{5}\b"),
+]
+NAME_STOPWORDS = frozenset({
+    "Respond", "Reply", "Follow", "Reach", "Send", "Email", "To", "From",
+    "Update", "Review", "Submit", "Check", "Schedule", "Cancel", "Confirm",
+    "About", "With", "Re", "Subject", "Note",
+})
+
+
+@dataclass(frozen=True)
+class ExtractedEntities:
+    emails: tuple[str, ...]
+    contact_keys: tuple[str, ...]
+    project_codes: tuple[str, ...]
+    unknown_full_names: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -146,3 +170,50 @@ def assign_tier(
     if top_score >= suggest:
         return Tier.SUGGEST
     return Tier.DROP
+
+
+def extract_entities(
+    *,
+    title: str,
+    context: Optional[str],
+    contacts: dict[str, dict],
+) -> ExtractedEntities:
+    body = title if context is None else f"{title}\n{context}"
+    emails = tuple(sorted({m.group(0).lower() for m in EMAIL_RE.finditer(body)}))
+
+    contact_keys: list[str] = []
+    body_lower = body.lower()
+    for full_name in contacts.keys():
+        for part in full_name.split():
+            if len(part) >= 3 and re.search(rf"\b{re.escape(part)}\b", body_lower):
+                contact_keys.append(full_name)
+                break
+
+    project_codes: list[str] = []
+    for pat in PROJECT_PATTERNS:
+        for m in pat.finditer(body):
+            project_codes.append(m.group(0))
+
+    full_name_re = re.compile(r"\b([A-Z][a-z]{1,})\s+([A-Z][a-z]{1,})\b")
+    contact_words = set()
+    for full_name in contacts.keys():
+        contact_words.update(full_name.split())
+    unknown_pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for m in full_name_re.finditer(body):
+        first, last = m.group(1), m.group(2)
+        if first in NAME_STOPWORDS or last in NAME_STOPWORDS:
+            continue
+        if first.lower() in contact_words or last.lower() in contact_words:
+            continue
+        if (first, last) in seen:
+            continue
+        seen.add((first, last))
+        unknown_pairs.append((first, last))
+
+    return ExtractedEntities(
+        emails=emails,
+        contact_keys=tuple(sorted(set(contact_keys))),
+        project_codes=tuple(project_codes),
+        unknown_full_names=tuple(unknown_pairs),
+    )
