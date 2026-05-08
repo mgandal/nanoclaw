@@ -217,3 +217,45 @@ def extract_entities(
         project_codes=tuple(project_codes),
         unknown_full_names=tuple(unknown_pairs),
     )
+
+
+PROFILE_VERSION = 1
+
+
+def save_profile(profile: ClosureProfile, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": profile.version,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "contact_base_trust": profile.contact_base_trust,
+        "default_base_trust": profile.default_base_trust,
+        "thresholds": profile.thresholds,
+        "counterparty_trust": profile.counterparty_trust,
+        "rule_precision": profile.rule_precision,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)
+
+
+def load_profile(path: Path) -> ClosureProfile:
+    if not path.exists():
+        return ClosureProfile.default()
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        log.warning("profile %s malformed (%s); using defaults", path, e)
+        return ClosureProfile.default()
+    v = data.get("version", 0)
+    if v != PROFILE_VERSION:
+        log.warning("profile %s has version %s (expected %s); using defaults",
+                    path, v, PROFILE_VERSION)
+        return ClosureProfile.default()
+    return ClosureProfile(
+        contact_base_trust=float(data.get("contact_base_trust", 0.7)),
+        default_base_trust=float(data.get("default_base_trust", 0.5)),
+        thresholds=dict(data.get("thresholds", {"auto_close": 0.75, "suggest": 0.55})),
+        counterparty_trust=dict(data.get("counterparty_trust", {})),
+        rule_precision=dict(data.get("rule_precision", {})),
+        version=PROFILE_VERSION,
+    )

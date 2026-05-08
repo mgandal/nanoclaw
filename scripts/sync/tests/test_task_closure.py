@@ -189,3 +189,48 @@ def test_extract_ignores_common_capitalized_words():
         context=None, contacts={},
     )
     assert ("Respond", "To") not in e.unknown_full_names
+
+
+def test_profile_round_trip(tmp_path):
+    from email_ingest.task_closure import load_profile, save_profile
+    p = ClosureProfile(
+        contact_base_trust=0.8,
+        default_base_trust=0.4,
+        thresholds={"auto_close": 0.80, "suggest": 0.60},
+        counterparty_trust={"a@b.com": 0.95},
+        rule_precision={"provenance_match": 1.0},
+        version=1,
+    )
+    out = tmp_path / "profile.json"
+    save_profile(p, out)
+    loaded = load_profile(out)
+    assert loaded.contact_base_trust == 0.8
+    assert loaded.thresholds["auto_close"] == 0.80
+    assert loaded.counterparty_trust == {"a@b.com": 0.95}
+
+
+def test_profile_missing_file_returns_defaults(tmp_path):
+    from email_ingest.task_closure import load_profile
+    p = load_profile(tmp_path / "absent.json")
+    assert p.contact_base_trust == 0.7
+
+
+def test_profile_malformed_returns_defaults(tmp_path, caplog):
+    from email_ingest.task_closure import load_profile
+    out = tmp_path / "bad.json"
+    out.write_text("{ not valid json")
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING):
+        p = load_profile(out)
+    assert p.contact_base_trust == 0.7
+    assert any("malformed" in r.message.lower() for r in caplog.records)
+
+
+def test_profile_newer_version_falls_back(tmp_path, caplog):
+    from email_ingest.task_closure import load_profile
+    out = tmp_path / "future.json"
+    out.write_text(json.dumps({"version": 99, "contact_base_trust": 0.9}))
+    import logging as _logging
+    with caplog.at_level(_logging.WARNING):
+        p = load_profile(out)
+    assert p.contact_base_trust == 0.7
