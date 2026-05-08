@@ -307,6 +307,55 @@ def run_followups_passes(
     items, closed_count = _closure_mod.apply_closure(items, gmail_adapter, exchange_adapter, now=now)
     items, aged_count = _aging_mod.apply_aging(items, now=now)
 
+    # --- Task closure (auto-close tasks table from email activity) ---
+    task_closure_stats = {"closed": 0, "suggested": 0, "cooling_off": 0, "skipped": 0, "ran": False}
+    if os.environ.get("TASK_CLOSURE_ENABLED", "1") == "1":
+        try:
+            from email_ingest.task_closure import (
+                scan_and_close, load_profile, _load_contacts_from_claude_md,
+            )
+            from pathlib import Path as _P
+            project_root = _P(__file__).resolve().parents[2]
+            db_path = project_root / "store" / "messages.db"
+            cache_dir = _P.home() / ".cache" / "email-ingest"
+            jsonl = cache_dir / "task-closures.jsonl"
+            pending = cache_dir / "task-closures-pending.json"
+            profile_path = cache_dir / "task-closure-profile.json"
+            contacts = _load_contacts_from_claude_md(
+                project_root / "groups" / "global" / "CLAUDE.md"
+            )
+            profile = load_profile(profile_path)
+            dry_run = os.environ.get("TASK_CLOSURE_DRY_RUN", "0") == "1"
+            per_run_cap = int(os.environ.get("TASK_CLOSURE_CAP", "3"))
+            report = scan_and_close(
+                db_path=db_path,
+                gmail_adapter=gmail_adapter,
+                exchange_adapter=exchange_adapter,
+                profile=profile,
+                contacts=contacts,
+                followups=items,
+                now=now,
+                jsonl_path=jsonl,
+                pending_path=pending,
+                per_run_cap=per_run_cap,
+                dry_run=dry_run,
+            )
+            task_closure_stats = {
+                "closed": report.closed_count,
+                "suggested": report.suggested_count,
+                "cooling_off": report.cooling_off_count,
+                "skipped": report.skipped_count,
+                "ran": True,
+                "dry_run": dry_run,
+            }
+            log.info(
+                "task-closure: closed=%d suggested=%d cooling_off=%d skipped=%d (dry_run=%s)",
+                report.closed_count, report.suggested_count,
+                report.cooling_off_count, report.skipped_count, dry_run,
+            )
+        except Exception as e:
+            log.exception("task-closure failed (non-fatal): %s", e)
+
     commitments_added = 0
     asks_added = 0
     decisions_retained = 0
@@ -339,6 +388,7 @@ def run_followups_passes(
         "commitments_added": commitments_added,
         "asks_added": asks_added,
         "decisions_retained": decisions_retained,
+        "task_closure": task_closure_stats,
     }
 
 
