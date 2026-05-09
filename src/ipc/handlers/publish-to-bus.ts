@@ -5,13 +5,12 @@ interface Input {
   toAgent: string;
   toGroup: string; // empty string means "default to caller's base group"
   topic: string;
-  /**
-   * Raw summary if the payload provided a string; null if the field was
-   * absent or non-string. Preserves the original switch's distinction
-   * between "no summary" (renders `(no summary)`) and "explicit empty
-   * string" (renders empty after the colon).
-   */
-  summary: string | null;
+  // Container-side caller (ipc-mcp-stdio.ts) declares summary as a required
+  // Zod string, so the null branch of the original switch was unreachable
+  // in practice. We collapse it to '' here. If a future host-side caller
+  // ever passes a non-string summary the worst that happens is the notify
+  // text reads "→ X@Y: " (empty) instead of "→ X@Y: (no summary)".
+  summary: string;
   priority?: 'low' | 'medium' | 'high';
   payload: unknown;
 }
@@ -45,7 +44,7 @@ export const publishToBusHandler: IpcHandler<Input> = {
       toAgent: r.to_agent,
       toGroup,
       topic: r.topic,
-      summary: typeof r.summary === 'string' ? r.summary : null,
+      summary: typeof r.summary === 'string' ? r.summary : '',
       priority,
       payload: r.payload,
     };
@@ -72,14 +71,10 @@ export const publishToBusHandler: IpcHandler<Input> = {
     }
 
     const compositeTarget = `${targetGroup}--${input.toAgent}`;
-    const auditSummary = (input.summary ?? '').slice(0, SUMMARY_AUDIT_MAX);
-    // Parity with the original switch: only an absent/non-string summary
-    // renders '(no summary)'. An explicit empty string still renders empty
-    // after the colon — preserving the unchanged user-facing behavior.
-    const notifySummary =
-      input.summary === null
-        ? `→ ${input.toAgent}@${targetGroup}: (no summary)`
-        : `→ ${input.toAgent}@${targetGroup}: ${input.summary.slice(0, SUMMARY_NOTIFY_MAX)}`;
+    const auditSummary = input.summary.slice(0, SUMMARY_AUDIT_MAX);
+    const notifySummary = input.summary
+      ? `→ ${input.toAgent}@${targetGroup}: ${input.summary.slice(0, SUMMARY_NOTIFY_MAX)}`
+      : `→ ${input.toAgent}@${targetGroup}: (no summary)`;
 
     return {
       target: compositeTarget,
@@ -106,7 +101,7 @@ export const publishToBusHandler: IpcHandler<Input> = {
     }
 
     const targetGroup = input.toGroup || ctx.baseGroup;
-    const safeSummary = (input.summary ?? '').slice(0, SUMMARY_AUDIT_MAX);
+    const safeSummary = input.summary.slice(0, SUMMARY_AUDIT_MAX);
     const safeTopic = input.topic.slice(0, TOPIC_MAX);
     if (safeTopic !== input.topic) {
       logger.warn(
