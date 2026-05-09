@@ -1,11 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 
 import { TIMEZONE } from '../../config.js';
-import {
-  getTaskById,
-  updateTask,
-  validateTaskSchedule,
-} from '../../db.js';
+import { getTaskById, updateTask, validateTaskSchedule } from '../../db.js';
 import { logger } from '../../logger.js';
 import type { IpcHandler } from '../handler.js';
 
@@ -117,8 +113,7 @@ export const updateTaskHandler: IpcHandler<Input> = {
 
     if (input.schedule_type || input.schedule_value) {
       const newType = (input.schedule_type || task.schedule_type) as string;
-      const newValue = (input.schedule_value ||
-        task.schedule_value) as string;
+      const newValue = (input.schedule_value || task.schedule_value) as string;
       try {
         validateTaskSchedule(newType, newValue);
       } catch (err) {

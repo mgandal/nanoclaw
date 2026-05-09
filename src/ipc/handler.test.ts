@@ -198,6 +198,38 @@ describe('dispatchIpcAction', () => {
     expect(observedAuth!.notifySummary).toBe('paused task task-42');
     expect(observedAuth!.auditSummary).toBeUndefined();
   });
+
+  it('supports separate auditTarget override — needed for schedule_task forensic parity', async () => {
+    let executed = false;
+    let observedAuth: {
+      target: string;
+      auditTarget?: string;
+      notifySummary: string;
+    } | null = null;
+    registerIpcHandler({
+      type: 'target_split',
+      parse: () => ({}),
+      authorize: () => {
+        observedAuth = {
+          target: 'task-99', // notify points at the new task id
+          auditTarget: 'group-folder', // audit row references the group
+          notifySummary: "added task 'do the thing' (cron)",
+          payloadForStaging: {},
+        } as never;
+        return observedAuth as never;
+      },
+      execute: () => {
+        executed = true;
+      },
+    });
+    const deps = fakeDeps();
+    const ctx = buildContext('telegram_main', true, deps);
+    const result = await dispatchIpcAction({ type: 'target_split' }, ctx);
+    expect(result.handled).toBe(true);
+    expect(executed).toBe(true);
+    expect(observedAuth!.target).toBe('task-99');
+    expect(observedAuth!.auditTarget).toBe('group-folder');
+  });
 });
 
 describe('registerBuiltinHandlers idempotence', () => {

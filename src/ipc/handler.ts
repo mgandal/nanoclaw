@@ -14,6 +14,7 @@ export interface IpcHandlerContext {
 }
 
 export interface IpcAuthorization {
+  /** Default target identifier — used for both audit and notify when not split. */
   target: string;
   /** User-facing post-hoc notification text (e.g. "paused task X-123"). */
   notifySummary: string;
@@ -23,6 +24,14 @@ export interface IpcAuthorization {
    * the audit summary was the bare identifier.
    */
   auditSummary?: string;
+  /**
+   * Override for the audit-log target (agent_actions.target). Defaults to
+   * `target` when omitted. Use this when the gate's audit row should reference
+   * a different identifier than the user-facing notification (e.g.
+   * schedule_task gates against the target group folder, but the post-hoc
+   * notify references the newly-generated taskId).
+   */
+  auditTarget?: string;
   payloadForStaging: Record<string, unknown>;
 }
 
@@ -92,13 +101,14 @@ export async function dispatchIpcAction(
   if (auth === null) return { handled: true };
 
   const auditSummary = auth.auditSummary ?? auth.target;
+  const auditTarget = auth.auditTarget ?? auth.target;
 
   const decision = gateAndStage({
     agentName: ctx.agentName,
     baseGroup: ctx.baseGroup,
     actionType: handler.type,
     summary: auditSummary,
-    target: auth.target,
+    target: auditTarget,
     payloadForStaging: auth.payloadForStaging,
   });
   if (!decision.allowed) return { handled: true };
