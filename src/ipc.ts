@@ -954,70 +954,7 @@ export async function processTaskIpc(
 
     // publish_to_bus migrated to src/ipc/handlers/publish-to-bus.ts.
 
-    case 'knowledge_publish': {
-      const { publishKnowledge } = await import('./knowledge.js');
-      const knowledgeDir = path.join(DATA_DIR, 'agent-knowledge');
-      const entry = {
-        topic: (data as any).topic || 'unknown',
-        finding: (data as any).finding || '',
-        evidence: (data as any).evidence || '',
-        tags: (data as any).tags || [],
-      };
-
-      // C13: trust enforcement. Only fires when caller is a compound-key
-      // agent; plain-group callers keep legacy bypass (see test at line 1211).
-      const { group: kpBaseGroup, agent: kpAgent } = parseCompoundKey(
-        fsPathToCompoundKey(sourceGroup),
-      );
-      let knowledgeNotify = false;
-      if (kpAgent) {
-        const trust = loadAgentTrust(path.join(AGENTS_DIR, kpAgent));
-        const trustDecision = checkTrustAndStage({
-          agentName: kpAgent,
-          groupFolder: kpBaseGroup,
-          actionType: 'knowledge_publish',
-          summary: entry.topic,
-          target: 'agent-knowledge',
-          payloadForStaging: {
-            type: 'knowledge_publish',
-            topic: entry.topic,
-            finding: entry.finding,
-            evidence: entry.evidence,
-            tags: entry.tags,
-          },
-          trust,
-        });
-        if (!trustDecision.allowed) break;
-        knowledgeNotify = trustDecision.notify;
-      }
-
-      const filePath = publishKnowledge(entry, sourceGroup, knowledgeDir);
-      logger.info(
-        { sourceGroup, topic: entry.topic, filePath },
-        'Knowledge entry published',
-      );
-
-      // Publish notification to message bus if available
-      if (deps.messageBus) {
-        deps.messageBus.publish({
-          from: sourceGroup,
-          topic: `knowledge:${entry.topic}`,
-          summary: entry.finding.slice(0, 200),
-          action_needed: '',
-          priority: 'low',
-        });
-      }
-      await firePostHocNotify({
-        notify: knowledgeNotify,
-        agentName: kpAgent || null,
-        actionType: 'knowledge_publish',
-        summary: `published "${entry.topic}"`,
-        target: 'agent-knowledge',
-        registeredGroups,
-        deps,
-      });
-      break;
-    }
+    // knowledge_publish migrated to src/ipc/handlers/knowledge-publish.ts.
 
     case 'write_agent_memory': {
       const d = data as Record<string, unknown>;
