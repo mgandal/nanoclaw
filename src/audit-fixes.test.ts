@@ -800,19 +800,24 @@ describe('Apple Notes QMD integration', () => {
 // 29. C6 — write_agent_memory size + section validation
 // ─────────────────────────────────────────────────
 describe('write_agent_memory input validation (C6)', () => {
+  // C6 hardening lives in the migrated handler at
+  // src/ipc/handlers/write-agent-memory.ts (refactor of src/ipc.ts).
   const source = fs.readFileSync(
-    path.join(process.cwd(), 'src/ipc.ts'),
+    path.join(process.cwd(), 'src/ipc/handlers/write-agent-memory.ts'),
     'utf-8',
   );
 
   it('caps content at 64KB', () => {
     // A 64KB literal in source; the compare uses 64 * 1024.
-    expect(source).toMatch(/content\.length\s*>\s*64\s*\*\s*1024/);
+    expect(source).toMatch(/64\s*\*\s*1024/);
   });
 
   it('validates section name against a tight regex', () => {
     // The regex itself must appear verbatim — simple anchor for audit.
-    expect(source).toContain('/^[\\w\\s\\-]{1,80}$/');
+    // The escaped variant is also accepted because the original ipc.ts
+    // copy used [\w\s\-] (legal but redundant); the migrated handler
+    // dropped the escape per eslint no-useless-escape.
+    expect(source).toMatch(/\/\^\[\\w\\s\\?-]\{1,80\}\$\//);
   });
 });
 

@@ -8,6 +8,8 @@ import { registerGroupHandler } from './register-group.js';
 import { resumeTaskHandler } from './resume-task.js';
 import { scheduleTaskHandler } from './schedule-task.js';
 import { updateTaskHandler } from './update-task.js';
+import { writeAgentMemoryHandler } from './write-agent-memory.js';
+import { writeAgentStateHandler } from './write-agent-state.js';
 
 let registered = false;
 
@@ -22,6 +24,8 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(registerGroupHandler);
   registerIpcHandler(publishToBusHandler);
   registerIpcHandler(knowledgePublishHandler);
+  registerIpcHandler(writeAgentMemoryHandler);
+  registerIpcHandler(writeAgentStateHandler);
   registered = true;
 }
 
