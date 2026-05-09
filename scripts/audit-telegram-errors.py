@@ -19,6 +19,7 @@ Design notes: see docs/plan-telegram-error-audit.md
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -426,6 +427,16 @@ def normalize(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any
 # Main
 # ---------------------------------------------------------------------------
 def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Daily NanoClaw error audit. Prints JSON summary to stdout."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run audit without advancing state-file byte offsets.",
+    )
+    args = parser.parse_args()
+
     now = datetime.now(timezone.utc)
     state = load_state()
     offsets = state.get("log_offsets", {})
@@ -453,20 +464,23 @@ def main() -> int:
     actionable = [r for r in records if is_actionable(r)]
 
     # Only advance offsets on success — if the run crashed we'd want to retry
-    # the same window rather than skip over it.
-    state["log_offsets"] = {
-        MAIN_LOG.name: main_offset,
-        ERROR_LOG.name: error_offset,
-    }
-    state["last_run"] = now.isoformat()
-    try:
-        save_state(state)
-    except OSError as e:
-        print(f"warning: could not persist state: {e}", file=sys.stderr)
+    # the same window rather than skip over it. Dry-run skips the write so
+    # /audit-errors and ad-hoc invocations don't burn the next cron's window.
+    if not args.dry_run:
+        state["log_offsets"] = {
+            MAIN_LOG.name: main_offset,
+            ERROR_LOG.name: error_offset,
+        }
+        state["last_run"] = now.isoformat()
+        try:
+            save_state(state)
+        except OSError as e:
+            print(f"warning: could not persist state: {e}", file=sys.stderr)
 
     summary = {
         "checked_at": now.isoformat(),
         "window_hours": WINDOW_HOURS,
+        "dry_run": args.dry_run,
         "total_records": len(records),
         "actionable_count": len(actionable),
         "by_bucket": {
