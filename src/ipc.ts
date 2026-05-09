@@ -34,6 +34,8 @@ import { loadAgentTrust } from './agent-registry.js';
 import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
 import { firePostHocNotify } from './trust-notify.js';
 import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
+import { buildContext, dispatchIpcAction } from './ipc/handler.js';
+import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { handleDashboardIpc } from './dashboard-ipc.js';
@@ -931,6 +933,15 @@ export async function processTaskIpc(
   isMain: boolean, // Verified from directory path
   deps: IpcDeps,
 ): Promise<void> {
+  registerBuiltinHandlers();
+
+  const handlerCtx = buildContext(sourceGroup, isMain, deps);
+  const result = await dispatchIpcAction(
+    data as { type: string } & Record<string, unknown>,
+    handlerCtx,
+  );
+  if (result.handled) return;
+
   const registeredGroups = deps.registeredGroups();
 
   switch (data.type) {
@@ -1107,179 +1118,8 @@ export async function processTaskIpc(
       }
       break;
 
-    case 'pause_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        const { group: ptBaseGroup, agent: ptAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        if (task && (isMain || task.group_folder === ptBaseGroup)) {
-          // C13: trust enforcement for agent callers.
-          let pauseNotify = false;
-          if (ptAgent) {
-            const trust = loadAgentTrust(path.join(AGENTS_DIR, ptAgent));
-            const trustDecision = checkTrustAndStage({
-              agentName: ptAgent,
-              groupFolder: ptBaseGroup,
-              actionType: 'pause_task',
-              summary: data.taskId,
-              target: data.taskId,
-              payloadForStaging: {
-                type: 'pause_task',
-                taskId: data.taskId,
-              },
-              trust,
-            });
-            if (!trustDecision.allowed) break;
-            pauseNotify = trustDecision.notify;
-          }
-          updateTask(data.taskId, { status: 'paused' });
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task paused via IPC',
-          );
-          deps.onTasksChanged();
-          await firePostHocNotify({
-            notify: pauseNotify,
-            agentName: ptAgent || null,
-            actionType: 'pause_task',
-            summary: `paused task ${data.taskId}`,
-            target: data.taskId,
-            registeredGroups,
-            deps,
-          });
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task pause attempt',
-          );
-        }
-      }
-      break;
-
-    case 'resume_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        const { group: rtBaseGroup, agent: rtAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        let resumeNotify = false;
-        if (task && (isMain || task.group_folder === rtBaseGroup)) {
-          // C13: trust enforcement for agent callers.
-          if (rtAgent) {
-            const trust = loadAgentTrust(path.join(AGENTS_DIR, rtAgent));
-            const trustDecision = checkTrustAndStage({
-              agentName: rtAgent,
-              groupFolder: rtBaseGroup,
-              actionType: 'resume_task',
-              summary: data.taskId,
-              target: data.taskId,
-              payloadForStaging: {
-                type: 'resume_task',
-                taskId: data.taskId,
-              },
-              trust,
-            });
-            if (!trustDecision.allowed) break;
-            resumeNotify = trustDecision.notify;
-          }
-          // Recompute next_run when resuming
-          const updates: Parameters<typeof updateTask>[1] = {
-            status: 'active',
-          };
-          if (task.schedule_type === 'cron') {
-            try {
-              const interval = CronExpressionParser.parse(task.schedule_value, {
-                tz: TIMEZONE,
-              });
-              updates.next_run = interval.next().toISOString();
-            } catch {
-              // Keep existing next_run if cron is invalid
-            }
-          } else if (task.schedule_type === 'interval') {
-            const ms = parseInt(task.schedule_value, 10);
-            if (!isNaN(ms) && ms > 0) {
-              updates.next_run = new Date(Date.now() + ms).toISOString();
-            }
-          } else if (task.schedule_type === 'once' && task.next_run) {
-            // For 'once' tasks, if next_run is in the past, set to now + 1 min
-            if (new Date(task.next_run).getTime() < Date.now()) {
-              updates.next_run = new Date(Date.now() + 60000).toISOString();
-            }
-          }
-          updateTask(data.taskId, updates);
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task resumed via IPC',
-          );
-          deps.onTasksChanged();
-          await firePostHocNotify({
-            notify: resumeNotify,
-            agentName: rtAgent || null,
-            actionType: 'resume_task',
-            summary: `resumed task ${data.taskId}`,
-            target: data.taskId,
-            registeredGroups,
-            deps,
-          });
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task resume attempt',
-          );
-        }
-      }
-      break;
-
-    case 'cancel_task':
-      if (data.taskId) {
-        const task = getTaskById(data.taskId);
-        const { group: ctBaseGroup, agent: ctAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        if (task && (isMain || task.group_folder === ctBaseGroup)) {
-          // C13: trust enforcement for agent callers.
-          let cancelNotify = false;
-          if (ctAgent) {
-            const trust = loadAgentTrust(path.join(AGENTS_DIR, ctAgent));
-            const trustDecision = checkTrustAndStage({
-              agentName: ctAgent,
-              groupFolder: ctBaseGroup,
-              actionType: 'cancel_task',
-              summary: data.taskId,
-              target: data.taskId,
-              payloadForStaging: {
-                type: 'cancel_task',
-                taskId: data.taskId,
-              },
-              trust,
-            });
-            if (!trustDecision.allowed) break;
-            cancelNotify = trustDecision.notify;
-          }
-          deleteTask(data.taskId);
-          logger.info(
-            { taskId: data.taskId, sourceGroup },
-            'Task cancelled via IPC',
-          );
-          deps.onTasksChanged();
-          await firePostHocNotify({
-            notify: cancelNotify,
-            agentName: ctAgent || null,
-            actionType: 'cancel_task',
-            summary: `cancelled task ${data.taskId}`,
-            target: data.taskId,
-            registeredGroups,
-            deps,
-          });
-        } else {
-          logger.warn(
-            { taskId: data.taskId, sourceGroup },
-            'Unauthorized task cancel attempt',
-          );
-        }
-      }
-      break;
+    // pause_task / resume_task / cancel_task migrated to src/ipc/handlers/.
+    // Dispatched by registerBuiltinHandlers + dispatchIpcAction above.
 
     case 'update_task':
       if (data.taskId) {
