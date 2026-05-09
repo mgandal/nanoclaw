@@ -1,6 +1,8 @@
 import { registerIpcHandler } from '../handler.js';
 import { cancelTaskHandler } from './cancel-task.js';
 import { pauseTaskHandler } from './pause-task.js';
+import { refreshGroupsHandler } from './refresh-groups.js';
+import { registerGroupHandler } from './register-group.js';
 import { resumeTaskHandler } from './resume-task.js';
 import { scheduleTaskHandler } from './schedule-task.js';
 import { updateTaskHandler } from './update-task.js';
@@ -14,6 +16,8 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(resumeTaskHandler);
   registerIpcHandler(cancelTaskHandler);
   registerIpcHandler(updateTaskHandler);
+  registerIpcHandler(refreshGroupsHandler);
+  registerIpcHandler(registerGroupHandler);
   registered = true;
 }
 

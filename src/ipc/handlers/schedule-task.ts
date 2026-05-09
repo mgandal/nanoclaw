@@ -92,10 +92,7 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
 
     let agentName: string | null = null;
     if (r.agent_name !== undefined && r.agent_name !== null) {
-      if (
-        typeof r.agent_name !== 'string' ||
-        !isValidAgentName(r.agent_name)
-      ) {
+      if (typeof r.agent_name !== 'string' || !isValidAgentName(r.agent_name)) {
         return null;
       }
       agentName = r.agent_name;
@@ -150,12 +147,12 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
     // Validate the schedule before trust enforcement so an invalid schedule
     // doesn't write an "allowed" row to agent_actions that we then silently
     // drop. Matches the original switch-case ordering.
-    const scheduleCheck = computeNextRun(input.scheduleType, input.scheduleValue);
+    const scheduleCheck = computeNextRun(
+      input.scheduleType,
+      input.scheduleValue,
+    );
     if (!scheduleCheck.ok) {
-      logger.warn(
-        { scheduleValue: input.scheduleValue },
-        scheduleCheck.reason,
-      );
+      logger.warn({ scheduleValue: input.scheduleValue }, scheduleCheck.reason);
       return null;
     }
 
@@ -190,7 +187,10 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
     }
     const targetFolder = targetGroupEntry.folder;
 
-    const scheduleCheck = computeNextRun(input.scheduleType, input.scheduleValue);
+    const scheduleCheck = computeNextRun(
+      input.scheduleType,
+      input.scheduleValue,
+    );
     if (!scheduleCheck.ok) {
       // Already validated in authorize; re-checking here only because the
       // computeNextRun call recomputes the next-run timestamp. If the
@@ -209,7 +209,10 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
       prompt: input.prompt,
       script: input.script,
       agent_name: input.agentName,
-      schedule_type: input.scheduleType,
+      // Cast preserves the original switch's lenient behavior: bogus
+      // schedule_type strings flow through to createTask unchanged. The
+      // unknown type is stored as-is and next_run is null (handled above).
+      schedule_type: input.scheduleType as 'cron' | 'interval' | 'once',
       schedule_value: input.scheduleValue,
       context_mode: input.contextMode,
       next_run: scheduleCheck.nextRun,
