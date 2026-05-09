@@ -35,27 +35,37 @@ export interface IpcAuthorization {
   payloadForStaging: Record<string, unknown>;
 }
 
-export interface IpcHandler<TInput, TResult = void> {
+/**
+ * Result of execute(). Returning void or undefined is treated as "executed
+ * normally" — the dispatcher fires the post-hoc notify. Return `{ executed:
+ * false }` to signal a no-op (a race-disappearance, a deferred validation
+ * failure, etc.) — the dispatcher skips the notify so the user does not see
+ * a misleading message for an action that didn't actually happen. The audit
+ * log row was already written upstream and is unaffected.
+ */
+export type ExecuteResult = void | { executed: boolean };
+
+export interface IpcHandler<TInput, TResult extends ExecuteResult = void> {
   readonly type: string;
   parse(raw: unknown): TInput | null;
   authorize(input: TInput, ctx: IpcHandlerContext): IpcAuthorization | null;
   execute(input: TInput, ctx: IpcHandlerContext): Promise<TResult> | TResult;
 }
 
-const HANDLERS: Map<string, IpcHandler<unknown, unknown>> = new Map();
+const HANDLERS: Map<string, IpcHandler<unknown, ExecuteResult>> = new Map();
 
-export function registerIpcHandler<TInput, TResult>(
+export function registerIpcHandler<TInput, TResult extends ExecuteResult>(
   handler: IpcHandler<TInput, TResult>,
 ): void {
   if (HANDLERS.has(handler.type)) {
     throw new Error(`Duplicate IPC handler registered: ${handler.type}`);
   }
-  HANDLERS.set(handler.type, handler as IpcHandler<unknown, unknown>);
+  HANDLERS.set(handler.type, handler as IpcHandler<unknown, ExecuteResult>);
 }
 
 export function getIpcHandler(
   type: string,
-): IpcHandler<unknown, unknown> | undefined {
+): IpcHandler<unknown, ExecuteResult> | undefined {
   return HANDLERS.get(type);
 }
 
@@ -113,16 +123,22 @@ export async function dispatchIpcAction(
   });
   if (!decision.allowed) return { handled: true };
 
-  await handler.execute(input, ctx);
+  const executeResult = await handler.execute(input, ctx);
+  // Treat void/undefined as executed normally; explicit { executed: false }
+  // means the handler bailed (e.g., race, deferred validation) and the user
+  // should NOT see a post-hoc notification claiming the action happened.
+  const executed = executeResult ? executeResult.executed !== false : true;
 
-  await fireNotifyIfRequested(decision, {
-    agentName: ctx.agentName,
-    actionType: handler.type,
-    summary: auth.notifySummary,
-    target: auth.target,
-    registeredGroups: ctx.registeredGroups,
-    deps: ctx.deps,
-  });
+  if (executed) {
+    await fireNotifyIfRequested(decision, {
+      agentName: ctx.agentName,
+      actionType: handler.type,
+      summary: auth.notifySummary,
+      target: auth.target,
+      registeredGroups: ctx.registeredGroups,
+      deps: ctx.deps,
+    });
+  }
 
   return { handled: true };
 }

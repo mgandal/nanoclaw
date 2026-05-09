@@ -3,13 +3,13 @@ import { CronExpressionParser } from 'cron-parser';
 import { TIMEZONE } from '../../config.js';
 import { getTaskById, updateTask } from '../../db.js';
 import { logger } from '../../logger.js';
-import type { IpcHandler } from '../handler.js';
+import type { ExecuteResult, IpcHandler } from '../handler.js';
 
 interface Input {
   taskId: string;
 }
 
-export const resumeTaskHandler: IpcHandler<Input> = {
+export const resumeTaskHandler: IpcHandler<Input, ExecuteResult> = {
   type: 'resume_task',
 
   parse(raw) {
@@ -48,7 +48,7 @@ export const resumeTaskHandler: IpcHandler<Input> = {
         { taskId, sourceGroup: ctx.sourceGroup },
         'resume_task: task disappeared between authorize and execute',
       );
-      return;
+      return { executed: false };
     }
 
     const updates: Parameters<typeof updateTask>[1] = { status: 'active' };

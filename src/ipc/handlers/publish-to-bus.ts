@@ -5,7 +5,13 @@ interface Input {
   toAgent: string;
   toGroup: string; // empty string means "default to caller's base group"
   topic: string;
-  summary: string; // raw, untruncated; capping happens at execute time
+  /**
+   * Raw summary if the payload provided a string; null if the field was
+   * absent or non-string. Preserves the original switch's distinction
+   * between "no summary" (renders `(no summary)`) and "explicit empty
+   * string" (renders empty after the colon).
+   */
+  summary: string | null;
   priority?: 'low' | 'medium' | 'high';
   payload: unknown;
 }
@@ -39,7 +45,7 @@ export const publishToBusHandler: IpcHandler<Input> = {
       toAgent: r.to_agent,
       toGroup,
       topic: r.topic,
-      summary: typeof r.summary === 'string' ? r.summary : '',
+      summary: typeof r.summary === 'string' ? r.summary : null,
       priority,
       payload: r.payload,
     };
@@ -66,12 +72,14 @@ export const publishToBusHandler: IpcHandler<Input> = {
     }
 
     const compositeTarget = `${targetGroup}--${input.toAgent}`;
-    const auditSummary = input.summary.slice(0, SUMMARY_AUDIT_MAX);
-    const notifySummary = `→ ${input.toAgent}@${targetGroup}: ${
-      input.summary
-        ? input.summary.slice(0, SUMMARY_NOTIFY_MAX)
-        : '(no summary)'
-    }`;
+    const auditSummary = (input.summary ?? '').slice(0, SUMMARY_AUDIT_MAX);
+    // Parity with the original switch: only an absent/non-string summary
+    // renders '(no summary)'. An explicit empty string still renders empty
+    // after the colon — preserving the unchanged user-facing behavior.
+    const notifySummary =
+      input.summary === null
+        ? `→ ${input.toAgent}@${targetGroup}: (no summary)`
+        : `→ ${input.toAgent}@${targetGroup}: ${input.summary.slice(0, SUMMARY_NOTIFY_MAX)}`;
 
     return {
       target: compositeTarget,
@@ -98,7 +106,7 @@ export const publishToBusHandler: IpcHandler<Input> = {
     }
 
     const targetGroup = input.toGroup || ctx.baseGroup;
-    const safeSummary = input.summary.slice(0, SUMMARY_AUDIT_MAX);
+    const safeSummary = (input.summary ?? '').slice(0, SUMMARY_AUDIT_MAX);
     const safeTopic = input.topic.slice(0, TOPIC_MAX);
     if (safeTopic !== input.topic) {
       logger.warn(

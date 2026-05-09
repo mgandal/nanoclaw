@@ -3,7 +3,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { TIMEZONE } from '../../config.js';
 import { getTaskById, updateTask, validateTaskSchedule } from '../../db.js';
 import { logger } from '../../logger.js';
-import type { IpcHandler } from '../handler.js';
+import type { ExecuteResult, IpcHandler } from '../handler.js';
 
 interface Input {
   taskId: string;
@@ -15,7 +15,7 @@ interface Input {
 
 const VALID_SCHEDULE_TYPES = new Set(['cron', 'interval', 'once']);
 
-export const updateTaskHandler: IpcHandler<Input> = {
+export const updateTaskHandler: IpcHandler<Input, ExecuteResult> = {
   type: 'update_task',
 
   parse(raw) {
@@ -98,7 +98,7 @@ export const updateTaskHandler: IpcHandler<Input> = {
         { taskId: input.taskId, sourceGroup: ctx.sourceGroup },
         'update_task: task disappeared between authorize and execute',
       );
-      return;
+      return { executed: false };
     }
 
     const updates: Parameters<typeof updateTask>[1] = {};
@@ -121,7 +121,7 @@ export const updateTaskHandler: IpcHandler<Input> = {
           { taskId: input.taskId, err },
           'Task update rejected: invalid schedule',
         );
-        return;
+        return { executed: false };
       }
 
       const updatedTask = { ...task, ...updates };
@@ -137,7 +137,7 @@ export const updateTaskHandler: IpcHandler<Input> = {
             { taskId: input.taskId, value: updatedTask.schedule_value },
             'Invalid cron in task update',
           );
-          return;
+          return { executed: false };
         }
       } else if (updatedTask.schedule_type === 'interval') {
         const ms = parseInt(updatedTask.schedule_value, 10);

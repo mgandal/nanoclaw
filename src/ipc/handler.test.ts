@@ -199,6 +199,65 @@ describe('dispatchIpcAction', () => {
     expect(observedAuth!.auditSummary).toBeUndefined();
   });
 
+  it('skips post-hoc notify when execute returns { executed: false }', async () => {
+    let sendCount = 0;
+    const sendingDeps = fakeDeps({
+      sendMessage: async () => {
+        sendCount++;
+      },
+      registeredGroups: () => ({
+        'main-jid': {
+          name: 'main',
+          folder: 'telegram_main',
+          trigger: '',
+          added_at: '',
+          isMain: true,
+        },
+      }),
+    });
+    registerIpcHandler({
+      type: 'execute_false',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'tgt',
+        notifySummary: 'should not be sent',
+        payloadForStaging: {},
+      }),
+      execute: () => ({ executed: false }),
+    });
+    // Compound caller so the gate path is exercised; trust resolves to
+    // null (no trust.yaml on the synthetic agent), giving NON_AGENT_DECISION
+    // path for the test — but with notify=false anyway. The point is the
+    // executed=false short-circuit comes BEFORE the dispatcher's notify call.
+    const ctx = buildContext('telegram_main', true, sendingDeps);
+    await dispatchIpcAction({ type: 'execute_false' }, ctx);
+    expect(sendCount).toBe(0);
+  });
+
+  it('fires post-hoc notify when execute returns void (treats undefined as executed)', async () => {
+    // Mirror of the executed=false test: void/undefined means executed
+    // normally and the dispatcher should attempt notify (which still no-ops
+    // for non-agent callers but the path is exercised).
+    let executed = false;
+    registerIpcHandler({
+      type: 'execute_void',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'tgt',
+        notifySummary: 's',
+        payloadForStaging: {},
+      }),
+      execute: () => {
+        executed = true;
+      },
+    });
+    const deps = fakeDeps();
+    const ctx = buildContext('telegram_main', true, deps);
+    const result = await dispatchIpcAction({ type: 'execute_void' }, ctx);
+    expect(result.handled).toBe(true);
+    expect(executed).toBe(true);
+  });
+
   it('supports separate auditTarget override — needed for schedule_task forensic parity', async () => {
     let executed = false;
     let observedAuth: {

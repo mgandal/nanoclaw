@@ -811,6 +811,35 @@ describe('schedule_task trust enforcement (C13)', () => {
     expect(rows[0].outcome).toBe('allowed');
     expect(rows[0].action_type).toBe('schedule_task');
   });
+
+  it('audit row uses target=targetFolder (auditTarget override) and summary=prompt-prefix', async () => {
+    // Forensic-parity contract: schedule_task is the canonical case where
+    // the audit-log target diverges from the post-hoc-notify target —
+    // audit references the destination group folder (queryable across
+    // tasks for a group), notify references the new taskId. The migrated
+    // handler asserts this via IpcAuthorization.auditTarget; this test
+    // pins the contract end-to-end so a regression at the gate or the
+    // dispatcher would be caught.
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  schedule_task: autonomous\n',
+    );
+
+    await processTaskIpc(
+      { ...scheduleData, prompt: 'ping over the wire' },
+      `telegram_other--${TEST_AGENT}`,
+      false,
+      deps,
+    );
+
+    const row = getDb()
+      .prepare(
+        'SELECT target, summary FROM agent_actions WHERE action_type = ? ORDER BY created_at DESC LIMIT 1',
+      )
+      .get('schedule_task') as { target: string; summary: string };
+    expect(row.target).toBe('telegram_other'); // not the new taskId
+    expect(row.summary).toBe('ping over the wire'); // not the verbose notify text
+  });
 });
 
 // --- 4b. C13: publish_to_bus trust enforcement for agent callers ---

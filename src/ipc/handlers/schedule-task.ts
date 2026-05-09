@@ -4,7 +4,7 @@ import { TIMEZONE } from '../../config.js';
 import { createTask } from '../../db.js';
 import { isValidAgentName } from '../../ipc.js';
 import { logger } from '../../logger.js';
-import type { IpcHandler } from '../handler.js';
+import type { ExecuteResult, IpcHandler } from '../handler.js';
 
 interface Input {
   taskId: string;
@@ -62,7 +62,7 @@ function computeNextRun(
   return { nextRun: null, ok: true };
 }
 
-export const scheduleTaskHandler: IpcHandler<Input> = {
+export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
   type: 'schedule_task',
 
   parse(raw) {
@@ -183,7 +183,7 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
         { targetJid: input.targetJid },
         'schedule_task: target group disappeared between authorize and execute',
       );
-      return;
+      return { executed: false };
     }
     const targetFolder = targetGroupEntry.folder;
 
@@ -199,7 +199,7 @@ export const scheduleTaskHandler: IpcHandler<Input> = {
         { scheduleValue: input.scheduleValue },
         `schedule_task: ${scheduleCheck.reason} (recheck)`,
       );
-      return;
+      return { executed: false };
     }
 
     createTask({
