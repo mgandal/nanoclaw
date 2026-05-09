@@ -51,6 +51,12 @@ data/agents/swarm-membership-audit.json
 data/agents/swarm-membership-audit-diffs.json
 groups/telegram_claire/state/swarm-audit.md
 
+# Note: groups/global/state/current.md is auto-rendered by scheduled task
+# task-1774027787743-upd8cur as a view of the live tasks table in
+# store/messages.db. It's already covered by the groups/global/* rule above
+# but historically slipped into git (forced-add) and required PHI redaction
+# in commit 511cff7. Kept untracked deliberately.
+
 # Skill output and runtime state
 graphify-out/
 .remember/
