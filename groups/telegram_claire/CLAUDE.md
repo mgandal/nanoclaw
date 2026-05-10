@@ -41,7 +41,7 @@ Create *exactly* the team the user asks for. Each member must use `send_message`
 
 ## Admin Context
 
-Authentication: use `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (long-lived). Short-lived tokens cause 401s. OneCLI manages credentials.
+Authentication: `CLAUDE_CODE_OAUTH_TOKEN` only (subscription, long-lived). Never enable `ANTHROPIC_API_KEY` — see global Security rule. Short-lived tokens cause 401s. OneCLI manages credentials.
 
 Mounts: `/workspace/project` (read-only), `/workspace/project/store` (read-write, SQLite), `/workspace/group` (read-write, `groups/main/`).
 

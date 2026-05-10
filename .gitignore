@@ -27,6 +27,11 @@ groups/global/*
 groups/telegram_claire/*
 !groups/main/CLAUDE.md
 !groups/global/CLAUDE.md
+!groups/global/state/
+!groups/global/state/**
+# Re-ignore current.md — auto-rendered daily, contains PHI risk
+# (see explanatory comment further below)
+groups/global/state/current.md
 !groups/telegram_claire/CLAUDE.md
 !groups/telegram_claire/memory_guardian/
 groups/telegram_claire/memory_guardian/**/__pycache__/
@@ -89,3 +94,11 @@ scripts/paperpile-wiki/venv/
 scripts/markitdown/venv/
 .claude/worktrees/
 **/__pycache__/
+
+# Defense-in-depth: never track CLAUDE.md files inside cloned upstream
+# repos under groups/*/knowledge-base/ (e.g. agent-lightning ships its own
+# CLAUDE.md). The real concern is Claude Code's parent-directory auto-
+# discovery picking up the wrong file — that's not solved by .gitignore,
+# but this rule makes sure the stray file can't accidentally get force-added
+# even if groups/* is ever opened up.
+groups/*/knowledge-base/**/CLAUDE.md
