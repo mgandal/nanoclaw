@@ -25,7 +25,7 @@ For tasks that require Simon's expertise, spawn him as a team member. Do NOT dup
 At the START of every session, before responding:
 1. Query Hindsight for recent CODE-claw development tasks and technical decisions
 2. Read `/workspace/group/memory.md` for group context
-3. Read `/workspace/project/groups/global/state/current.md` for active priorities
+3. Read `/workspace/global/state/current.md` for active priorities
 
 ## Technical Context
 
