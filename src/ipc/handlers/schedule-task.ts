@@ -19,6 +19,10 @@ interface Input {
   contextMode: 'group' | 'isolated';
   agentName: string | null;
   script: string | null;
+  // Pinned at authorize-time so execute() doesn't re-compute and drift the
+  // wall clock by the gate latency. Same pattern as write-agent-memory's
+  // resolvedAgent. Populated by authorize before the gate runs.
+  precomputedNextRun: string | null;
 }
 
 function generateTaskId(): string {
@@ -93,6 +97,14 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
     let agentName: string | null = null;
     if (r.agent_name !== undefined && r.agent_name !== null) {
       if (typeof r.agent_name !== 'string' || !isValidAgentName(r.agent_name)) {
+        // Log the offending value before returning null so the rejection has
+        // attribution. Without this, the dispatcher only logs the generic
+        // 'IPC handler rejected input shape' and the bad agent_name is lost.
+        // Pattern mirrors register-group.ts.
+        logger.warn(
+          { agent_name: r.agent_name },
+          'schedule_task: invalid agent_name (must match isValidAgentName)',
+        );
         return null;
       }
       agentName = r.agent_name;
@@ -110,6 +122,7 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
       contextMode,
       agentName,
       script,
+      precomputedNextRun: null, // populated in authorize
     };
   },
 
@@ -146,7 +159,9 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
 
     // Validate the schedule before trust enforcement so an invalid schedule
     // doesn't write an "allowed" row to agent_actions that we then silently
-    // drop. Matches the original switch-case ordering.
+    // drop. Matches the original switch-case ordering. The computed
+    // next_run is pinned on `input` so execute() reuses it; recomputing in
+    // execute() would drift the wall clock by gate latency.
     const scheduleCheck = computeNextRun(
       input.scheduleType,
       input.scheduleValue,
@@ -155,6 +170,7 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
       logger.warn({ scheduleValue: input.scheduleValue }, scheduleCheck.reason);
       return null;
     }
+    input.precomputedNextRun = scheduleCheck.nextRun;
 
     return {
       // notify (and post-hoc display) references the new taskId; audit row
@@ -187,21 +203,6 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
     }
     const targetFolder = targetGroupEntry.folder;
 
-    const scheduleCheck = computeNextRun(
-      input.scheduleType,
-      input.scheduleValue,
-    );
-    if (!scheduleCheck.ok) {
-      // Already validated in authorize; re-checking here only because the
-      // computeNextRun call recomputes the next-run timestamp. If the
-      // re-check fails it's a race or clock issue — log and drop.
-      logger.warn(
-        { scheduleValue: input.scheduleValue },
-        `schedule_task: ${scheduleCheck.reason} (recheck)`,
-      );
-      return { executed: false };
-    }
-
     createTask({
       id: input.taskId,
       group_folder: targetFolder,
@@ -211,11 +212,11 @@ export const scheduleTaskHandler: IpcHandler<Input, ExecuteResult> = {
       agent_name: input.agentName,
       // Cast preserves the original switch's lenient behavior: bogus
       // schedule_type strings flow through to createTask unchanged. The
-      // unknown type is stored as-is and next_run is null (handled above).
+      // unknown type is stored as-is and next_run is null.
       schedule_type: input.scheduleType as 'cron' | 'interval' | 'once',
       schedule_value: input.scheduleValue,
       context_mode: input.contextMode,
-      next_run: scheduleCheck.nextRun,
+      next_run: input.precomputedNextRun,
       status: 'active',
       created_at: new Date().toISOString(),
     });

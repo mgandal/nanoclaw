@@ -692,6 +692,110 @@ describe('schedule_task custom taskId', () => {
   });
 });
 
+// --- 9a. schedule_task: next_run is computed once at authorize-time ---
+//
+// Pre-fix bug: computeNextRun ran in BOTH authorize() (validation) and
+// execute() (storage), so the stored next_run reflected execute-time wall
+// clock, drifting from authorize-time by gate latency. For an `interval`
+// schedule that means next_run = (Date.now() at execute) + ms, not
+// (Date.now() at authorize) + ms. The fix pins next_run at authorize-time
+// and reads the precomputed value in execute.
+describe('schedule_task next_run drift', () => {
+  it('uses authorize-time wall clock for interval next_run, not execute-time', async () => {
+    const FROZEN_AUTHORIZE_TIME = 1_700_000_000_000; // arbitrary stable epoch
+    // db.ts:validateTaskSchedule enforces a 30-min minimum at createTask time;
+    // pick the minimum so the test exercises the real path.
+    const INTERVAL_MS = 30 * 60 * 1000;
+    const EXPECTED_NEXT_RUN = new Date(
+      FROZEN_AUTHORIZE_TIME + INTERVAL_MS,
+    ).toISOString();
+
+    // Make Date.now() return FROZEN_AUTHORIZE_TIME for the first call only;
+    // every subsequent call returns +5s. With the fix (single compute in
+    // authorize), next_run reflects FROZEN_AUTHORIZE_TIME + INTERVAL_MS.
+    // Without the fix (double compute), the second call in execute() returns
+    // the advanced time and stores the +5s offset.
+    const dateNowSpy = vi.spyOn(Date, 'now');
+    let call = 0;
+    dateNowSpy.mockImplementation(() => {
+      call++;
+      return call === 1 ? FROZEN_AUTHORIZE_TIME : FROZEN_AUTHORIZE_TIME + 5000;
+    });
+
+    try {
+      await processTaskIpc(
+        {
+          type: 'schedule_task',
+          taskId: 'drift-test-id',
+          prompt: 'drift test',
+          schedule_type: 'interval',
+          schedule_value: String(INTERVAL_MS),
+          targetJid: 'tg:other456',
+        },
+        'telegram_main',
+        true,
+        deps,
+      );
+      const task = getTaskById('drift-test-id');
+      expect(task).toBeDefined();
+      // With the fix: next_run is FROZEN_AUTHORIZE_TIME + INTERVAL_MS.
+      // Without the fix (old double-compute): next_run would be
+      // FROZEN_AUTHORIZE_TIME + 5000 + INTERVAL_MS — i.e. 5s later.
+      expect(task!.next_run).toBe(EXPECTED_NEXT_RUN);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+});
+
+// --- 9c. schedule_task: invalid agent_name reject is logged with attribution ---
+
+describe('schedule_task invalid agent_name attribution', () => {
+  it('logs the offending agent_name value at parse time, not just generic "rejected input shape"', async () => {
+    // Pre-fix: parse() returned null silently and only the dispatcher logged
+    // the generic 'IPC handler rejected input shape' line. Post-fix: parse()
+    // logs the offending agent_name value first, mirroring register-group.ts.
+    // We pin both: (a) a warn that mentions schedule_task + agent_name, and
+    // (b) the concrete bad value appears in the log payload.
+    const warnSpy = vi.spyOn(
+      await import('./logger.js').then((m) => m.logger),
+      'warn',
+    );
+    try {
+      await processTaskIpc(
+        // agent_name isn't on the processTaskIpc data type literal, but the
+        // handler reads it via the dispatched Record<string, unknown>; cast
+        // to keep the test scope-tight without widening the dispatcher type.
+        {
+          type: 'schedule_task',
+          prompt: 'attribution test',
+          schedule_type: 'once',
+          schedule_value: '2099-01-01T00:00:00Z',
+          targetJid: 'tg:other456',
+          agent_name: '../etc/passwd', // path traversal — fails isValidAgentName
+        } as Parameters<typeof processTaskIpc>[0],
+        'telegram_main',
+        true,
+        deps,
+      );
+      // Find a warn call that mentions schedule_task AND has the bad value.
+      const matched = warnSpy.mock.calls.find((args) => {
+        const payload = args[0];
+        const msg = args[1];
+        if (typeof msg !== 'string' || !msg.includes('schedule_task')) {
+          return false;
+        }
+        if (typeof payload !== 'object' || payload === null) return false;
+        const p = payload as Record<string, unknown>;
+        return p.agent_name === '../etc/passwd';
+      });
+      expect(matched).toBeDefined();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 // --- 9b. C13: schedule_task trust enforcement for agent callers ---
 
 describe('schedule_task trust enforcement (C13)', () => {
