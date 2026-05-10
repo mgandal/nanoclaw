@@ -190,7 +190,6 @@ describe('handleTasksIpc — task_reopen', () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
-
   it('success path: reopens a closed task and writes result file', async () => {
     // Add a task and mark it done directly
     const added = addTask({ title: 'Close me via IPC', source: 'manual' });
@@ -294,7 +293,9 @@ describe('handleTasksIpc — task_reopen writes cooling-off event', () => {
     const add = addTask({ title: 'Cool me off', source: 'manual' });
     expect(add.success).toBe(true);
     _getTestDb()
-      .query("UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?")
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?",
+      )
       .run(add.id!);
 
     await handleTasksIpc(
@@ -309,7 +310,12 @@ describe('handleTasksIpc — task_reopen writes cooling-off event', () => {
       dataDir,
     );
 
-    const jsonlPath = path.join(homeDir, '.cache', 'email-ingest', 'task-closures.jsonl');
+    const jsonlPath = path.join(
+      homeDir,
+      '.cache',
+      'email-ingest',
+      'task-closures.jsonl',
+    );
     expect(fs.existsSync(jsonlPath)).toBe(true);
     const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n');
     expect(lines).toHaveLength(1);
@@ -337,7 +343,12 @@ describe('handleTasksIpc — task_reopen writes cooling-off event', () => {
       dataDir,
     );
 
-    const jsonlPath = path.join(homeDir, '.cache', 'email-ingest', 'task-closures.jsonl');
+    const jsonlPath = path.join(
+      homeDir,
+      '.cache',
+      'email-ingest',
+      'task-closures.jsonl',
+    );
     expect(fs.existsSync(jsonlPath)).toBe(false);
   });
 });

@@ -1303,8 +1303,7 @@ describe('setMyName caching', () => {
       typeof c[1] === 'string' ? c[1] : '',
     );
     expect(
-      warnMessages.filter((m: string) => m.includes('Failed to rename'))
-        .length,
+      warnMessages.filter((m: string) => m.includes('Failed to rename')).length,
     ).toBe(0);
   });
 
@@ -1368,7 +1367,8 @@ describe('supergroup migration', () => {
       {
         ok: false,
         error_code: 400,
-        description: 'Bad Request: group chat was upgraded to a supergroup chat',
+        description:
+          'Bad Request: group chat was upgraded to a supergroup chat',
         parameters: { migrate_to_chat_id: -1009999999999 },
       },
       'sendMessage',

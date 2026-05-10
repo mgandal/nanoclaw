@@ -364,7 +364,8 @@ describe('parseTextStyles — telegram preserves markdown links', () => {
   });
 
   it('preserves links inside bullet items on telegram', () => {
-    const input = '- [Story](https://a.com) - summary\n- [Other](https://b.com) - other summary';
+    const input =
+      '- [Story](https://a.com) - summary\n- [Other](https://b.com) - other summary';
     const result = parseTextStyles(input, 'telegram');
     expect(result).toContain('[Story](https://a.com)');
     expect(result).toContain('[Other](https://b.com)');
@@ -385,10 +386,13 @@ describe('parseTextStyles — telegram preserves markdown links', () => {
 // ---------------------------------------------------------------------------
 describe('parseTextStyles — telegram citation tokens', () => {
   it('converts "[1] text https://url" to a markdown link on telegram', () => {
-    const input = '[1] K-Dense-AI/scientific-agent-skills - GitHub https://github.com/K-Dense-AI/scientific-agent-skills';
+    const input =
+      '[1] K-Dense-AI/scientific-agent-skills - GitHub https://github.com/K-Dense-AI/scientific-agent-skills';
     const result = parseTextStyles(input, 'telegram');
     expect(result).toContain('*[1]*');
-    expect(result).toContain('[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)');
+    expect(result).toContain(
+      '[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)',
+    );
   });
 
   it('converts a Sources block with multiple [N] tokens on telegram', () => {
@@ -398,8 +402,12 @@ describe('parseTextStyles — telegram citation tokens', () => {
       '[2] OmicsClaw https://github.com/example/omicsclaw',
     ].join('\n');
     const result = parseTextStyles(input, 'telegram');
-    expect(result).toContain('[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)');
-    expect(result).toContain('[OmicsClaw](https://github.com/example/omicsclaw)');
+    expect(result).toContain(
+      '[K-Dense-AI/scientific-agent-skills - GitHub](https://github.com/K-Dense-AI/scientific-agent-skills)',
+    );
+    expect(result).toContain(
+      '[OmicsClaw](https://github.com/example/omicsclaw)',
+    );
     // Bare "[1]" / "[2]" tokens must be rewrapped (not orphaned)
     expect(result).not.toMatch(/^\[1\] K-Dense-AI/m);
     expect(result).not.toMatch(/^\[2\] OmicsClaw/m);
@@ -434,9 +442,7 @@ describe('parseTextStyles — telegram tight bullets', () => {
 
   it('compacts blank lines between * bullet items on telegram', () => {
     const input = '* one\n\n* two\n\n* three';
-    expect(parseTextStyles(input, 'telegram')).toBe(
-      '* one\n* two\n* three',
-    );
+    expect(parseTextStyles(input, 'telegram')).toBe('* one\n* two\n* three');
   });
 
   it('preserves blank lines between non-bullet paragraphs on telegram', () => {
