@@ -1,5 +1,5 @@
 import { logger } from '../../logger.js';
-import type { IpcHandler } from '../handler.js';
+import type { ExecuteResult, IpcHandler } from '../handler.js';
 
 interface Input {
   toAgent: string;
@@ -19,7 +19,7 @@ const SUMMARY_AUDIT_MAX = 500;
 const SUMMARY_NOTIFY_MAX = 120;
 const TOPIC_MAX = 100;
 
-export const publishToBusHandler: IpcHandler<Input> = {
+export const publishToBusHandler: IpcHandler<Input, ExecuteResult> = {
   type: 'publish_to_bus',
 
   parse(raw) {
@@ -94,10 +94,11 @@ export const publishToBusHandler: IpcHandler<Input> = {
 
   execute(input, ctx) {
     if (!ctx.deps.messageBus) {
-      // Latent original behavior: silently no-op the publish when no bus is
-      // wired. The post-hoc notify still fires (dispatcher-level), preserving
-      // the prior "send notification for an undelivered message" quirk.
-      return;
+      // No bus wired (test seam; production always wires one in src/index.ts).
+      // Suppress the post-hoc notify so the user doesn't see "→ X@Y: …" for
+      // a message that was never written. Audit row was already emitted by
+      // the gate upstream and is unaffected.
+      return { executed: false };
     }
 
     const targetGroup = input.toGroup || ctx.baseGroup;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
   IpcHandler,
@@ -12,6 +12,7 @@ import {
   _resetBuiltinHandlersForTests,
   registerBuiltinHandlers,
 } from './handlers/index.js';
+import * as trustGate from './trust-gate.js';
 import type { IpcDeps } from '../ipc.js';
 import type { RegisteredGroup } from '../types.js';
 
@@ -163,40 +164,91 @@ describe('dispatchIpcAction', () => {
     expect(ctx.baseGroup).toBe('telegram_main');
   });
 
-  it('preserves separate audit + notify summaries — auditSummary defaults to target', async () => {
-    let executed = false;
-    let observedAuth: {
-      target: string;
-      notifySummary: string;
-      auditSummary?: string;
-    } | null = null;
-    registerIpcHandler({
-      type: 'summary_split',
-      parse: () => ({}),
-      authorize: () => {
-        observedAuth = {
+  it('passes auth.auditSummary through to gateAndStage when set', async () => {
+    // Spy on gateAndStage so we can pin what reaches the audit/trust path —
+    // not just what the handler returned. This is the seam a regression like
+    // `auth.auditSummary ?? auth.target` → `auth.auditSummary || auth.target`
+    // would slip through if we only checked the handler's return value.
+    const gateSpy = vi.spyOn(trustGate, 'gateAndStage');
+    try {
+      registerIpcHandler({
+        type: 'summary_split_explicit',
+        parse: () => ({}),
+        authorize: () => ({
+          target: 'task-42',
+          auditSummary: 'forensic-summary-text',
+          notifySummary: 'paused task task-42',
+          payloadForStaging: { taskId: 'task-42' },
+        }),
+        execute: () => {},
+      });
+      const deps = fakeDeps();
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction({ type: 'summary_split_explicit' }, ctx);
+      expect(gateSpy).toHaveBeenCalledTimes(1);
+      const arg = gateSpy.mock.calls[0]![0];
+      // The dispatcher should hand the explicit auditSummary to the gate as
+      // `summary` — not the user-facing notify text.
+      expect(arg.summary).toBe('forensic-summary-text');
+      expect(arg.target).toBe('task-42');
+    } finally {
+      gateSpy.mockRestore();
+    }
+  });
+
+  it('defaults gate.summary to auth.target when auditSummary is OMITTED (?? semantics, not ||)', async () => {
+    // Critical: this test pins the `auth.auditSummary ?? auth.target` fallback
+    // in handler.ts. A regression to `||` would still pass on undefined inputs
+    // but would diverge for an explicit empty-string auditSummary (see the
+    // empty-string test below).
+    const gateSpy = vi.spyOn(trustGate, 'gateAndStage');
+    try {
+      registerIpcHandler({
+        type: 'summary_default',
+        parse: () => ({}),
+        authorize: () => ({
           target: 'task-42',
           notifySummary: 'paused task task-42',
           payloadForStaging: { taskId: 'task-42' },
-        } as never;
-        return observedAuth as never;
-      },
-      execute: () => {
-        executed = true;
-      },
-    });
-    const deps = fakeDeps();
-    const ctx = buildContext('telegram_main', true, deps);
-    const result = await dispatchIpcAction({ type: 'summary_split' }, ctx);
-    expect(result.handled).toBe(true);
-    expect(executed).toBe(true);
-    // Sanity: the test fixture demonstrates that when auditSummary is omitted,
-    // the dispatcher falls back to `target` for the gate audit row — keeping
-    // agent_actions.summary equal to the bare identifier (forensic parity
-    // with the pre-refactor switch).
-    expect(observedAuth!.target).toBe('task-42');
-    expect(observedAuth!.notifySummary).toBe('paused task task-42');
-    expect(observedAuth!.auditSummary).toBeUndefined();
+        }),
+        execute: () => {},
+      });
+      const deps = fakeDeps();
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction({ type: 'summary_default' }, ctx);
+      expect(gateSpy).toHaveBeenCalledTimes(1);
+      expect(gateSpy.mock.calls[0]![0].summary).toBe('task-42');
+      expect(gateSpy.mock.calls[0]![0].target).toBe('task-42');
+    } finally {
+      gateSpy.mockRestore();
+    }
+  });
+
+  it('preserves an explicit empty-string auditSummary instead of falling back to target (?? not ||)', async () => {
+    // This is the test that catches the `?? → ||` regression. With `??` the
+    // empty string is preserved as the gate summary. With `||` it silently
+    // becomes `target`. A reviewer-reported gap exactly like this is why we
+    // pin the distinction.
+    const gateSpy = vi.spyOn(trustGate, 'gateAndStage');
+    try {
+      registerIpcHandler({
+        type: 'summary_empty_string',
+        parse: () => ({}),
+        authorize: () => ({
+          target: 'task-42',
+          auditSummary: '',
+          notifySummary: 'paused task task-42',
+          payloadForStaging: {},
+        }),
+        execute: () => {},
+      });
+      const deps = fakeDeps();
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction({ type: 'summary_empty_string' }, ctx);
+      expect(gateSpy.mock.calls[0]![0].summary).toBe('');
+    } finally {
+      gateSpy.mockRestore();
+    }
   });
 
   it('skips post-hoc notify when execute returns { executed: false }', async () => {
@@ -234,6 +286,49 @@ describe('dispatchIpcAction', () => {
     expect(sendCount).toBe(0);
   });
 
+  it('publish_to_bus suppresses post-hoc notify when messageBus is unwired (executed=false)', async () => {
+    // Pre-fix: handler returned void on null-bus, so the dispatcher fired the
+    // notify saying "→ agentX@groupY: …" to the user even though no message
+    // was actually written. The fix returns { executed: false } so the user
+    // sees no notify for an action that didn't happen. Audit row is unaffected
+    // (it was emitted upstream by the gate).
+    const { publishToBusHandler } =
+      await import('./handlers/publish-to-bus.js');
+    registerIpcHandler(publishToBusHandler);
+    const notifySpy = vi.spyOn(trustGate, 'fireNotifyIfRequested');
+    try {
+      const deps = fakeDeps({
+        // No messageBus key → ctx.deps.messageBus is undefined → the no-bus
+        // branch fires.
+        registeredGroups: () => ({
+          'main-jid': {
+            name: 'main',
+            folder: 'telegram_main',
+            trigger: '',
+            added_at: '',
+            isMain: true,
+          },
+        }),
+      });
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction(
+        {
+          type: 'publish_to_bus',
+          to_agent: 'marvin',
+          to_group: 'telegram_main',
+          topic: 'hello',
+          summary: 'test summary',
+          payload: {},
+        },
+        ctx,
+      );
+      // Notify must NOT have been called for the unwired-bus path.
+      expect(notifySpy).not.toHaveBeenCalled();
+    } finally {
+      notifySpy.mockRestore();
+    }
+  });
+
   it('fires post-hoc notify when execute returns void (treats undefined as executed)', async () => {
     // Mirror of the executed=false test: void/undefined means executed
     // normally and the dispatcher should attempt notify (which still no-ops
@@ -258,36 +353,63 @@ describe('dispatchIpcAction', () => {
     expect(executed).toBe(true);
   });
 
-  it('supports separate auditTarget override — needed for schedule_task forensic parity', async () => {
-    let executed = false;
-    let observedAuth: {
-      target: string;
-      auditTarget?: string;
-      notifySummary: string;
-    } | null = null;
-    registerIpcHandler({
-      type: 'target_split',
-      parse: () => ({}),
-      authorize: () => {
-        observedAuth = {
+  it('routes auditTarget to gate.target while keeping auth.target for notify (schedule_task parity)', async () => {
+    // Pins the dispatcher's `auth.auditTarget ?? auth.target` split so the gate
+    // audit row references the group folder while the post-hoc notify still
+    // mentions the new task id. Spying on gateAndStage AND fireNotifyIfRequested
+    // verifies both halves of the split.
+    const gateSpy = vi.spyOn(trustGate, 'gateAndStage');
+    const notifySpy = vi.spyOn(trustGate, 'fireNotifyIfRequested');
+    try {
+      registerIpcHandler({
+        type: 'target_split_pinned',
+        parse: () => ({}),
+        authorize: () => ({
           target: 'task-99', // notify points at the new task id
-          auditTarget: 'group-folder', // audit row references the group
+          auditTarget: 'group-folder', // gate audit row references the group
           notifySummary: "added task 'do the thing' (cron)",
           payloadForStaging: {},
-        } as never;
-        return observedAuth as never;
-      },
-      execute: () => {
-        executed = true;
-      },
-    });
-    const deps = fakeDeps();
-    const ctx = buildContext('telegram_main', true, deps);
-    const result = await dispatchIpcAction({ type: 'target_split' }, ctx);
-    expect(result.handled).toBe(true);
-    expect(executed).toBe(true);
-    expect(observedAuth!.target).toBe('task-99');
-    expect(observedAuth!.auditTarget).toBe('group-folder');
+        }),
+        execute: () => {},
+      });
+      const deps = fakeDeps();
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction({ type: 'target_split_pinned' }, ctx);
+      expect(gateSpy).toHaveBeenCalledTimes(1);
+      // Audit path sees the override.
+      expect(gateSpy.mock.calls[0]![0].target).toBe('group-folder');
+      // Notify path (when called) sees the unsplit target.
+      // For non-agent callers fireNotifyIfRequested still gets called by the
+      // dispatcher with auth.target — it short-circuits internally on the null
+      // agentName, but we can still inspect the args it received.
+      expect(notifySpy).toHaveBeenCalledTimes(1);
+      expect(notifySpy.mock.calls[0]![1].target).toBe('task-99');
+    } finally {
+      gateSpy.mockRestore();
+      notifySpy.mockRestore();
+    }
+  });
+
+  it('defaults gate.target to auth.target when auditTarget is OMITTED', async () => {
+    const gateSpy = vi.spyOn(trustGate, 'gateAndStage');
+    try {
+      registerIpcHandler({
+        type: 'target_default',
+        parse: () => ({}),
+        authorize: () => ({
+          target: 'task-99',
+          notifySummary: 'paused task task-99',
+          payloadForStaging: {},
+        }),
+        execute: () => {},
+      });
+      const deps = fakeDeps();
+      const ctx = buildContext('telegram_main', true, deps);
+      await dispatchIpcAction({ type: 'target_default' }, ctx);
+      expect(gateSpy.mock.calls[0]![0].target).toBe('task-99');
+    } finally {
+      gateSpy.mockRestore();
+    }
   });
 });
 
