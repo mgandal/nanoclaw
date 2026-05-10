@@ -32,6 +32,12 @@
             "command": "bash .claude/hooks/protect-state-files.sh",
             "timeout": 5,
             "statusMessage": "Checking state-file protection..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/protect-generated.sh",
+            "timeout": 5,
+            "statusMessage": "Checking generated-path protection..."
           }
         ]
       }
@@ -45,6 +51,12 @@
             "command": "bash .claude/hooks/run-colocated-test.sh 2>/dev/null || true",
             "timeout": 30,
             "statusMessage": "Running co-located tests..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/typecheck-on-edit.sh 2>/dev/null || true",
+            "timeout": 45,
+            "statusMessage": "Type-checking..."
           }
         ]
       }
