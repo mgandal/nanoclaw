@@ -29,9 +29,16 @@ groups/telegram_claire/*
 !groups/global/CLAUDE.md
 !groups/global/state/
 !groups/global/state/**
-# Re-ignore current.md — auto-rendered daily, contains PHI risk
-# (see explanatory comment further below)
+# Re-ignore state files that are local-only, auto-generated, or sensitive:
+# - current.md: auto-rendered daily; previously slipped into git with PHI risk
+# - followups.md: email-derived, contains counterparty PII; managed by
+#   email-ingest.py and rebuilt on each ingest
+# - bugs.md: local personal bug inbox, not a templated baseline
+# - *.archived-*: superseded by the live tasks table in store/messages.db
 groups/global/state/current.md
+groups/global/state/followups.md
+groups/global/state/bugs.md
+groups/global/state/*.archived-*.md
 !groups/telegram_claire/CLAUDE.md
 !groups/telegram_claire/memory_guardian/
 groups/telegram_claire/memory_guardian/**/__pycache__/
@@ -58,9 +65,9 @@ groups/telegram_claire/state/swarm-audit.md
 
 # Note: groups/global/state/current.md is auto-rendered by scheduled task
 # task-1774027787743-upd8cur as a view of the live tasks table in
-# store/messages.db. It's already covered by the groups/global/* rule above
-# but historically slipped into git (forced-add) and required PHI redaction
-# in commit 511cff7. Kept untracked deliberately.
+# store/messages.db. Kept untracked deliberately — historically slipped
+# into git (forced-add) and required PHI redaction in commit 511cff7.
+# Now ignored explicitly by the rule in the groups/global/state/ block above.
 
 # Skill output and runtime state
 graphify-out/
