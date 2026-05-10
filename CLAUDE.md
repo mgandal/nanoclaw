@@ -2,7 +2,7 @@
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
-Primary languages: TypeScript (main), Python (Cognee/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), Cognee (memory/KG), Todoist API, Slack/Telegram bots, Docker services, Ollama for local LLMs.
+Primary languages: TypeScript (main), Python (sync/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), QMD (semantic search), Honcho (user modeling), Hindsight (cross-session memory), Todoist API, Slack/Telegram bots, Apple Container, Ollama for local LLMs.
 
 ## Response Length
 
@@ -87,6 +87,16 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 Run commands directly—don't tell the user to run them. Build/run/test commands are in `package.json`. Container rebuild: `./container/build.sh`.
 
+Quick commands:
+```bash
+bun test                                # full vitest suite
+bun --bun vitest run src/foo.test.ts    # single file
+bun run build                           # tsc -> dist/
+bun run typecheck                       # tsc --noEmit
+bun run lint                            # eslint src/
+bun run dev                             # run from src (no build)
+```
+
 Service restart:
 ```bash
 # macOS
@@ -110,8 +120,7 @@ systemctl --user restart nanoclaw
 ## Debugging Rules
 
 - When debugging, identify the actual root cause before implementing fixes. Do not cycle through multiple approaches without diagnosis
-- Check for orphaned/stale processes FIRST when hitting database locks or port conflicts
-- Check for stale processes, orphaned locks (especially SQLite), and port conflicts before trying other hypotheses
+- Check for orphaned/stale processes, locks (especially SQLite), and port conflicts FIRST when hitting database locks or port conflicts
 - When a user provides a new API token, trust it — don't claim it's identical to the old one
 - When hitting auth errors, verify you're using the correct API version before cycling through other hypotheses
 
