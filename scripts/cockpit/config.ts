@@ -1,15 +1,41 @@
+import fs from 'fs';
 import path from 'path';
-
-export const VAULT_PATH = process.env.COCKPIT_VAULT_PATH ?? '/Volumes/sandisk4TB/marvin-vault';
-
-export const R2_ENDPOINT = process.env.COCKPIT_R2_ENDPOINT ?? '';
-export const R2_BUCKET = process.env.COCKPIT_R2_BUCKET ?? '';
-export const R2_TOKEN = process.env.COCKPIT_R2_TOKEN ?? '';
 
 // Project root detection: script lives at scripts/cockpit/<file>.ts.
 // import.meta.dirname is the ES2024 / Node 20.11+ / Bun standard
 // (import.meta.dir is Bun-only and undefined under vitest's transform).
 export const PROJECT_ROOT = path.resolve(import.meta.dirname, '..', '..');
+
+// Launchd strips environment variables. Load .env from the repo root so the
+// cockpit cron sees COCKPIT_R2_* the same way an interactive shell does.
+function readDotenv(key: string): string | undefined {
+  if (process.env[key] !== undefined) return process.env[key];
+  try {
+    const content = fs.readFileSync(path.join(PROJECT_ROOT, '.env'), 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 0) continue;
+      const k = trimmed.slice(0, eq).trim();
+      if (k !== key) continue;
+      let v = trimmed.slice(eq + 1).trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      return v;
+    }
+  } catch {
+    // .env missing is fine — fall through to undefined.
+  }
+  return undefined;
+}
+
+export const VAULT_PATH = readDotenv('COCKPIT_VAULT_PATH') ?? '/Volumes/sandisk4TB/marvin-vault';
+
+export const R2_ENDPOINT = readDotenv('COCKPIT_R2_ENDPOINT') ?? '';
+export const R2_BUCKET = readDotenv('COCKPIT_R2_BUCKET') ?? '';
+export const R2_TOKEN = readDotenv('COCKPIT_R2_TOKEN') ?? '';
 
 export const SNAPSHOT_PATH = '/tmp/nanoclaw-snapshot.json';
 export const LAST_SNAPSHOT_PATH = '/tmp/nanoclaw-last-snapshot.json';

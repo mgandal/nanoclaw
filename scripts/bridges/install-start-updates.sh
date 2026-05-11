@@ -89,6 +89,25 @@ for entry in "${BRIDGES[@]}"; do
   echo "  kickstarted $launchd_label"
 done
 
+# Apple Notes export script — separate target inside the apple-notes-mcp cache.
+# Sanitizes note titles before writing files so downstream indexers (QMD
+# handelize) don't crash on punctuation-only names like "=" or ".".
+notes_export_target="$HOME/.cache/apple-notes-mcp/export-notes.js"
+notes_export_source="$SCRIPT_DIR/apple-notes-export.js"
+if [ -d "$HOME/.cache/apple-notes-mcp" ] && [ -f "$notes_export_source" ]; then
+  echo "== apple-notes export-notes.js =="
+  if [ -f "$notes_export_target" ] && cmp -s "$notes_export_target" "$notes_export_source"; then
+    echo "  unchanged"
+  else
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "  DRY-RUN: would copy $notes_export_source → $notes_export_target"
+    else
+      install -m 0755 "$notes_export_source" "$notes_export_target"
+      echo "  installed $notes_export_target"
+    fi
+  fi
+fi
+
 echo
 echo "Done. Verify with:"
 echo "  bash scripts/bridges/install-start-updates.sh --dry-run"
