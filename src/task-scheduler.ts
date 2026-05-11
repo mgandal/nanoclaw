@@ -90,6 +90,25 @@ export function computeNextRun(task: ScheduledTask): string | null {
       );
       return new Date(now + 60_000).toISOString();
     }
+
+    // Safety net (layer-2): enforce the same 30-minute minimum that
+    // validateTaskSchedule enforces at insert time. A sub-30min interval can
+    // bypass the insert gate via direct DB write, migration, or a race. Without
+    // this check computeNextRun would schedule a fire every N seconds, spinning
+    // the scheduler and burning tokens.  Mirror the cron safety net above.
+    const MIN_INTERVAL_MS = 30 * 60 * 1000;
+    if (ms < MIN_INTERVAL_MS) {
+      logger.warn(
+        {
+          taskId: task.id,
+          intervalMs: ms,
+          minIntervalMs: MIN_INTERVAL_MS,
+        },
+        'Interval fires too frequently (< 30min), throttling to minimum safe interval',
+      );
+      return new Date(now + MIN_INTERVAL_MS).toISOString();
+    }
+
     // Anchor to the scheduled time, not now, to prevent drift.
     // Skip past any missed intervals so we always land in the future.
     // Guard against null next_run (corrupted DB row) to avoid near-infinite loop.

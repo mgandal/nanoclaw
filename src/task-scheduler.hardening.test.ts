@@ -297,7 +297,9 @@ describe('Bug class 3 — heal-on-tick: no log spam when clean', () => {
 
   it('heal runs on each scheduler tick (per-tick call, not startup-only)', async () => {
     // Start the scheduler with a clean DB (no orphans at startup).
-    startSchedulerLoop(makeMockDeps({ queue: { enqueueTask: vi.fn() } as any }));
+    startSchedulerLoop(
+      makeMockDeps({ queue: { enqueueTask: vi.fn() } as any }),
+    );
 
     // Run the first tick — no orphans, clean.
     await vi.advanceTimersByTimeAsync(10);

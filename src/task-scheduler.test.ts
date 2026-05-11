@@ -79,7 +79,7 @@ describe('task scheduler', () => {
       chat_jid: 'test@g.us',
       prompt: 'test',
       schedule_type: 'interval' as const,
-      schedule_value: '60000', // 1 minute
+      schedule_value: String(60 * 60 * 1000), // 1 hour (above 30-min minimum)
       context_mode: 'isolated' as const,
       next_run: scheduledTime,
       last_run: null,
@@ -92,8 +92,8 @@ describe('task scheduler', () => {
     const nextRun = computeNextRun(task);
     expect(nextRun).not.toBeNull();
 
-    // Should be anchored to scheduledTime + 60s, NOT Date.now() + 60s
-    const expected = new Date(scheduledTime).getTime() + 60000;
+    // Should be anchored to scheduledTime + 1h, NOT Date.now() + 1h
+    const expected = new Date(scheduledTime).getTime() + 60 * 60 * 1000;
     expect(new Date(nextRun!).getTime()).toBe(expected);
   });
 
