@@ -426,8 +426,8 @@ export class HealthMonitor {
           signal: controller.signal,
         });
         if (!res.ok) {
-          logger.debug(
-            { ollamaHost, status: (res as { status?: number }).status },
+          logger.warn(
+            { ollamaHost, status: res.status },
             'probe failed: non-ok HTTP response',
           );
           return false;
@@ -438,10 +438,7 @@ export class HealthMonitor {
       this.recordOllamaLatency(HealthMonitor.PROBE_RECOVERY_LATENCY_MS);
       return true;
     } catch (err) {
-      logger.debug(
-        { ollamaHost, err },
-        'probe failed: fetch threw',
-      );
+      logger.warn({ ollamaHost, err }, 'probe failed: fetch threw');
       return false;
     }
   }

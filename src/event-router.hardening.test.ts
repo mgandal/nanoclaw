@@ -83,14 +83,15 @@ function makeRouter(
 const warnMock = () => logger.warn as ReturnType<typeof vi.fn>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 0. Probe failure MUST be logged at debug level (currently: silent → test FAILS)
+// 0. Probe failure MUST be logged at warn level so operators see it
+//    (debug is suppressed in production — logger defaults to info)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('emits a debug log when probe fetch throws (ECONNREFUSED)', async () => {
+  it('emits a warn log when probe fetch throws (ECONNREFUSED)', async () => {
     const monitor = makeHealthMonitor();
     const failFetch = vi.fn(async () => {
       throw new Error('ECONNREFUSED');
@@ -104,15 +105,16 @@ describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
 
     // A silent probe failure is invisible in production logs — operators
     // have no signal that the half-open check is consistently failing.
-    // Expect at least a debug-level log with the error and host.
-    const debugMock = logger.debug as ReturnType<typeof vi.fn>;
-    expect(debugMock).toHaveBeenCalledWith(
+    // Warn level survives the production logger's info default; the 60s
+    // probe cooldown caps spam at ~1 line/min/host during a stable outage.
+    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
+    expect(warnMock).toHaveBeenCalledWith(
       expect.objectContaining({ ollamaHost: 'http://localhost:11434' }),
       expect.stringMatching(/probe.*fail|fail.*probe/i),
     );
   });
 
-  it('emits a debug log when probe returns non-ok status', async () => {
+  it('emits a warn log when probe returns non-ok status', async () => {
     const monitor = makeHealthMonitor();
     const nonOkFetch = vi.fn(async () => ({
       ok: false,
@@ -125,8 +127,8 @@ describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
       nonOkFetch,
     );
 
-    const debugMock = logger.debug as ReturnType<typeof vi.fn>;
-    expect(debugMock).toHaveBeenCalledWith(
+    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
+    expect(warnMock).toHaveBeenCalledWith(
       expect.objectContaining({ ollamaHost: 'http://localhost:11434' }),
       expect.stringMatching(/probe.*fail|fail.*probe/i),
     );
