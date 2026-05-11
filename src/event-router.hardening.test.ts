@@ -86,7 +86,9 @@ const warnMock = () => logger.warn as ReturnType<typeof vi.fn>;
 // 0. Probe failure MUST be logged at debug level (currently: silent → test FAILS)
 // ─────────────────────────────────────────────────────────────────────────────
 describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('emits a debug log when probe fetch throws (ECONNREFUSED)', async () => {
     const monitor = makeHealthMonitor();
@@ -94,7 +96,11 @@ describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
 
-    await monitor.tryProbeAndRecover('http://localhost:11434', Date.now(), failFetch);
+    await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      Date.now(),
+      failFetch,
+    );
 
     // A silent probe failure is invisible in production logs — operators
     // have no signal that the half-open check is consistently failing.
@@ -108,9 +114,16 @@ describe('HealthMonitor.tryProbeAndRecover — probe failure logging', () => {
 
   it('emits a debug log when probe returns non-ok status', async () => {
     const monitor = makeHealthMonitor();
-    const nonOkFetch = vi.fn(async () => ({ ok: false, status: 503 })) as unknown as typeof fetch;
+    const nonOkFetch = vi.fn(async () => ({
+      ok: false,
+      status: 503,
+    })) as unknown as typeof fetch;
 
-    await monitor.tryProbeAndRecover('http://localhost:11434', Date.now(), nonOkFetch);
+    await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      Date.now(),
+      nonOkFetch,
+    );
 
     const debugMock = logger.debug as ReturnType<typeof vi.fn>;
     expect(debugMock).toHaveBeenCalledWith(
@@ -131,11 +144,17 @@ describe('HealthMonitor.tryProbeAndRecover — cooldown after failure', () => {
     }) as unknown as typeof fetch;
 
     const t0 = Date.now();
-    const first = await monitor.tryProbeAndRecover('http://localhost:11434', t0, failFetch);
+    const first = await monitor.tryProbeAndRecover(
+      'http://localhost:11434',
+      t0,
+      failFetch,
+    );
     expect(first).toBe(false);
 
     // Within cooldown (59 s later) — should skip without calling fetch again
-    const secondFetch = vi.fn(async () => ({ ok: true })) as unknown as typeof fetch;
+    const secondFetch = vi.fn(async () => ({
+      ok: true,
+    })) as unknown as typeof fetch;
     const second = await monitor.tryProbeAndRecover(
       'http://localhost:11434',
       t0 + 59_000,
@@ -168,7 +187,8 @@ describe('HealthMonitor.tryProbeAndRecover — non-ok response', () => {
     expect(recovered).toBe(false);
     // Only the original 15_000ms sample should exist; no 50ms probe sample
     type LatencyEntry = { latencyMs: number };
-    const log = (monitor as unknown as { ollamaLatencyLog: LatencyEntry[] }).ollamaLatencyLog;
+    const log = (monitor as unknown as { ollamaLatencyLog: LatencyEntry[] })
+      .ollamaLatencyLog;
     expect(log).toHaveLength(1);
     expect(log[0].latencyMs).toBe(15_000);
   });
@@ -178,7 +198,9 @@ describe('HealthMonitor.tryProbeAndRecover — non-ok response', () => {
 // 3. Probe succeeds but breaker is still degraded → fallback path taken
 // ─────────────────────────────────────────────────────────────────────────────
 describe('EventRouter route() — probe succeeds but still degraded → fallback', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('uses DEFAULT_CLASSIFICATION when probe returns true but isOllamaDegraded still true', async () => {
     // tryProbeAndRecover returns true (probe succeeded) but
@@ -249,15 +271,21 @@ describe('HealthMonitor isOllamaDegraded — opening direction', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('sanitizeClassificationText — non-string types', () => {
   it('returns empty string for object input', () => {
-    expect(sanitizeClassificationText({} as unknown as string, 'topic')).toBe('');
+    expect(sanitizeClassificationText({} as unknown as string, 'topic')).toBe(
+      '',
+    );
   });
 
   it('returns empty string for array input', () => {
-    expect(sanitizeClassificationText([] as unknown as string, 'summary')).toBe('');
+    expect(sanitizeClassificationText([] as unknown as string, 'summary')).toBe(
+      '',
+    );
   });
 
   it('returns empty string for boolean input', () => {
-    expect(sanitizeClassificationText(true as unknown as string, 'topic')).toBe('');
+    expect(sanitizeClassificationText(true as unknown as string, 'topic')).toBe(
+      '',
+    );
   });
 });
 
@@ -336,7 +364,9 @@ describe('sanitizeClassificationText topic — tab and control chars', () => {
 // 7. Fallback observability — warn log must fire on each fallback path
 // ─────────────────────────────────────────────────────────────────────────────
 describe('EventRouter fallback observability', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('emits warn when Ollama is degraded and no probe configured', async () => {
     vi.stubGlobal('fetch', vi.fn());
@@ -358,7 +388,10 @@ describe('EventRouter fallback observability', () => {
   });
 
   it('emits warn when Ollama fetch throws (ECONNREFUSED)', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNREFUSED')));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
+    );
     const router = makeRouter();
     const result = await router.route(makeEmailEvent('e-throw'));
 
@@ -426,7 +459,9 @@ describe('EventRouter route() — unknown event type', () => {
 // 9. DEFAULT_CLASSIFICATION trust-matrix interaction
 // ─────────────────────────────────────────────────────────────────────────────
 describe('EventRouter DEFAULT_CLASSIFICATION trust-matrix', () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   it('fallback (importance=0.5) does NOT reach escalate with importance_gte 0.85 rule', async () => {
     const escalateRule = {

@@ -425,13 +425,23 @@ export class HealthMonitor {
         const res = await fetchImpl(`${ollamaHost}/api/version`, {
           signal: controller.signal,
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          logger.debug(
+            { ollamaHost, status: (res as { status?: number }).status },
+            'probe failed: non-ok HTTP response',
+          );
+          return false;
+        }
       } finally {
         clearTimeout(timer);
       }
       this.recordOllamaLatency(HealthMonitor.PROBE_RECOVERY_LATENCY_MS);
       return true;
-    } catch {
+    } catch (err) {
+      logger.debug(
+        { ollamaHost, err },
+        'probe failed: fetch threw',
+      );
       return false;
     }
   }
