@@ -4887,7 +4887,40 @@ describe('deliverSendMessage with proactive payload', () => {
 describe('processTaskIpc dispatches kg_query', () => {
   const kgDb = path.join(process.cwd(), 'store', 'knowledge-graph.db');
   const dbExists = fs.existsSync(kgDb);
-  const test = dbExists ? it : it.skip;
+
+  // Pick an entity name at test-setup time that actually has neighbors in the
+  // current graph, so the assertion is robust to re-ingestion. Returns null
+  // if the DB has zero edges (test will skip in that case).
+  function pickSeedWithNeighbors(): string | null {
+    if (!dbExists) return null;
+    try {
+      // Lazy require because we only need this when the DB is present and
+      // we want to keep the top of the file unchanged.
+
+      const Database = require('better-sqlite3');
+      const db = new Database(kgDb, { readonly: true, fileMustExist: true });
+      try {
+        const row = db
+          .prepare(
+            `SELECT e.canonical_name AS name
+               FROM entities e
+               JOIN edges ed ON (e.id = ed.source_id OR e.id = ed.target_id)
+              GROUP BY e.id
+              ORDER BY COUNT(*) DESC, e.canonical_name ASC
+              LIMIT 1`,
+          )
+          .get();
+        return (row && row.name) || null;
+      } finally {
+        db.close();
+      }
+    } catch {
+      return null;
+    }
+  }
+  const seed = pickSeedWithNeighbors();
+  // Skip if the DB is absent OR has zero edges; otherwise run.
+  const test = seed ? it : it.skip;
 
   test('writes a success result when the DB is seeded', async () => {
     const requestId = `kgtest-${Date.now()}-${Math.random()
@@ -4897,7 +4930,7 @@ describe('processTaskIpc dispatches kg_query', () => {
       {
         type: 'kg_query',
         requestId,
-        query: 'flash',
+        query: seed!,
         hops: 1,
       } as any,
       'telegram_main',
@@ -4915,12 +4948,11 @@ describe('processTaskIpc dispatches kg_query', () => {
       expect(fs.existsSync(resultFile)).toBe(true);
       const payload = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
       expect(payload.success).toBe(true);
-      // `flash` is a known tool in the seeded graph with a tool->tool
-      // related_to edge and a cites edge. Exact counts are data-dependent
-      // so assert only that at least one neighbor exists.
+      // `seed` is picked at setup as an entity known to have ≥1 edge in the
+      // current graph, so neighbor-traversal must yield ≥1 neighbor.
       expect(Array.isArray(payload.matched)).toBe(true);
       expect(payload.matched.length).toBeGreaterThan(0);
-      expect(payload.matched[0].canonical_name).toBe('flash');
+      expect(payload.matched[0].canonical_name).toBe(seed);
       expect(Array.isArray(payload.neighbors)).toBe(true);
       expect(payload.neighbors.length).toBeGreaterThan(0);
     } finally {
