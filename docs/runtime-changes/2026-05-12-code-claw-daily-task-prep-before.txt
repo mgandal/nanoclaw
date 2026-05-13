@@ -1,0 +1,1 @@
+Run the daily-task-prep skill: read /workspace/group/skills/daily-task-prep/SKILL.md and execute the full 10-step workflow. Use Todoist, Calendar, and Apple Notes MCP tools as described. Stay silent unless something needs Mike's attention — only send a Telegram message if there's a flag, conflict, or urgent item that requires his input.
