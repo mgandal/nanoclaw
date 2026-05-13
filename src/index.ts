@@ -890,9 +890,15 @@ async function startMessageLoop(): Promise<void> {
           // goes through runAgent() which spawns a fresh session.
           if (queue.isActive(chatJid) && group) {
             const { createdAt } = getSessionTimestamps(group.folder);
+            // 0 = treat unknown age as fresh; avoid kill-loop when an active
+            // container exists but the session row is missing or has null
+            // created_at (race between container spawn and row insert).
+            // checkSessionExpiry() at the runAgent path uses Infinity and
+            // fail-closes — that's the right default there. Here we MUST
+            // fail-open to avoid SIGKILL-loop on every poll. Do not normalize.
             const totalAge = createdAt
               ? Date.now() - new Date(createdAt).getTime()
-              : Infinity;
+              : 0;
             if (totalAge > SESSION_MAX_AGE_MS) {
               logger.info(
                 {
