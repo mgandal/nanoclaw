@@ -205,13 +205,14 @@ if [ -f "$SCRIPT_DIR/sync.log" ]; then
         else
             warn "Last sync age" "${AGE_HOURS}h ago — expected every 8h"
         fi
-        # Check error count from last run
-        LAST_ERRORS=$(echo "$LAST_COMPLETE" | grep -oE 'errors: [0-9]+' | grep -oE '[0-9]+')
-        if [ "$LAST_ERRORS" = "0" ]; then
-            check "Last sync error-free" "" 0
-        else
-            check "Last sync error-free" "$LAST_ERRORS errors in last run" 1
-        fi
+        # NOTE: deliberately do NOT re-check the prior cycle's error count
+        # here. Doing so creates a self-perpetuating wedge: a single failed
+        # cycle would cause this pre-flight to fail forever, since sync-all.sh
+        # increments ERRORS based on this script's exit code, then writes
+        # "errors: N>0" to sync.log, which the next pre-flight reads as
+        # "prior cycle failed", etc. The current cycle's errors are already
+        # visible in sync.log without a self-referential check (silent-failure
+        # wedge anti-pattern, fixed 2026-05-13).
     else
         warn "Sync log" "no SYNC COMPLETE found in log"
     fi
