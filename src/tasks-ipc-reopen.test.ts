@@ -180,14 +180,22 @@ describe('reopenTask', () => {
 
 describe('handleTasksIpc — task_reopen', () => {
   let dataDir: string;
+  let homeDir: string;
+  let originalHome: string | undefined;
 
   beforeEach(() => {
     _initTestDatabase();
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-ipc-reopen-'));
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tasks-ipc-reopen-home-'));
+    originalHome = process.env.HOME;
+    process.env.HOME = homeDir;
   });
   afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
     _closeDatabase();
     fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(homeDir, { recursive: true, force: true });
   });
 
   it('success path: reopens a closed task and writes result file', async () => {
@@ -228,6 +236,54 @@ describe('handleTasksIpc — task_reopen', () => {
     >;
     expect(result.success).toBe(true);
     expect(result.id).toBe(id);
+  });
+
+  it('does not leak reopen audit events into the real $HOME jsonl', async () => {
+    const sentinelReason = `regression-sentinel-${Date.now()}-${Math.random()}`;
+    // Use os.userInfo() so the canary path resolves to the real OS-level $HOME
+    // even when the surrounding beforeEach has redirected process.env.HOME to a tmp dir.
+    const prodJsonlPath = path.join(
+      os.userInfo().homedir,
+      '.cache',
+      'email-ingest',
+      'task-closures.jsonl',
+    );
+    const baselineContent = fs.existsSync(prodJsonlPath)
+      ? fs.readFileSync(prodJsonlPath, 'utf8')
+      : '';
+    const baselineLineCount = baselineContent
+      ? baselineContent.replace(/\n$/, '').split('\n').length
+      : 0;
+
+    const added = addTask({ title: 'Leak guard', source: 'manual' });
+    expect(added.success).toBe(true);
+    const id = added.id!;
+    _getTestDb()
+      .query(
+        "UPDATE tasks SET status='done', completed_at=datetime('now') WHERE id=?",
+      )
+      .run(id);
+
+    await handleTasksIpc(
+      {
+        type: 'task_reopen',
+        requestId: 'req-leak-guard',
+        id,
+        reason: sentinelReason,
+      },
+      'telegram_claire',
+      true,
+      dataDir,
+    );
+
+    const afterContent = fs.existsSync(prodJsonlPath)
+      ? fs.readFileSync(prodJsonlPath, 'utf8')
+      : '';
+    const afterLineCount = afterContent
+      ? afterContent.replace(/\n$/, '').split('\n').length
+      : 0;
+    expect(afterLineCount).toBe(baselineLineCount);
+    expect(afterContent).not.toContain(sentinelReason);
   });
 
   it('malformed requestId: dropped (handled=true) and IPC dir not created', async () => {
