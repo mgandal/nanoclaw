@@ -131,6 +131,7 @@ import {
   checkSessionExpiry,
   isStaleSessionError,
   parseLastAgentSeq,
+  shouldKillActiveContainer,
 } from './index-helpers.js';
 import {
   scanAgents,
@@ -888,18 +889,14 @@ async function startMessageLoop(): Promise<void> {
           // Before piping to an active container, check if the session
           // has exceeded max age. If so, kill the container so the message
           // goes through runAgent() which spawns a fresh session.
+          // See shouldKillActiveContainer docstring for why this branch
+          // fails-open on undefined createdAt (kill-loop avoidance).
           if (queue.isActive(chatJid) && group) {
             const { createdAt } = getSessionTimestamps(group.folder);
-            // 0 = treat unknown age as fresh; avoid kill-loop when an active
-            // container exists but the session row is missing or has null
-            // created_at (race between container spawn and row insert).
-            // checkSessionExpiry() at the runAgent path uses Infinity and
-            // fail-closes — that's the right default there. Here we MUST
-            // fail-open to avoid SIGKILL-loop on every poll. Do not normalize.
-            const totalAge = createdAt
-              ? Date.now() - new Date(createdAt).getTime()
-              : 0;
-            if (totalAge > SESSION_MAX_AGE_MS) {
+            if (shouldKillActiveContainer(createdAt, SESSION_MAX_AGE_MS)) {
+              const totalAge = createdAt
+                ? Date.now() - new Date(createdAt).getTime()
+                : 0;
               logger.info(
                 {
                   group: group.name,

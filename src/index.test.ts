@@ -106,6 +106,7 @@ import {
   checkSessionExpiry,
   parseLastAgentSeq,
   isStaleSessionError,
+  shouldKillActiveContainer,
 } from './index-helpers.js';
 import { getTriggerPattern, buildTriggerPattern } from './config.js';
 
@@ -436,6 +437,59 @@ describe('checkSessionExpiry boundary conditions', () => {
     );
     // Both Infinity, max age check comes first
     expect(result).toMatch(/max age/);
+  });
+});
+
+// ---- Regression: active-container kill-loop guard ----
+//
+// Historical incident (2026-05-13): SCIENCE-claw had a 47k-min-old
+// created_at in the sessions table. The pre-pipe check in
+// startMessageLoop() ran for active containers and used `Infinity` as
+// the fallback for undefined createdAt — which exceeded SESSION_MAX_AGE_MS,
+// killed the container, re-enqueued the message, spawned a fresh container,
+// which hit the same check and was killed again. Tight SIGKILL loop.
+//
+// The fail-open semantic below is INTENTIONAL and divergent from
+// checkSessionExpiry's fail-closed semantic at line 23-25 of index-helpers.ts.
+// See the docstring on shouldKillActiveContainer for why.
+
+describe('shouldKillActiveContainer (kill-loop regression guard)', () => {
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+  const NOW = 1_700_000_000_000; // fixed reference for determinism
+
+  it('does NOT kill when createdAt is undefined (fail-open avoids kill-loop)', () => {
+    // This is the SCIENCE-claw regression. If this assertion ever flips
+    // to true, the kill-loop returns. Do not "normalize" with checkSessionExpiry.
+    expect(shouldKillActiveContainer(undefined, FOUR_HOURS, NOW)).toBe(false);
+  });
+
+  it('kills when createdAt is older than maxAgeMs', () => {
+    const createdAt = new Date(NOW - FOUR_HOURS - 1).toISOString();
+    expect(shouldKillActiveContainer(createdAt, FOUR_HOURS, NOW)).toBe(true);
+  });
+
+  it('does NOT kill when createdAt is recent (fresh session)', () => {
+    const createdAt = new Date(NOW - 60 * 1000).toISOString(); // 1m old
+    expect(shouldKillActiveContainer(createdAt, FOUR_HOURS, NOW)).toBe(false);
+  });
+
+  it('does NOT kill at exactly maxAgeMs boundary (strict > semantics)', () => {
+    // Consistent with checkSessionExpiry's strict > boundary behavior.
+    const createdAt = new Date(NOW - FOUR_HOURS).toISOString();
+    expect(shouldKillActiveContainer(createdAt, FOUR_HOURS, NOW)).toBe(false);
+  });
+
+  it('uses injected `now` for deterministic testing', () => {
+    // Two identical createdAt + maxAgeMs args, different `now` clocks,
+    // must yield different verdicts. Proves the clock is parameterized,
+    // not closed over Date.now().
+    const createdAt = new Date(NOW).toISOString();
+    expect(shouldKillActiveContainer(createdAt, FOUR_HOURS, NOW + 1000)).toBe(
+      false,
+    );
+    expect(
+      shouldKillActiveContainer(createdAt, FOUR_HOURS, NOW + FOUR_HOURS + 1),
+    ).toBe(true);
   });
 });
 
