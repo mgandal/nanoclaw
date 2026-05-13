@@ -24,6 +24,10 @@ from typing import Iterable, Optional
 log = logging.getLogger("email-ingest.task-closure")
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CONTACTS_PATH = REPO_ROOT / "groups" / "global" / "state" / "USER.md"
+
+
 class Tier(enum.Enum):
     AUTO_CLOSE = "auto_close"
     SUGGEST = "suggest"
@@ -887,7 +891,7 @@ def main(argv: list[str] | None = None) -> int:
     gmail = GmailAdapter()
     gmail.connect()
     exchange = ExchangeAdapter()
-    contacts = _load_contacts_from_claude_md(Path("groups/global/CLAUDE.md"))
+    contacts = _load_contacts_from_claude_md(CONTACTS_PATH)
     followups: list = []
     now = datetime.now(timezone.utc)
 

@@ -313,6 +313,7 @@ def run_followups_passes(
         try:
             from email_ingest.task_closure import (
                 scan_and_close, load_profile, _load_contacts_from_claude_md,
+                CONTACTS_PATH,
             )
             from pathlib import Path as _P
             project_root = _P(__file__).resolve().parents[2]
@@ -321,9 +322,7 @@ def run_followups_passes(
             jsonl = cache_dir / "task-closures.jsonl"
             pending = cache_dir / "task-closures-pending.json"
             profile_path = cache_dir / "task-closure-profile.json"
-            contacts = _load_contacts_from_claude_md(
-                project_root / "groups" / "global" / "CLAUDE.md"
-            )
+            contacts = _load_contacts_from_claude_md(CONTACTS_PATH)
             profile = load_profile(profile_path)
             # Default to dry-run; user opts into live closures via TASK_CLOSURE_DRY_RUN=0
             # (see Stage I3 of docs/superpowers/specs/2026-05-06-email-task-closure-design.md).

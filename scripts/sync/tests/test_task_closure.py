@@ -21,6 +21,8 @@ from email_ingest.task_closure import (
     ExtractedEntities,
     fetch_open_tasks,
     close_task_in_db,
+    CONTACTS_PATH,
+    _load_contacts_from_claude_md,
 )
 
 
@@ -646,3 +648,29 @@ def test_read_recent_reopens_parses_ts_iso_format(tmp_path):
     now = datetime(2026, 5, 8, 15, 0, 0, tzinfo=timezone.utc)
     recent = _read_recent_reopens(log_path, window_days=7, now=now)
     assert recent == {99}
+
+
+def test_contacts_path_points_at_user_md():
+    repo_root = Path(__file__).resolve().parents[3]
+    expected = repo_root / "groups" / "global" / "state" / "USER.md"
+    assert CONTACTS_PATH == expected, (
+        f"CONTACTS_PATH={CONTACTS_PATH} but SoT is {expected}. "
+        "Closure matcher will starve if pointed at the wrong file."
+    )
+    assert CONTACTS_PATH.exists(), f"SoT file missing on disk: {CONTACTS_PATH}"
+
+
+def test_load_contacts_returns_entries_from_repo_sot(tmp_path):
+    sot = tmp_path / "USER.md"
+    sot.write_text(
+        "# User\n\n"
+        "## Key Contacts\n\n"
+        "| Name | Role | Email |\n"
+        "|------|------|-------|\n"
+        "| Liqing Jin | Sr. Staff Research Associate | liqingjin7@gmail.com |\n"
+        "| Raquel Gur | Professor | raquel.gur@pennmedicine.upenn.edu |\n"
+    )
+    contacts = _load_contacts_from_claude_md(sot)
+    assert len(contacts) >= 2
+    assert contacts["liqing jin"]["email"] == "liqingjin7@gmail.com"
+    assert contacts["raquel gur"]["email"] == "raquel.gur@pennmedicine.upenn.edu"
