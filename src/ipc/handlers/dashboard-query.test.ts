@@ -30,11 +30,14 @@ import { dashboardQueryHandler } from './dashboard-query.js';
  */
 describe('dashboardQueryHandler', () => {
   const SOURCE_GROUP = 'telegram_other';
+  // Wire-format-locked path: container reads from `dashboard_results/`
+  // (singular suffix, prefix-grouped). See dashboard-query.ts and
+  // container/agent-runner/src/ipc-mcp-stdio.ts:733.
   const RESULTS_DIR = path.join(
     DATA_DIR,
     'ipc',
     SOURCE_GROUP,
-    'dashboard_query_results',
+    'dashboard_results',
   );
 
   let deps: IpcDeps;
@@ -229,5 +232,145 @@ describe('dashboardQueryHandler', () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  // --- Wire-format contract with the container-side poller ---
+  //
+  // The in-container agent reads from dashboard_results/{requestId}.json
+  // (hardcoded at container/agent-runner/src/ipc-mcp-stdio.ts:733). Every
+  // result-kind handler being migrated must land its result file at the
+  // legacy prefix-grouped path. This test locks the contract for
+  // dashboard_query so a future refactor cannot silently retarget it to,
+  // e.g., `dashboard_query_results/`.
+  it('writes result file at container-expected wire path (dashboard_results/)', async () => {
+    await dispatch(
+      {
+        type: 'dashboard_query',
+        requestId: 'req-wire-format',
+        queryType: 'state_freshness',
+      },
+      true,
+    );
+
+    const expectedFile = path.join(
+      DATA_DIR,
+      'ipc',
+      SOURCE_GROUP,
+      'dashboard_results',
+      'req-wire-format.json',
+    );
+    expect(fs.existsSync(expectedFile)).toBe(true);
+
+    // Also pin: the auto-naming path MUST NOT have been used, even
+    // accidentally. If a future contributor drops resultsDirName from the
+    // handler, this assertion fails and steers them to read the contract.
+    const wrongFile = path.join(
+      DATA_DIR,
+      'ipc',
+      SOURCE_GROUP,
+      'dashboard_query_results',
+      'req-wire-format.json',
+    );
+    expect(fs.existsSync(wrongFile)).toBe(false);
+
+    fs.rmSync(
+      path.join(DATA_DIR, 'ipc', SOURCE_GROUP, 'dashboard_query_results'),
+      { recursive: true, force: true },
+    );
+  });
+});
+
+// --- Rule 1: dispatcher writes failure result file when execute throws ---
+//
+// Lives outside the dashboardQueryHandler describe block because it
+// registers a different handler (a deliberately-throwing one). This locks
+// in the failure-file invariant for ALL future result-kind handlers; the
+// in-container poller must never hang because of a thrown error.
+describe('dispatcher Rule 1: failure-file on execute throw', () => {
+  const SOURCE_GROUP = 'telegram_other';
+  const RESULTS_DIR = path.join(
+    DATA_DIR,
+    'ipc',
+    SOURCE_GROUP,
+    'throwing_test_results',
+  );
+
+  let deps: IpcDeps;
+
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetHandlersForTests();
+    deps = {
+      sendMessage: async () => undefined,
+      registeredGroups: () => ({}),
+      registerGroup: () => undefined,
+      syncGroups: async () => undefined,
+      getAvailableGroups: () => [],
+      writeGroupsSnapshot: () => undefined,
+      onTasksChanged: () => undefined,
+    };
+    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+  });
+
+  it('writes {success:false, message:"Error: ..."} when handler throws', async () => {
+    // Register a deliberately throwing handler on a unique allowlisted-ish
+    // type. We don't need it on SKIP_GATE_ALLOWLIST because no agent caller
+    // is involved (sourceGroup has no '+agent'), so gateAndStage allows
+    // unconditionally for non-agent callers.
+    registerIpcHandler({
+      type: 'throwing_test',
+      responseKind: 'result',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'test',
+        notifySummary: 'test',
+        payloadForStaging: {},
+      }),
+      execute: () => {
+        throw new Error('deliberate boom');
+      },
+    });
+
+    const ctx = buildContext(SOURCE_GROUP, true, deps);
+    await dispatchIpcAction(
+      { type: 'throwing_test', requestId: 'req-throw' },
+      ctx,
+    );
+
+    const file = path.join(RESULTS_DIR, 'req-throw.json');
+    expect(fs.existsSync(file)).toBe(true);
+    const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    expect(payload.success).toBe(false);
+    expect(payload.message).toContain('deliberate boom');
+  });
+
+  it('writes {success:false, message:"execution bailed"} when handler returns {executed:false}', async () => {
+    registerIpcHandler({
+      type: 'throwing_test',
+      responseKind: 'result',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'test',
+        notifySummary: 'test',
+        payloadForStaging: {},
+      }),
+      execute: () => ({ executed: false }) as const,
+    });
+
+    const ctx = buildContext(SOURCE_GROUP, true, deps);
+    await dispatchIpcAction(
+      { type: 'throwing_test', requestId: 'req-bail' },
+      ctx,
+    );
+
+    const file = path.join(RESULTS_DIR, 'req-bail.json');
+    expect(fs.existsSync(file)).toBe(true);
+    const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    expect(payload.success).toBe(false);
+    expect(payload.message).toBe('execution bailed');
   });
 });

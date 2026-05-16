@@ -103,6 +103,25 @@ export interface IpcHandler<TInput, TResult extends ExecuteResult = void> {
    * themselves.
    */
   readonly responseKind?: 'notify' | 'result';
+  /**
+   * Override for the results directory name. Only meaningful when
+   * responseKind === 'result'. Defaults to `${type}_results` for new
+   * handlers.
+   *
+   * Existing handlers being migrated from the if-ladder MUST set this to
+   * match the container-side hardcoded path (see
+   * container/agent-runner/src/ipc-mcp-stdio.ts). The legacy wire format
+   * is prefix-grouped, not type-suffixed — e.g. `dashboard_query` writes
+   * to `dashboard_results/` (not `dashboard_query_results/`), and every
+   * `task_*` action writes to a shared `task_results/`.
+   *
+   * Rule of thumb (Rule 1, contract doc):
+   *   - Legacy action group with a shared results dir → set override.
+   *   - New action with a new wire path → omit; default applies.
+   *
+   * Path: data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json.
+   */
+  readonly resultsDirName?: string;
   parse(raw: unknown): TInput | null;
   authorize(input: TInput, ctx: IpcHandlerContext): IpcAuthorization | null;
   execute(input: TInput, ctx: IpcHandlerContext): Promise<TResult> | TResult;
@@ -248,7 +267,8 @@ export async function dispatchIpcAction(
         : resultPayload !== undefined
           ? resultPayload
           : { success: true };
-    writeResultFile(ctx.sourceGroup, handler.type, requestId!, filePayload);
+    const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
+    writeResultFile(ctx.sourceGroup, resultsDirName, requestId!, filePayload);
   } else if (executed && decision !== null) {
     // Notify path (existing behaviour). decision is null only for skipGate
     // calls, which are read-only and on the allowlist — by construction they
@@ -269,7 +289,10 @@ export async function dispatchIpcAction(
 
 /**
  * Write a result-kind handler's payload to its per-requestId file, atomically.
- * Path: data/ipc/{sourceGroup}/{type}_results/{requestId}.json.
+ * Path: data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json.
+ *
+ * `resultsDirName` comes from the handler's `resultsDirName` field (legacy
+ * override) or the dispatcher's default `${type}_results` (new handlers).
  *
  * Best-effort: a write failure is logged but does not propagate, since the
  * caller (dispatcher) is past the side effect and the agent will time out
@@ -277,7 +300,7 @@ export async function dispatchIpcAction(
  */
 function writeResultFile(
   sourceGroup: string,
-  actionType: string,
+  resultsDirName: string,
   requestId: string,
   payload: unknown,
 ): void {
@@ -286,7 +309,7 @@ function writeResultFile(
       DATA_DIR,
       'ipc',
       sourceGroup,
-      `${actionType}_results`,
+      resultsDirName,
     );
     fs.mkdirSync(resultsDir, { recursive: true });
     const resultFile = path.join(resultsDir, `${requestId}.json`);
@@ -295,7 +318,7 @@ function writeResultFile(
     fs.renameSync(tmpFile, resultFile);
   } catch (err) {
     logger.error(
-      { err, sourceGroup, actionType, requestId },
+      { err, sourceGroup, resultsDirName, requestId },
       'Failed to write IPC result file',
     );
   }

@@ -51,8 +51,27 @@ trust gate. See **Rule 4** below for when that's permitted.
 
 When `responseKind === 'result'`, the **dispatcher** owns the result file.
 Handlers return `{ executed: true, result: <payload> }` and the dispatcher
-writes `data/ipc/{sourceGroup}/{type}_results/{requestId}.json` using the
+writes `data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json` using the
 atomic `.tmp` + rename pattern.
+
+`resultsDirName` defaults to `${type}_results` for new handlers. **Legacy
+actions being migrated from the if-ladder MUST set `resultsDirName`
+explicitly** to match the container-side hardcoded path
+(`container/agent-runner/src/ipc-mcp-stdio.ts`). The legacy wire format is
+prefix-grouped, not type-suffixed:
+
+| action prefix | `resultsDirName` |
+|---|---|
+| `dashboard_query` | `dashboard_results` |
+| `kg_*` | `kg_results` |
+| `task_*` | `task_results` |
+| `pageindex_*` | `pageindex_results` |
+| `imessage_*` | `imessage_results` |
+| `slack_*` | `slack_results` |
+| `x_*` | `x_results` |
+| `browser_*` | `browser_results` |
+| `skill_*` | `skill_results` |
+| `deploy_*` | `deploy_results` |
 
 The dispatcher also writes the failure file when `execute` throws or returns
 `{ executed: false }`:
@@ -60,6 +79,9 @@ The dispatcher also writes the failure file when `execute` throws or returns
 ```json
 { "success": false, "message": "<err>" }
 ```
+
+…to the same `resultsDirName` so the poller's success and failure paths
+read from one location.
 
 This is the bounded-growth discipline that keeps the registry deep. If a
 handler ever needs a custom result schema, **the payload varies — the
@@ -147,7 +169,9 @@ When adding a new IPC action:
 
 1. Pick `type` — short, namespaced (`{domain}_{verb}`), lowercase.
 2. Decide `responseKind` — `'notify'` for fire-and-forget, `'result'` for
-   request/response.
+   request/response. For `'result'` handlers migrated from the if-ladder,
+   set `resultsDirName` to match the container-side hardcoded path (see
+   Rule 1 table). For brand-new actions, omit and accept the default.
 3. Write `parse(raw)`. Reject anything you wouldn't pattern-match against
    in `execute`. Log the offending value before returning `null` so the
    dispatcher's generic "rejected input shape" log has attribution.

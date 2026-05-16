@@ -182,20 +182,55 @@ export async function handleDashboardIpc(
   }
 
   const queryType = data.queryType as string | undefined;
-  const result = runDashboardQuery(queryType, sourceGroup, isMain);
 
-  const resultsDir = path.join(
-    dataDir,
-    'ipc',
-    sourceGroup,
-    'dashboard_results',
-  );
-  fs.mkdirSync(resultsDir, { recursive: true });
-  const resultFile = path.join(resultsDir, `${requestId}.json`);
-  const tmpFile = `${resultFile}.tmp`;
-  fs.writeFileSync(tmpFile, JSON.stringify(result));
-  fs.renameSync(tmpFile, resultFile);
+  // Defense-in-depth try/catch preserves the legacy wrapper contract: an
+  // unexpected throw from runDashboardQuery, fs.mkdirSync, or writeFileSync
+  // becomes a structured failure result file instead of propagating. The
+  // inner runDashboardQuery has its own catch, so reaching this catch
+  // requires a non-DB / non-disk failure (e.g. JSON.stringify on a circular
+  // ref) — uncommon but possible.
+  try {
+    const result = runDashboardQuery(queryType, sourceGroup, isMain);
 
-  logger.info({ queryType, requestId, sourceGroup }, 'dashboard IPC handled');
-  return true;
+    const resultsDir = path.join(
+      dataDir,
+      'ipc',
+      sourceGroup,
+      'dashboard_results',
+    );
+    fs.mkdirSync(resultsDir, { recursive: true });
+    const resultFile = path.join(resultsDir, `${requestId}.json`);
+    const tmpFile = `${resultFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(result));
+    fs.renameSync(tmpFile, resultFile);
+
+    logger.info({ queryType, requestId, sourceGroup }, 'dashboard IPC handled');
+    return true;
+  } catch (err) {
+    logger.error({ err, queryType, requestId }, 'dashboard IPC error');
+    try {
+      const resultsDir = path.join(
+        dataDir,
+        'ipc',
+        sourceGroup,
+        'dashboard_results',
+      );
+      fs.mkdirSync(resultsDir, { recursive: true });
+      const resultFile = path.join(resultsDir, `${requestId}.json`);
+      const tmpFile = `${resultFile}.tmp`;
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          success: false,
+          error: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        }),
+      );
+      fs.renameSync(tmpFile, resultFile);
+    } catch {
+      // Second-level failure (e.g. fs error itself). Nothing more to do —
+      // the poller will time out, which is the correct failure mode for
+      // a thoroughly broken disk.
+    }
+    return true;
+  }
 }

@@ -28,11 +28,24 @@ interface Input {
   // `queryType`; tests + UI surface depend on this shape, so we preserve it.
   view: string | undefined;
   params: unknown;
+  // Preserved in staging payload per Rule 5 (no observable behaviour change).
+  // The if-ladder included requestId in payloadForStaging at
+  // git show 7b25dfc6:src/ipc.ts:1032. Whether to keep or drop wire-protocol
+  // fields at stage time is a future contract decision; the migration
+  // commit preserves verbatim.
+  requestId: string | undefined;
 }
 
 export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
   type: 'dashboard_query',
   responseKind: 'result',
+  // Wire-format override: the in-container poller reads from
+  // `dashboard_results/` (prefix-grouped, hardcoded in
+  // container/agent-runner/src/ipc-mcp-stdio.ts:733), NOT the dispatcher's
+  // default `${type}_results` which would produce `dashboard_query_results/`.
+  // Every legacy result-kind action uses prefix grouping — see the contract
+  // doc Rule 1.
+  resultsDirName: 'dashboard_results',
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
@@ -45,6 +58,7 @@ export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
       queryType: typeof r.queryType === 'string' ? r.queryType : undefined,
       view: typeof r.view === 'string' ? r.view : undefined,
       params: r.params,
+      requestId: typeof r.requestId === 'string' ? r.requestId : undefined,
     };
   },
 
@@ -64,6 +78,7 @@ export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
       }`,
       payloadForStaging: {
         type: 'dashboard_query',
+        requestId: input.requestId,
         view: input.view,
         params: input.params,
       },
