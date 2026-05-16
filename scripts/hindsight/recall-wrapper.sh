@@ -6,24 +6,36 @@
 # scripts/hindsight/reflection_filter.py (which strips
 # `[experience]` memories that involve only `claude_code (AI agent)`).
 #
-# HANDOFF — to activate, replace the UserPromptSubmit hook command in
-# `~/.claude/settings.json`:
-#
-#   FROM:
-#     "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/recall.py\" || python \"${CLAUDE_PLUGIN_ROOT}/scripts/recall.py\""
-#
-#   TO:
-#     "command": "/Users/mgandal/Agents/nanoclaw/scripts/hindsight/recall-wrapper.sh"
-#
-# (Or symlink this script into ~/.claude/hooks/ and reference it there.)
+# HANDOFF — Claude Code merges hooks across all sources (plugin + user
+# settings) rather than letting one shadow another, so this wrapper
+# cannot simply be added alongside the plugin's hook. The plugin must
+# be DISABLED first (set `"hindsight-memory@hindsight": false` in
+# `enabledPlugins` in `~/.claude/settings.json`), then this wrapper
+# added as a top-level user `UserPromptSubmit` hook. See
+# `scripts/hindsight/README.md` (section "Activate") for the full
+# two-step procedure.
 #
 # Failure mode: if the filter crashes, the original recall output is passed
-# through unchanged. We never drop the hook entirely.
+# through unchanged AND a stderr breadcrumb fires (plus a timestamped marker
+# file at ~/.cache/hindsight-filter-fallback). We never drop the hook
+# entirely — silent passthrough would let the noise problem return
+# unnoticed if a future plugin update breaks the filter.
 
 set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FILTER="${REPO_ROOT}/scripts/hindsight/reflection_filter.py"
+FALLBACK_MARKER="${HOME}/.cache/hindsight-filter-fallback"
+
+# Emit a breadcrumb when filtering fails. The recall path is preserved (the
+# caller still sees the unfiltered recall output), but the breadcrumb makes
+# the failure visible to ops monitoring + leaves a timestamp on disk.
+_breadcrumb() {
+    local reason="${1:-unknown}"
+    echo "[recall-wrapper] filter failed (${reason}), passing through unfiltered" >&2
+    mkdir -p "$(dirname "${FALLBACK_MARKER}")" 2>/dev/null || true
+    date -u +%Y-%m-%dT%H:%M:%SZ >> "${FALLBACK_MARKER}" 2>/dev/null || true
+}
 
 # Locate the plugin's recall.py. The plugin auto-updates, so we resolve the
 # newest cached version at run time rather than pinning a path.
@@ -52,11 +64,18 @@ if [[ -z "${RECALL_OUT}" ]]; then
     exit 0
 fi
 
-# Apply the filter; on any error, emit the unfiltered recall output.
+# Apply the filter; capture its exit code so we can detect a real crash
+# vs. an empty-but-successful filter result.
 FILTERED="$(printf '%s' "${RECALL_OUT}" | (python3 "${FILTER}" \
     || python "${FILTER}") 2>/dev/null)"
+FILTER_RC=$?
 
-if [[ -z "${FILTERED}" ]]; then
+if [[ ${FILTER_RC} -ne 0 ]]; then
+    _breadcrumb "exit ${FILTER_RC}"
+    printf '%s' "${RECALL_OUT}"
+elif [[ -z "${FILTERED}" ]]; then
+    # Filter exited 0 but produced no output — treat as crash, fall back.
+    _breadcrumb "empty output"
     printf '%s' "${RECALL_OUT}"
 else
     printf '%s' "${FILTERED}"

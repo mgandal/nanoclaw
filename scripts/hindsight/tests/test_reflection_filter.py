@@ -17,7 +17,10 @@ block containing newline-separated "- <text> [<type>] (<date>)" entries.
 """
 
 import importlib.util
+import os
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -70,6 +73,36 @@ REFLECTIONS = [
     "(2026-05-14T10:00:00.000000+00:00)",
 ]
 
+# Adversarial known-good cases: phi4-mini mis-tagged these as
+# `[experience]` + agent-only involving, but the content is durable.
+# The content-pattern rescue must KEEP them.
+ADVERSARIAL_KNOWN_GOOD = [
+    # Backtick code span + semver version
+    "- v0.33.0's headline feature allows users to inquire about changes "
+    "since the last run with the command "
+    "`gbrain recall --since-last-run --pending --rollup`. | "
+    "When: 2026-05-14 | Involving: claude_code (AI agent) | "
+    "[experience] (2026-05-14T12:00:00.000000+00:00)",
+    # SHA + path fragment (branch name with slash)
+    "- The commit SHA for the changes is 66d8e85d on branch "
+    "fix/outcome-watcher-storm-2026-05-16. | When: 2026-05-16 | "
+    "Involving: claude_code (AI agent) | "
+    "[experience] (2026-05-16T09:00:00.000000+00:00)",
+    # Path fragment (@types/sharp) + version
+    "- @types/sharp is considered cruft since sharp ships its own types "
+    "since v0.33. | When: 2026-05-15 | Involving: claude_code (AI agent) | "
+    "[experience] (2026-05-15T11:30:00.000000+00:00)",
+]
+
+# Adversarial drop case: even though the line contains a backtick code span
+# (which would normally rescue it), the canonical "The next step" signature
+# forces the drop. This ensures the force-drop list outweighs the rescue.
+FORCED_DROPS_DESPITE_RESCUE = [
+    "- The next step is to look at `recall.py` and audit the envelope "
+    "schema for v0.6.5. | When: 2026-05-16 | Involving: claude_code "
+    "(AI agent) | [experience] (2026-05-16T20:00:00.000000+00:00)",
+]
+
 # These are durable facts about the user, the world, or relationships.
 # They MUST PASS the filter (NOT be dropped).
 REAL_FACTS = [
@@ -101,6 +134,24 @@ class TestIsReflection:
     @pytest.mark.parametrize("line", REAL_FACTS)
     def test_real_facts_pass(self, mod, line):
         assert mod.is_reflection(line) is False, f"Should NOT be filtered: {line!r}"
+
+    @pytest.mark.parametrize("line", ADVERSARIAL_KNOWN_GOOD)
+    def test_adversarial_known_good_are_rescued(self, mod, line):
+        # phi4-mini mis-tags these as `[experience]` + agent-only, but the
+        # content carries durable signals (backtick code, SHA, semver,
+        # path fragment). The rescue clause must KEEP them.
+        assert mod.is_reflection(line) is False, (
+            f"Adversarial-known-good should be rescued (kept): {line!r}"
+        )
+
+    @pytest.mark.parametrize("line", FORCED_DROPS_DESPITE_RESCUE)
+    def test_force_drop_signatures_override_rescue(self, mod, line):
+        # Even with a rescue-pattern (e.g. a backtick code span), an
+        # explicit self-talk signature ("The next step", "Options for
+        # next steps") forces the drop.
+        assert mod.is_reflection(line) is True, (
+            f"Force-drop signature must override rescue: {line!r}"
+        )
 
     def test_empty_line_is_not_reflection(self, mod):
         # Empty and structural lines should not be marked reflection
@@ -228,3 +279,159 @@ class TestFilterHookOutput:
         # Defensive: if recall.py emitted non-JSON, don't crash.
         assert mod.filter_hook_output_json("not json") == "not json"
         assert mod.filter_hook_output_json("") == ""
+
+
+# ---------------------------------------------------------------------------
+# Wrapper script — breadcrumb-on-fallback regression test
+# ---------------------------------------------------------------------------
+
+
+class TestWrapperBreadcrumb:
+    """If the filter crashes, the wrapper must:
+      1. Still emit the unfiltered recall output (graceful degradation).
+      2. Print a `[recall-wrapper] filter failed` line to stderr.
+      3. Append a timestamp to the fallback marker file.
+
+    Without these, a future plugin update could silently break the filter
+    and the noise problem would return undetected.
+    """
+
+    @staticmethod
+    def _make_fixture(tmpdir: Path) -> tuple[Path, Path, Path]:
+        """Lay out a minimal HOME with a fake plugin + crashing filter.
+
+        Returns (wrapper_path, fake_home, fallback_marker).
+        """
+        repo_root = Path(__file__).resolve().parents[3]
+        wrapper_src = repo_root / "scripts" / "hindsight" / "recall-wrapper.sh"
+
+        # Build a fake REPO_ROOT layout: scripts/hindsight/{recall-wrapper.sh,
+        # reflection_filter.py}. Use a crashing filter that exits 1.
+        fake_repo = tmpdir / "repo"
+        (fake_repo / "scripts" / "hindsight").mkdir(parents=True)
+        wrapper_dest = fake_repo / "scripts" / "hindsight" / "recall-wrapper.sh"
+        wrapper_dest.write_text(wrapper_src.read_text())
+        wrapper_dest.chmod(0o755)
+
+        crashing_filter = fake_repo / "scripts" / "hindsight" / "reflection_filter.py"
+        crashing_filter.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "sys.stderr.write('intentional crash\\n')\n"
+            "sys.exit(1)\n"
+        )
+        crashing_filter.chmod(0o755)
+
+        # Build a fake plugin cache that emits a known recall payload.
+        fake_home = tmpdir / "home"
+        plugin_dir = (
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "hindsight"
+            / "hindsight-memory"
+            / "0.6.5"
+            / "scripts"
+        )
+        plugin_dir.mkdir(parents=True)
+        fake_recall = plugin_dir / "recall.py"
+        fake_recall.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "# Drain stdin so the wrapper's pipe doesn't SIGPIPE us\n"
+            "sys.stdin.read()\n"
+            'sys.stdout.write(\'{"unfiltered": "payload"}\')\n'
+        )
+        fake_recall.chmod(0o755)
+
+        return wrapper_dest, fake_home, fake_home / ".cache" / "hindsight-filter-fallback"
+
+    def test_filter_crash_emits_breadcrumb_and_passes_through(self, tmp_path):
+        wrapper, fake_home, marker = self._make_fixture(tmp_path)
+
+        env = os.environ.copy()
+        env["HOME"] = str(fake_home)
+
+        result = subprocess.run(
+            ["bash", str(wrapper)],
+            input='{"hookSpecificOutput": {}}',
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+
+        # Unfiltered recall passthrough
+        assert "unfiltered" in result.stdout, (
+            f"Expected unfiltered passthrough, got: {result.stdout!r}"
+        )
+        # Stderr breadcrumb
+        assert "[recall-wrapper] filter failed" in result.stderr, (
+            f"Expected breadcrumb on stderr, got: {result.stderr!r}"
+        )
+        # Marker file written
+        assert marker.exists(), "Fallback marker file should be created"
+        assert marker.read_text().strip(), "Marker file should contain a timestamp"
+
+    def test_filter_success_no_breadcrumb(self, tmp_path):
+        """Sanity: when the filter works, no breadcrumb fires."""
+        repo_root = Path(__file__).resolve().parents[3]
+        wrapper_src = repo_root / "scripts" / "hindsight" / "recall-wrapper.sh"
+        real_filter = repo_root / "scripts" / "hindsight" / "reflection_filter.py"
+
+        fake_repo = tmp_path / "repo"
+        (fake_repo / "scripts" / "hindsight").mkdir(parents=True)
+        wrapper_dest = fake_repo / "scripts" / "hindsight" / "recall-wrapper.sh"
+        wrapper_dest.write_text(wrapper_src.read_text())
+        wrapper_dest.chmod(0o755)
+        # Use the real (working) filter
+        (fake_repo / "scripts" / "hindsight" / "reflection_filter.py").write_text(
+            real_filter.read_text()
+        )
+
+        fake_home = tmp_path / "home"
+        plugin_dir = (
+            fake_home
+            / ".claude"
+            / "plugins"
+            / "cache"
+            / "hindsight"
+            / "hindsight-memory"
+            / "0.6.5"
+            / "scripts"
+        )
+        plugin_dir.mkdir(parents=True)
+        # Emit a valid envelope with one reflection
+        fake_recall = plugin_dir / "recall.py"
+        fake_recall.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys, json\n"
+            "sys.stdin.read()\n"
+            "envelope = {'hookSpecificOutput': {"
+            "'hookEventName': 'UserPromptSubmit', "
+            "'additionalContext': '<hindsight_memories>\\nhdr\\n\\n"
+            "- Mike Gandal prefers Sonnet. | Involving: mike_gandal | "
+            "[world] (2026-04-01T10:00:00.000000+00:00)\\n"
+            "</hindsight_memories>'}}\n"
+            "sys.stdout.write(json.dumps(envelope))\n"
+        )
+        fake_recall.chmod(0o755)
+        marker = fake_home / ".cache" / "hindsight-filter-fallback"
+
+        env = os.environ.copy()
+        env["HOME"] = str(fake_home)
+
+        result = subprocess.run(
+            ["bash", str(wrapper_dest)],
+            input='{"hookSpecificOutput": {}}',
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=10,
+        )
+
+        assert "[recall-wrapper] filter failed" not in result.stderr, (
+            f"Expected no breadcrumb on success path, got: {result.stderr!r}"
+        )
+        assert not marker.exists(), "Marker file should not be created on success"
