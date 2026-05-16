@@ -124,8 +124,7 @@ export const taskCloseHandler: IpcHandler<CloseInput, ExecuteResult> = {
     return {
       raw: r,
       id: typeof r.id === 'number' ? r.id : undefined,
-      titleMatch:
-        typeof r.title_match === 'string' ? r.title_match : undefined,
+      titleMatch: typeof r.title_match === 'string' ? r.title_match : undefined,
     };
   },
 
@@ -169,8 +168,7 @@ export const taskReopenHandler: IpcHandler<ReopenInput, ExecuteResult> = {
   authorize(input) {
     return {
       target: 'tasks',
-      auditSummary:
-        input.id !== undefined ? `reopen #${input.id}` : '(no id)',
+      auditSummary: input.id !== undefined ? `reopen #${input.id}` : '(no id)',
       notifySummary: `reopened task #${input.id ?? '?'}`,
       payloadForStaging: { type: 'task_reopen', ...input.raw },
       skipGate: true as const, // Rule 5 — see task_add note.

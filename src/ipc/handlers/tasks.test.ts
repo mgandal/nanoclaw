@@ -101,7 +101,13 @@ describe('tasks_* cluster handlers', () => {
     );
     expect(
       fs.existsSync(
-        path.join(dataDir, 'ipc', 'telegram_main', 'task_results', 'req-add.json'),
+        path.join(
+          dataDir,
+          'ipc',
+          'telegram_main',
+          'task_results',
+          'req-add.json',
+        ),
       ),
     ).toBe(true);
 
