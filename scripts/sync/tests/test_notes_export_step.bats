@@ -140,3 +140,21 @@ teardown() {
   [ -f "$NOTES_EXPORT_DIR/Previous/note1.md" ]
   [ "$(cat "$NOTES_EXPORT_DIR/Previous/note1.md")" = "old content" ]
 }
+
+# ──────────────────────────────────────────────────────────────────────
+# Contract 5: success-path rename window. If a signal lands between
+# `mv NOTES_EXPORT_DIR -> BACKUP` and `mv EXPORT_TMP -> NOTES_EXPORT_DIR`,
+# the trap MUST restore $BACKUP to $NOTES_EXPORT_DIR. Source-level guard:
+# the trap covering the swap window must reference BACKUP.
+# (Behavioral test via signal injection is racy; this regression guard
+# catches a future edit that forgets to update the trap before the swap.)
+# ──────────────────────────────────────────────────────────────────────
+
+@test "EXIT trap restores BACKUP if swap is interrupted (source-level)" {
+  # The trap set just before the destructive mv MUST reference BACKUP
+  # restoration. A regression that only cleans up EXPORT_TMP would lose
+  # user notes if a signal lands between the two mvs on the success path.
+  # We require the literal pattern `mv "$BACKUP"` somewhere in a trap
+  # command (recovery action).
+  grep -E -q "trap '[^']*mv +\"\\\$BACKUP\"[^']*' +EXIT" "$SCRIPT_PATH"
+}

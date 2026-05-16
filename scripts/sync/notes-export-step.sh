@@ -108,17 +108,27 @@ EC=${PIPESTATUS[0]}
 
 case "$EC" in
   0)
-    # Success — atomic-rename tempdir into place.
+    # Success — swap tempdir into place. POSIX rename(2) cannot atomically
+    # replace a non-empty directory (returns ENOTEMPTY), so we do a two-step:
+    #   1. mv NOTES_EXPORT_DIR → BACKUP    (canonical path empty briefly)
+    #   2. mv EXPORT_TMP       → NOTES_EXPORT_DIR
+    # There's a small non-atomic window between (1) and (2). If a signal
+    # lands in that window, the trap MUST restore $BACKUP so the user
+    # doesn't lose access to the previous export. Update the trap before
+    # the destructive mv to cover both EXPORT_TMP cleanup AND BACKUP
+    # restoration. (Reviewer finding 2026-05-16.)
     if [ -d "$NOTES_EXPORT_DIR" ]; then
       BACKUP="$PARENT/.exported-old-$$"
+      # Arm the recovery trap BEFORE the destructive mv. If anything
+      # below fails or we get SIGTERM, the trap restores $BACKUP to
+      # its canonical location and cleans up the tempdir.
+      trap 'mv "$BACKUP" "$NOTES_EXPORT_DIR" 2>/dev/null; rm -rf "$EXPORT_TMP"' EXIT INT TERM
       mv "$NOTES_EXPORT_DIR" "$BACKUP"
     fi
     mv "$EXPORT_TMP" "$NOTES_EXPORT_DIR"
-    # Backup is cleaned up by the EXIT trap below (since BACKUP is also
-    # set), or we drop it explicitly here:
-    [ -n "${BACKUP:-}" ] && rm -rf "$BACKUP"
-    # Disarm the EXPORT_TMP trap since we successfully renamed it.
+    # Both mvs succeeded — disarm the recovery trap and drop the backup.
     trap - EXIT INT TERM
+    [ -n "${BACKUP:-}" ] && rm -rf "$BACKUP"
     echo "[notes-export] OK"
     ;;
   124)
