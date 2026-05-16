@@ -4,7 +4,28 @@ import tseslint from 'typescript-eslint'
 import noCatchAll from 'eslint-plugin-no-catch-all'
 
 export default [
-  { ignores: ['node_modules/', 'dist/', 'container/', 'groups/'] },
+  {
+    ignores: [
+      'node_modules/',
+      'dist/',
+      'container/',
+      'groups/',
+      '**/lib/python*/**',
+      '**/venv/**',
+      '**/.venv/**',
+      'scripts/paperpile-wiki/lib/**',
+      'data/',
+      '**/dist/**',
+      '**/*.min.js',
+      '**/widgetbundle.js',
+      '**/labextension/**',
+      'cockpit-pwa/',
+      'mini-app/',
+      '.claude/',
+      '.worktrees/',
+      '.remember/',
+    ],
+  },
   { files: ['src/**/*.{js,ts}'] },
   { languageOptions: { globals: globals.node } },
   pluginJs.configs.recommended,

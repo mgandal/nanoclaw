@@ -52,7 +52,7 @@ for (const [input, expected] of cases) {
   try {
     assert.strictEqual(actual, expected);
     console.log(`  PASS  ${JSON.stringify(input)} → ${JSON.stringify(actual)}`);
-  } catch (e) {
+  } catch (_e) {
     failures++;
     console.error(`  FAIL  ${JSON.stringify(input)} → got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`);
   }
