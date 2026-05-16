@@ -157,22 +157,28 @@ if [ $EC -ne 0 ]; then
 fi
 
 # --- Step 5: Apple Notes re-export to markdown ---
+# Delegated to notes-export-step.sh so the step is testable in isolation
+# and has its own timeout / skip-if-in-use / atomic-rename discipline.
+# Original inline Step 5 (2026-05-16 incident): no timeout, no skip,
+# unconditional `activate` foreground-stole the user's session, and
+# `export-notes.js` destructively wiped the previous export dir before
+# the new run was verified. See notes-export-step.sh for the four
+# defense-in-depth layers.
 echo ""
 echo "[5/10] Apple Notes re-export..."
-EXPORT_SCRIPT="$HOME/.cache/apple-notes-mcp/export-notes.js"
-if [ -f "$EXPORT_SCRIPT" ]; then
-    osascript -e 'tell application "Notes" to activate' 2>/dev/null
-    sleep 2
-    node "$EXPORT_SCRIPT" 2>&1 | tail -5
-    EC=$?
-    osascript -e 'tell application "Notes" to quit' 2>/dev/null
-    if [ $EC -ne 0 ]; then
-        echo "[5/10] WARNING: Apple Notes export had errors (exit $EC)"
+bash "$SCRIPT_DIR/notes-export-step.sh"
+EC=$?
+case "$EC" in
+    0) ;;  # success or graceful skip
+    124|137|143)
+        echo "[5/10] WARNING: notes-export-step exited $EC (timeout / killed)"
         ERRORS=$((ERRORS + 1))
-    fi
-else
-    echo "[5/10] SKIP: export-notes.js not found"
-fi
+        ;;
+    *)
+        echo "[5/10] WARNING: notes-export-step exited $EC"
+        ERRORS=$((ERRORS + 1))
+        ;;
+esac
 
 # ─── Step 6: Skill catalog refresh ───
 echo ""

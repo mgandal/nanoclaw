@@ -191,6 +191,53 @@ else
     warn "Outlook→Gmail freshness" "no last-success marker yet (first run after install?)"
 fi
 
+# 7e. Notes export freshness — flag if notes export dir hasn't been
+# rewritten in >24h. Catches the failure mode where notes-export-step.sh
+# silently skips forever (Notes always frontmost, gtimeout missing,
+# atomic-rename failing, etc.) and QMD ingests stale notes for days.
+# Original 2026-05-16 incident: when Step 5 was inline and pinned Notes
+# for 30 minutes, the user saw it. If a future bug causes Step 5 to
+# silently skip, only this check will catch it.
+NOTES_EXPORT_DIR="$HOME/.cache/apple-notes-mcp/exported"
+if [ -d "$NOTES_EXPORT_DIR" ]; then
+    # mtime of the directory itself updates on atomic-rename
+    NOTES_MTIME=$(stat -f %m "$NOTES_EXPORT_DIR" 2>/dev/null)
+    if [ -n "$NOTES_MTIME" ]; then
+        NOW=$(date "+%s")
+        NOTES_AGE_HOURS=$(( (NOW - NOTES_MTIME) / 3600 ))
+        # Threshold: 24h. Notes export runs every 4h via sync-all.sh; 24h
+        # means 5+ ticks have skipped or failed. The skip-when-frontmost
+        # guard could legitimately delay it a few hours during a long
+        # work session, but >24h means something is structurally wrong.
+        if [ "$NOTES_AGE_HOURS" -lt 24 ]; then
+            check "Notes export freshness (<24h)" "" 0
+        else
+            check "Notes export freshness (<24h)" "${NOTES_AGE_HOURS}h since last successful export — Step 5 may be wedged or always skipping" 1
+        fi
+    else
+        check "Notes export freshness (<24h)" "stat of $NOTES_EXPORT_DIR failed" 1
+    fi
+else
+    warn "Notes export freshness" "$NOTES_EXPORT_DIR does not exist (first run?)"
+fi
+
+# 7f. notes-export-step.sh present (regression guard — sync-all.sh Step 5
+# depends on this; if someone reverts the 2026-05-16 hardening, this fires)
+NOTES_STEP="$SCRIPT_DIR/notes-export-step.sh"
+if [ -x "$NOTES_STEP" ]; then
+    check "notes-export-step.sh present and executable" "" 0
+else
+    check "notes-export-step.sh present and executable" "missing — Step 5 hardening may have been reverted" 1
+fi
+
+# 7g. gtimeout available (notes-export-step.sh depends on it; bare-PATH
+# launchd jobs sometimes can't find /opt/homebrew/bin)
+if command -v gtimeout >/dev/null 2>&1; then
+    check "gtimeout available (coreutils)" "" 0
+else
+    check "gtimeout available (coreutils)" "missing — notes export timeout will fail open" 1
+fi
+
 # 8. Check last sync completed recently (within 24h)
 if [ -f "$SCRIPT_DIR/sync.log" ]; then
     LAST_COMPLETE=$(grep 'SYNC COMPLETE' "$SCRIPT_DIR/sync.log" | tail -1)
