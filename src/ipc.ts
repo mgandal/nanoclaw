@@ -29,7 +29,6 @@ import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { handleKgIpc } from './kg-ipc.js';
 import { handleTasksIpc } from './tasks-ipc.js';
@@ -948,68 +947,9 @@ export async function processTaskIpc(
 
     default: {
       let handled = false;
-      if (typeof data.type === 'string' && data.type === 'deploy_mini_app') {
-        // C13: trust enforcement for agent callers. Gated at the dispatch
-        // layer so vercel-deployer.ts stays focused on deploy mechanics.
-        const { group: dmBaseGroup, agent: dmAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        let dmAllowed = true;
-        let dmNotify = false;
-        if (dmAgent) {
-          const d = data as Record<string, unknown>;
-          const trust = loadAgentTrust(path.join(AGENTS_DIR, dmAgent));
-          const trustDecision = checkTrustAndStage({
-            agentName: dmAgent,
-            groupFolder: dmBaseGroup,
-            actionType: 'deploy_mini_app',
-            summary:
-              typeof d.appName === 'string'
-                ? d.appName.slice(0, 100)
-                : '(unnamed)',
-            target: 'vercel',
-            payloadForStaging: {
-              type: 'deploy_mini_app',
-              requestId: d.requestId,
-              appName: d.appName,
-              html: d.html,
-            },
-            trust,
-          });
-          dmAllowed = trustDecision.allowed;
-          dmNotify = trustDecision.notify;
-        } else if (!isMain) {
-          // C1: trust-enforcement is the primary gate for agent callers.
-          // Bare-group callers (no agent component) bypass that gate, so
-          // deny outright from non-main groups.
-          logger.warn(
-            { sourceGroup },
-            'deploy_mini_app rejected: non-main group, no agent component',
-          );
-          dmAllowed = false;
-        }
-        if (dmAllowed) {
-          handled = await handleDeployMiniApp(
-            data as Record<string, unknown>,
-            sourceGroup,
-            isMain,
-            DATA_DIR,
-          );
-          await firePostHocNotify({
-            notify: dmNotify,
-            agentName: dmAgent || null,
-            actionType: 'deploy_mini_app',
-            summary: `deployed ${typeof (data as Record<string, unknown>).appName === 'string' ? ((data as Record<string, unknown>).appName as string).slice(0, 80) : '(unnamed)'}`,
-            target: 'vercel',
-            registeredGroups,
-            deps,
-          });
-        } else {
-          handled = true; // staged/blocked, not passed through
-        }
-      }
+      // deploy_mini_app migrated to src/ipc/handlers/deploy-mini-app.ts.
       // dashboard_query migrated to src/ipc/handlers/dashboard-query.ts —
-      // dispatched via the IpcHandler registry above (dispatchIpcAction).
+      // both dispatched via the IpcHandler registry above (dispatchIpcAction).
       if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
         // Build mount mappings from registered group config
         const groupEntry = Object.values(registeredGroups).find(

@@ -3,64 +3,44 @@ import path from 'path';
 
 import { logger } from './logger.js';
 
+export type DeployMiniAppResult = Record<string, unknown>;
+
 /**
- * Handle deploy_mini_app IPC requests from container agents.
- * Deploys a self-contained HTML file to Vercel and writes the result URL
- * back to the deploy_results directory for the container to poll.
+ * Deploy a self-contained HTML file to Vercel and return the result payload.
  *
- * Follows the same pattern as handleDashboardIpc / handlePageindexIpc.
- * Returns true if handled, false if not a deploy_mini_app type.
+ * Two callers consume this seam:
+ *   1. {@link handleDeployMiniApp} — legacy library entry point, writes the
+ *      result to data/ipc/.../deploy_results/{requestId}.json. Retained for
+ *      vercel-deployer.test.ts.
+ *   2. `deployMiniAppHandler` (src/ipc/handlers/deploy-mini-app.ts) — new
+ *      registered IPC handler. Returns the result via the ExecuteResult
+ *      contract; the dispatcher writes the file (Rule 1).
+ *
+ * Pure-ish: reads VERCEL_TOKEN from env, calls fetch. No filesystem side
+ * effects in the result directory.
  */
-export async function handleDeployMiniApp(
-  data: Record<string, unknown>,
+export async function runDeployMiniApp(
+  appName: string | undefined,
+  html: string | undefined,
   sourceGroup: string,
-  _isMain: boolean,
-  dataDir: string,
-): Promise<boolean> {
-  if (data.type !== 'deploy_mini_app') return false;
-
-  const requestId = data.requestId as string | undefined;
-  if (!requestId || !/^[A-Za-z0-9_-]{1,80}$/.test(requestId)) {
-    logger.warn(
-      { sourceGroup, requestId },
-      'deploy_mini_app IPC invalid requestId',
-    );
-    return true;
-  }
-
-  const resultsDir = path.join(dataDir, 'ipc', sourceGroup, 'deploy_results');
-  fs.mkdirSync(resultsDir, { recursive: true });
-
-  const writeResult = (result: Record<string, unknown>) => {
-    const resultFile = path.join(resultsDir, `${requestId}.json`);
-    const tmpFile = `${resultFile}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(result));
-    fs.renameSync(tmpFile, resultFile);
-  };
-
+): Promise<DeployMiniAppResult> {
   try {
     const token = process.env.VERCEL_TOKEN;
     if (!token) {
-      writeResult({ success: false, error: 'VERCEL_TOKEN not configured' });
-      return true;
+      return { success: false, error: 'VERCEL_TOKEN not configured' };
     }
 
-    const appName = data.appName as string | undefined;
-    const html = data.html as string | undefined;
-
     if (!appName || !html) {
-      writeResult({ success: false, error: 'Missing appName or html' });
-      return true;
+      return { success: false, error: 'Missing appName or html' };
     }
 
     // Validate appName: lowercase alphanumeric + hyphens, max 50 chars
     if (!/^[a-z0-9-]{1,50}$/.test(appName)) {
-      writeResult({
+      return {
         success: false,
         error:
           'Invalid appName: must be lowercase alphanumeric with hyphens, max 50 chars',
-      });
-      return true;
+      };
     }
 
     // Generate unique deployment name with base-36 timestamp
@@ -94,37 +74,71 @@ export async function handleDeployMiniApp(
 
     if (!response.ok) {
       const errBody = await response.text().catch(() => 'unknown error');
-      writeResult({
+      return {
         success: false,
         error: `Vercel API returned ${response.status}: ${errBody.slice(0, 500)}`,
-      });
-      return true;
+      };
     }
 
     const result = (await response.json()) as { url?: string };
     if (!result.url) {
-      writeResult({
-        success: false,
-        error: 'Vercel response missing url field',
-      });
-      return true;
+      return { success: false, error: 'Vercel response missing url field' };
     }
 
     const url = result.url.startsWith('https://')
       ? result.url
       : `https://${result.url}`;
-    writeResult({ success: true, url });
     logger.info(
       { appName, deployName, url, sourceGroup },
       'Mini app deployed to Vercel',
     );
-    return true;
+    return { success: true, url };
   } catch (err) {
-    logger.error({ err, sourceGroup }, 'deploy_mini_app IPC error');
-    writeResult({
+    logger.error({ err, sourceGroup }, 'deploy_mini_app error');
+    return {
       success: false,
       error: `Error: ${err instanceof Error ? err.message : String(err)}`,
-    });
+    };
+  }
+}
+
+/**
+ * Legacy library entry point. Validates requestId, computes the result
+ * via {@link runDeployMiniApp}, writes to dataDir/ipc/.../deploy_results/.
+ *
+ * The new dispatcher-driven path lives in
+ * src/ipc/handlers/deploy-mini-app.ts and is registered through the
+ * IpcHandler registry. This function is retained for the vercel-deployer
+ * test harness and any direct callers; the if-ladder caller has been
+ * removed.
+ */
+export async function handleDeployMiniApp(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+  _isMain: boolean,
+  dataDir: string,
+): Promise<boolean> {
+  if (data.type !== 'deploy_mini_app') return false;
+
+  const requestId = data.requestId as string | undefined;
+  if (!requestId || !/^[A-Za-z0-9_-]{1,80}$/.test(requestId)) {
+    logger.warn(
+      { sourceGroup, requestId },
+      'deploy_mini_app IPC invalid requestId',
+    );
     return true;
   }
+
+  const appName = data.appName as string | undefined;
+  const html = data.html as string | undefined;
+  const result = await runDeployMiniApp(appName, html, sourceGroup);
+
+  const resultsDir = path.join(dataDir, 'ipc', sourceGroup, 'deploy_results');
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const resultFile = path.join(resultsDir, `${requestId}.json`);
+  const tmpFile = `${resultFile}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(result));
+  fs.renameSync(tmpFile, resultFile);
+
+  return true;
 }
