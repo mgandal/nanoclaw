@@ -1,5 +1,8 @@
 import { VaultDeltaWatcher } from '../watchers/vault-delta-watcher.js';
-import { TaskOutcomeWatcher } from '../watchers/task-outcome-watcher.js';
+import {
+  TaskOutcomeWatcher,
+  markStaleTaskOutcomesEmitted,
+} from '../watchers/task-outcome-watcher.js';
 import { ThreadSilenceWatcher } from '../watchers/thread-silence-watcher.js';
 import { QmdEmailAdapter } from '../watchers/qmd-email-adapter.js';
 import { DeferredSendProcessor } from '../watchers/deferred-send-processor.js';
@@ -65,6 +68,12 @@ export function wireProactiveWatchers(deps: ProactiveWiringDeps): {
       void deps.eventRouter.route(e);
     },
   });
+  // Storm guard (2026-05-16): neutralize any pre-existing backlog of
+  // task_run_logs rows where outcome_emitted=0 but the run is older than
+  // the watcher's recency horizon. Without this, flipping surface_outputs=1
+  // on a task with months of history dumps thousands of events into the
+  // event router → Ollama AbortError storm.
+  markStaleTaskOutcomesEmitted();
   const outcome = new TaskOutcomeWatcher({
     onEvent: (e) => {
       void deps.eventRouter.route(e);
