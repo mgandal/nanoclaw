@@ -52,7 +52,7 @@ setup() {
 
 # ── counters are visible (loudness preserved) ───────────────────────
 
-@test "bump_soft prints WARNING line to stderr so launchd captures it" {
+@test "bump_soft prints WARNING line to stdout (which launchd captures via StandardOutPath)" {
   run bash -c "source '$CLASSIFIER'; bump_soft 'transient: Ollama hung'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
@@ -60,7 +60,7 @@ setup() {
   [[ "$output" == *"transient: Ollama hung"* ]]
 }
 
-@test "bump_hard prints WARNING line to stderr so launchd captures it" {
+@test "bump_hard prints WARNING line to stdout (which launchd captures via StandardOutPath)" {
   run bash -c "source '$CLASSIFIER'; bump_hard 'hard: missing script'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
@@ -102,5 +102,15 @@ setup() {
   # grep -v '^[[:space:]]*#' filters comment lines (the doc block at
   # the top of the file references the old pattern verbatim).
   run bash -c "grep -vE '^[[:space:]]*#' '$SYNC_ALL' | grep -E 'ERRORS=\\\$\\(\\(ERRORS \\+ 1\\)\\)'"
+  [ "$status" -ne 0 ]
+
+  # Also guard against future patches that bypass bump_soft/bump_hard
+  # by incrementing SOFT_ERRORS/HARD_ERRORS inline. Inline bumps skip
+  # the tagged WARNING log line, so a category change becomes invisible
+  # in sync.log. The classifier file itself is excluded — only
+  # sync-all.sh callsites are checked.
+  run bash -c "grep -vE '^[[:space:]]*#' '$SYNC_ALL' | grep -E 'SOFT_ERRORS=\\\$\\(\\(SOFT_ERRORS'"
+  [ "$status" -ne 0 ]
+  run bash -c "grep -vE '^[[:space:]]*#' '$SYNC_ALL' | grep -E 'HARD_ERRORS=\\\$\\(\\(HARD_ERRORS'"
   [ "$status" -ne 0 ]
 }

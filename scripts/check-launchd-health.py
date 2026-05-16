@@ -34,6 +34,15 @@ EXPECTED_NONZERO: dict[str, dict] = {
         "codes": [2],
         "reason": "exit 2 = audit found actionable issues (by design)",
     },
+    # sync-all.sh routes its warnings through sync-exit-classifier.sh
+    # (see scripts/sync/sync-exit-classifier.sh). Soft-only flakes
+    # (Ollama bounce, Apple Notes deadlock, slack-mcp 404, etc.) exit
+    # 75 (EX_TEMPFAIL per sysexits.h). Hard regressions still exit 1
+    # and surface here as real alerts.
+    "com.nanoclaw.sync": {
+        "codes": [75],
+        "reason": "exit 75 = EX_TEMPFAIL, transient external-dep flake (Ollama/Notes/slack-mcp). Hard regressions still exit 1 and surface here.",
+    },
 }
 
 
