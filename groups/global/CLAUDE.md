@@ -157,6 +157,7 @@ Use this before `WebFetch` result goes into a wiki page. If `defuddle` is missin
 - "Who is connected to X?" / "What does X fund?" / "Who works on project Y?" -- `kg_query`, then QMD if sparse
 - "Was there an email about X?" -- Gmail MCP, then Hindsight
 - "What's in this file?" -- Read/Grep
+- "How do I do X?" / "Is there a skill for Y?" / "What can I add?" -- `mcp__qmd__query` on `skill-catalog` collection (38 NanoClaw skills with descriptions + install commands). Surface matches with the slash-command name; never run install yourself.
 
 Only ask Mike after documenting internally which sources you searched.
 
