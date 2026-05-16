@@ -3,6 +3,12 @@ import { cancelTaskHandler } from './cancel-task.js';
 import { dashboardQueryHandler } from './dashboard-query.js';
 import { deployMiniAppHandler } from './deploy-mini-app.js';
 import { kgQueryHandler } from './kg-query.js';
+import {
+  taskAddHandler,
+  taskCloseHandler,
+  taskListHandler,
+  taskReopenHandler,
+} from './tasks.js';
 import { knowledgePublishHandler } from './knowledge-publish.js';
 import { pauseTaskHandler } from './pause-task.js';
 import { publishToBusHandler } from './publish-to-bus.js';
@@ -32,6 +38,10 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(dashboardQueryHandler);
   registerIpcHandler(deployMiniAppHandler);
   registerIpcHandler(kgQueryHandler);
+  registerIpcHandler(taskAddHandler);
+  registerIpcHandler(taskListHandler);
+  registerIpcHandler(taskCloseHandler);
+  registerIpcHandler(taskReopenHandler);
   registered = true;
 }
 

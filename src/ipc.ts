@@ -30,7 +30,6 @@ import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
-import { handleTasksIpc } from './tasks-ipc.js';
 import { decide as governorDecide } from './outbound-governor.js';
 import {
   clearDispatch,
@@ -983,21 +982,9 @@ export async function processTaskIpc(
       }
       // kg_query migrated to src/ipc/handlers/kg-query.ts — dispatched via
       // the IpcHandler registry above (dispatchIpcAction).
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        (data.type === 'task_add' ||
-          data.type === 'task_list' ||
-          data.type === 'task_close' ||
-          data.type === 'task_reopen')
-      ) {
-        handled = await handleTasksIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          DATA_DIR,
-        );
-      }
+      // task_add / task_list / task_close / task_reopen migrated to
+      // src/ipc/handlers/tasks.ts — dispatched via the IpcHandler registry
+      // above (dispatchIpcAction).
       if (
         !handled &&
         typeof data.type === 'string' &&

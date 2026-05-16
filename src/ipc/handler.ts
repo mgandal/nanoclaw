@@ -19,6 +19,7 @@ import { gateAndStage, fireNotifyIfRequested } from './trust-gate.js';
  * rejects `skipGate: true` from off-allowlist handlers.
  */
 const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
+  // Read-only
   'dashboard_query',
   'kg_query',
   'pageindex_fetch',
@@ -29,6 +30,15 @@ const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   'imessage_search',
   'imessage_read',
   'imessage_list_contacts',
+  // Writes that bypassed the gate in the if-ladder. Migrated here as
+  // "preserve current behaviour" (Rule 5). Each entry is a known
+  // silent-failure-wedge candidate: closing the bypass is a Batch 4
+  // follow-up that adds a trust.yaml entry + removes the type from
+  // this list, in one focused commit per action.
+  // TODO(Batch4): gate task_add / task_close / task_reopen.
+  'task_add',
+  'task_close',
+  'task_reopen',
 ]);
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
