@@ -17,7 +17,6 @@ import { describe, it, expect } from 'vitest';
 import {
   parseTextStyles,
   parseSignalStyles,
-  ChannelType,
 } from './text-styles.js';
 
 // ---------------------------------------------------------------------------

@@ -4894,9 +4894,10 @@ describe('processTaskIpc dispatches kg_query', () => {
   function pickSeedWithNeighbors(): string | null {
     if (!dbExists) return null;
     try {
-      // Lazy require because we only need this when the DB is present and
-      // we want to keep the top of the file unchanged.
-
+      // better-sqlite3 ships no .d.ts, so a top-level ESM import would force
+      // every consumer to add a module declaration. A scoped require keeps the
+      // typed surface narrow without dragging an `any` import to the top.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Database = require('better-sqlite3');
       const db = new Database(kgDb, { readonly: true, fileMustExist: true });
       try {

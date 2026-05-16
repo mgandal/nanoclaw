@@ -377,7 +377,7 @@ describe('credential-proxy', () => {
   it('fires onAuthFailure callback after consecutive 401s reach threshold', async () => {
     // Set up upstream that always returns 401
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
     });
@@ -416,7 +416,7 @@ describe('credential-proxy', () => {
   it('resets auth failure counter on a successful response', async () => {
     let requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       requestCount++;
       // First 2 requests fail, third succeeds, then 2 more fail
       if (requestCount <= 2 || (requestCount >= 4 && requestCount <= 5)) {
@@ -526,7 +526,7 @@ describe('credential-proxy', () => {
   it('should not count 429 rate-limit responses as auth failures', async () => {
     let requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       requestCount++;
       // Return 429 for first 4 requests, then 401 for the next 2
       if (requestCount <= 4) {
@@ -713,7 +713,7 @@ describe('credential-proxy', () => {
 
   it('should track 403 upstream responses as auth failures', async () => {
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       res.writeHead(403, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'forbidden' }));
     });
@@ -773,10 +773,10 @@ describe('credential-proxy', () => {
   });
 
   it('should fire onAuthFailure again after counter resets from threshold', async () => {
-    let requestCount = 0;
+    let _requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
-      requestCount++;
+    upstreamServer = http.createServer((_req, res) => {
+      _requestCount++;
       // All requests return 401
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -972,7 +972,7 @@ describe('credential-proxy', () => {
   it('mixed 401 and 403 responses both count toward auth failure threshold', async () => {
     let requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       requestCount++;
       // Alternate 401 and 403
       const status = requestCount % 2 === 1 ? 401 : 403;
@@ -1018,7 +1018,7 @@ describe('credential-proxy', () => {
 
   it('does not crash when auth failure threshold reached without onAuthFailure callback', async () => {
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
     });
@@ -1103,7 +1103,7 @@ describe('credential-proxy', () => {
 
   it('upstream response headers are forwarded to the client', async () => {
     await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((req, res) => {
+    upstreamServer = http.createServer((_req, res) => {
       res.writeHead(200, {
         'content-type': 'application/json',
         'x-request-id': 'req-abc-123',

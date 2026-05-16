@@ -703,7 +703,7 @@ describe('GroupQueue', () => {
   it('cleans up stale waitingGroups entries when group state is drained', async () => {
     const completionCallbacks: Array<() => void> = [];
 
-    const processMessages = vi.fn(async (groupJid: string) => {
+    const processMessages = vi.fn(async (_groupJid: string) => {
       await new Promise<void>((resolve) => completionCallbacks.push(resolve));
       return true;
     });

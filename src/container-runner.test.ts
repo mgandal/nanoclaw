@@ -531,7 +531,7 @@ describe('container-runner environment variable handling', () => {
   it('passes OAuth placeholder when auth mode is oauth', async () => {
     vi.mocked(detectAuthMode).mockReturnValue('oauth');
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
@@ -540,7 +540,7 @@ describe('container-runner environment variable handling', () => {
     const args = spawnCall[1] as string[];
 
     // Find env var values (args that follow '-e')
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     // Should have ANTHROPIC_AUTH_TOKEN=placeholder (not ANTHROPIC_API_KEY)
     const authTokenVar = envVars.find((a) =>
@@ -563,13 +563,13 @@ describe('container-runner environment variable handling', () => {
   it('passes API key placeholder when auth mode is api-key', async () => {
     vi.mocked(detectAuthMode).mockReturnValue('api-key');
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
     expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
@@ -583,13 +583,13 @@ describe('container-runner environment variable handling', () => {
       HONCHO_URL: 'http://localhost:8010',
     });
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const honchoVar = envVars.find((a) => a.startsWith('HONCHO_URL='));
     expect(honchoVar).toBeDefined();
@@ -607,13 +607,13 @@ describe('container-runner environment variable handling', () => {
       HONCHO_URL: 'not-a-valid-url',
     });
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const honchoVar = envVars.find((a) => a.startsWith('HONCHO_URL='));
     expect(honchoVar).toBeUndefined();
@@ -628,13 +628,13 @@ describe('container-runner environment variable handling', () => {
     // QMD not reachable (default)
     setQmdReachable(false);
 
-    const resultPromise1 = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise1 = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     let spawnCall = vi.mocked(spawn).mock.calls[0];
     let args = spawnCall[1] as string[];
-    let envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    let envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
     let qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
     expect(qmdVar).toBeUndefined();
 
@@ -646,13 +646,13 @@ describe('container-runner environment variable handling', () => {
     fakeProc = createFakeProcess();
     vi.mocked(spawn).mockReturnValue(fakeProc as any);
 
-    const resultPromise2 = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise2 = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     spawnCall = vi.mocked(spawn).mock.calls[1];
     args = spawnCall[1] as string[];
-    envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
     qmdVar = envVars.find((a) => a.startsWith('QMD_URL='));
     expect(qmdVar).toBeDefined();
     expect(qmdVar).toContain('host.docker.internal:8181/mcp');
@@ -684,10 +684,10 @@ describe('container-runner container name sanitization', () => {
       added_at: new Date().toISOString(),
     };
 
-    const resultPromise = runContainerAgent(
+    const _resultPromise = runContainerAgent(
       specialGroup,
       { ...testInput, groupFolder: specialGroup.folder },
-      (proc, containerName) => {
+      (_proc, containerName) => {
         // Container name should only contain allowed chars
         // The code replaces [^a-zA-Z0-9-] with '-'
         expect(containerName).toMatch(/^nanoclaw-[a-zA-Z0-9-]+-\d+$/);
@@ -801,7 +801,7 @@ describe('container-runner onOutput chain error handling', () => {
 
   it('continues processing when onOutput callback throws', async () => {
     let callCount = 0;
-    const onOutput = vi.fn(async (output: ContainerOutput) => {
+    const onOutput = vi.fn(async (_output: ContainerOutput) => {
       callCount++;
       if (callCount === 1) {
         throw new Error('Callback failure on first output');
@@ -854,13 +854,13 @@ describe('container-runner redacts sensitive args', () => {
   });
 
   it('does not expose real credentials in spawn args', async () => {
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
 
     await vi.advanceTimersByTimeAsync(10);
 
     const spawnCall = vi.mocked(spawn).mock.calls[0];
     const args = spawnCall[1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     // The proxy token is embedded in the ANTHROPIC_BASE_URL — verify it
     // uses the test proxy token, NOT a real API key
@@ -900,11 +900,11 @@ describe('container-runner ANTHROPIC_BASE_URL construction', () => {
   });
 
   it('constructs ANTHROPIC_BASE_URL with host gateway, proxy port, and proxy token', async () => {
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const baseUrlVar = envVars.find((a) => a.startsWith('ANTHROPIC_BASE_URL='));
     expect(baseUrlVar).toBeDefined();
@@ -936,11 +936,11 @@ describe('container-runner secret filtering', () => {
       fakeProc = createFakeProcess();
       vi.mocked(spawn).mockReturnValue(fakeProc as any);
 
-      const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+      const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
       await vi.advanceTimersByTimeAsync(10);
 
       const args = vi.mocked(spawn).mock.calls.at(-1)![1] as string[];
-      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+      const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
       const oauthVar = envVars.find((a) =>
         a.startsWith('CLAUDE_CODE_OAUTH_TOKEN='),
@@ -957,11 +957,11 @@ describe('container-runner secret filtering', () => {
   it('never passes real ANTHROPIC_API_KEY value to containers', async () => {
     vi.mocked(detectAuthMode).mockReturnValue('api-key');
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const apiKeyVar = envVars.find((a) => a.startsWith('ANTHROPIC_API_KEY='));
     expect(apiKeyVar).toBe('ANTHROPIC_API_KEY=placeholder');
@@ -989,7 +989,7 @@ describe('container-runner volume mount construction', () => {
       isMain: true,
     };
 
-    const resultPromise = runContainerAgent(
+    const _resultPromise = runContainerAgent(
       mainGroup,
       { ...testInput, isMain: true },
       () => {},
@@ -1015,13 +1015,13 @@ describe('container-runner volume mount construction', () => {
   });
 
   it('non-main group does not get project root mount', async () => {
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
 
     // Non-main should NOT have /workspace/project mount (check -v args)
-    const mountArgs = args.filter((a, i) => i > 0 && args[i - 1] === '-v');
+    const mountArgs = args.filter((_a, i) => i > 0 && args[i - 1] === '-v');
     const projectMount = mountArgs.find(
       (a) =>
         a.includes(':/workspace/project:') || a.endsWith(':/workspace/project'),
@@ -1060,7 +1060,7 @@ describe('container-runner volume mount construction', () => {
       isDirectory: () => true,
     } as any);
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     // cpSync should have been called for both container skills AND group skills
@@ -1105,11 +1105,11 @@ describe('container-runner MCP URL injection', () => {
       HINDSIGHT_URL: 'http://127.0.0.1:8889/mcp/hermes/',
     });
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const hindsightVar = envVars.find((a) => a.startsWith('HINDSIGHT_URL='));
     expect(hindsightVar).toBeDefined();
@@ -1127,11 +1127,11 @@ describe('container-runner MCP URL injection', () => {
       CALENDAR_URL: 'http://localhost:8188/mcp',
     });
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const calendarVar = envVars.find((a) => a.startsWith('CALENDAR_URL='));
     expect(calendarVar).toBeDefined();
@@ -1155,11 +1155,11 @@ describe('container-runner MCP URL injection', () => {
           allowedSecrets: ['READWISE_ACCESS_TOKEN' as const],
         },
       };
-      const resultPromise = runContainerAgent(optedIn, testInput, () => {});
+      const _resultPromise = runContainerAgent(optedIn, testInput, () => {});
       await vi.advanceTimersByTimeAsync(10);
 
       const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+      const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
       const readwiseVar = envVars.find((a) =>
         a.startsWith('READWISE_ACCESS_TOKEN='),
@@ -1179,11 +1179,11 @@ describe('container-runner MCP URL injection', () => {
     });
 
     // testGroup is non-main, has no allowedSecrets — token should NOT leak
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     expect(
       envVars.find((a) => a.startsWith('READWISE_ACCESS_TOKEN=')),
@@ -1211,11 +1211,11 @@ describe('container-runner MCP URL injection', () => {
     try {
       const mainInput = { ...testInput, isMain: true };
       const mainGroup = { ...testGroup, isMain: true };
-      const resultPromise = runContainerAgent(mainGroup, mainInput, () => {});
+      const _resultPromise = runContainerAgent(mainGroup, mainInput, () => {});
       await vi.advanceTimersByTimeAsync(10);
 
       const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-      const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+      const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
       expect(envVars).toContain('READWISE_ACCESS_TOKEN=rwt_main');
       expect(envVars).toContain('GITHUB_TOKEN=ghp_main');
@@ -1231,11 +1231,11 @@ describe('container-runner MCP URL injection', () => {
   });
 
   it('always passes OLLAMA_HOST with host gateway', async () => {
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const ollamaVar = envVars.find((a) => a.startsWith('OLLAMA_HOST='));
     expect(ollamaVar).toBe('OLLAMA_HOST=http://host.docker.internal:11434');
@@ -1616,11 +1616,11 @@ describe('container-runner process.env takes precedence over readEnvFile', () =>
     });
     process.env.APPLE_NOTES_URL = 'http://localhost:8184/from-process-env';
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const appleNotesVar = envVars.find((a) => a.startsWith('APPLE_NOTES_URL='));
     expect(appleNotesVar).toBeDefined();
@@ -1643,11 +1643,11 @@ describe('container-runner process.env takes precedence over readEnvFile', () =>
       ...testGroup,
       containerConfig: { allowedSecrets: ['READWISE_ACCESS_TOKEN' as const] },
     };
-    const resultPromise = runContainerAgent(optedIn, testInput, () => {});
+    const _resultPromise = runContainerAgent(optedIn, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const readwiseVar = envVars.find((a) =>
       a.startsWith('READWISE_ACCESS_TOKEN='),
@@ -1733,11 +1733,11 @@ describe('container-runner MCP URL non-localhost passthrough', () => {
   it('preserves non-localhost hostname in APPLE_NOTES_URL unchanged', async () => {
     process.env.APPLE_NOTES_URL = 'http://remote-server.local:8184/mcp';
 
-    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
-    const envVars = args.filter((a, i) => i > 0 && args[i - 1] === '-e');
+    const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const appleNotesVar = envVars.find((a) => a.startsWith('APPLE_NOTES_URL='));
     expect(appleNotesVar).toBeDefined();

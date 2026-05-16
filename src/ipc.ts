@@ -1,7 +1,6 @@
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-
-import { CronExpressionParser } from 'cron-parser';
 
 import { getBridgeToken } from './bridge-auth.js';
 import {
@@ -21,19 +20,11 @@ import {
 import { parseCompoundKey, fsPathToCompoundKey } from './compound-key.js';
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
-import {
-  createTask,
-  deleteTask,
-  getTaskById,
-  insertAgentAction,
-  insertPendingAction,
-  updateTask,
-  validateTaskSchedule,
-} from './db.js';
+import { insertAgentAction } from './db.js';
 import { loadAgentTrust } from './agent-registry.js';
 import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
 import { firePostHocNotify } from './trust-notify.js';
-import { resolveGroupFolderPath, isValidGroupFolder } from './group-folder.js';
+import { resolveGroupFolderPath } from './group-folder.js';
 import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
@@ -103,8 +94,6 @@ export function logFdPressureDiagnostic(
     processFdCount = fs.readdirSync('/proc/self/fd').length;
   } catch {
     try {
-      const { spawnSync } =
-        require('child_process') as typeof import('child_process');
       const result = spawnSync('lsof', ['-p', String(process.pid)], {
         encoding: 'utf-8',
         timeout: 2000,

@@ -28,8 +28,6 @@ import {
   getDueTasks,
   getTaskById,
   healOrphanedNextRun,
-  setSession,
-  touchSession,
 } from './db.js';
 import {
   _resetAlertsForTests,
@@ -38,7 +36,8 @@ import {
   runGuardScript,
   startSchedulerLoop,
 } from './task-scheduler.js';
-import type { SchedulerDependencies, ScheduledTask } from './task-scheduler.js';
+import type { SchedulerDependencies } from './task-scheduler.js';
+import type { ScheduledTask } from './types.js';
 
 // ---------------------------------------------------------------------------
 // helpers

@@ -876,7 +876,7 @@ describe('Ollama classification sanitization (C12)', () => {
     // Regression guard: if someone refactors parseClassification and drops
     // the sanitizer, the grep will catch it. Match the method definition
     // (not the call site) by anchoring on `private parseClassification(`.
-    const defMatch = source.match(/private parseClassification\([\s\S]*?^  }/m);
+    const defMatch = source.match(/private parseClassification\([\s\S]*?^ {2}}/m);
     expect(defMatch).not.toBeNull();
     const parseBlock = defMatch![0];
     expect(parseBlock).toContain('sanitizeClassificationText');

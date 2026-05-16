@@ -11,7 +11,7 @@
  * - Error handling during channel connect
  * - Initialization loop resilience (one channel failing doesn't block others)
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { Channel } from '../types.js';
 import {

@@ -37,10 +37,12 @@ vi.mock('../pageindex.js', () => ({
 
 // --- Grammy mock ---
 
+type GrammyHandler = (...args: unknown[]) => unknown;
+
 const botRef = vi.hoisted(() => ({
-  handlers: new Map<string, Function>(),
-  commandHandlers: new Map<string, Function>(),
-  catchHandler: null as Function | null,
+  handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  commandHandlers: new Map<string, (...args: unknown[]) => unknown>(),
+  catchHandler: null as ((...args: unknown[]) => unknown) | null,
   poolApiInstances: [] as Array<{
     token: string;
     sendMessage: ReturnType<typeof vi.fn>;
@@ -85,14 +87,14 @@ vi.mock('grammy', () => {
   return {
     Bot: class MockBot {
       api = botRef.apiMock;
-      constructor(token: string, opts?: any) {}
-      command(name: string, handler: Function) {
+      constructor(_token: string, _opts?: any) {}
+      command(name: string, handler: GrammyHandler) {
         botRef.commandHandlers.set(name, handler);
       }
-      on(filter: string, handler: Function) {
+      on(filter: string, handler: GrammyHandler) {
         botRef.handlers.set(filter, handler);
       }
-      catch(handler: Function) {
+      catch(handler: GrammyHandler) {
         botRef.catchHandler = handler;
       }
       start(opts?: any) {
@@ -117,21 +119,17 @@ vi.mock('grammy', () => {
     },
     GrammyError: MockGrammyError,
     InlineKeyboard: class MockInlineKeyboard {
-      url(label: string, url: string) {
+      url(_label: string, _url: string) {
         return this;
       }
     },
     InputFile: class MockInputFile {
-      constructor(filePath: string) {}
+      constructor(_filePath: string) {}
     },
   };
 });
 
-import {
-  TelegramChannel,
-  TelegramChannelOpts,
-  sendPoolMessage,
-} from './telegram.js';
+import { TelegramChannel, TelegramChannelOpts } from './telegram.js';
 import { logger } from '../logger.js';
 
 // --- Test helpers ---

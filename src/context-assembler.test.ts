@@ -778,7 +778,7 @@ describe('writeContextPacket', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('writes context packet atomically via tmp+rename', async () => {
-    const packet = await writeContextPacket(
+    const _packet = await writeContextPacket(
       'telegram_test',
       false,
       '/tmp/test-ipc',

@@ -10,9 +10,6 @@
  * the config flags + governor + proactive_log chain are wired together.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import path from 'path';
-import os from 'os';
-import fs from 'fs';
 import { getDb, _initTestDatabase } from './db.js';
 
 const envSnapshot: Record<string, string | undefined> = {};

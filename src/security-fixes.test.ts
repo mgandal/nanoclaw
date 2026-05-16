@@ -19,7 +19,7 @@ import {
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
-import { CONTAINER_RUNTIME_BIN, stopContainer } from './container-runtime.js';
+import { stopContainer } from './container-runtime.js';
 
 // ─── 1. stopContainer: command injection via name ───────────────────
 

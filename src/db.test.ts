@@ -1521,7 +1521,7 @@ describe('session expiry detection', () => {
   it('identifies sessions with last_used older than 2 hours as expired', () => {
     // Create a session and manually set last_used to 3 hours ago
     setSession('expired-group', 'sess-old');
-    const threeHoursAgo = new Date(
+    const _threeHoursAgo = new Date(
       Date.now() - 3 * 60 * 60 * 1000,
     ).toISOString();
     // Directly update last_used to simulate an old session

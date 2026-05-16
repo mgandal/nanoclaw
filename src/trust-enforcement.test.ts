@@ -7,7 +7,6 @@ vi.mock('./logger.js', () => ({
 import {
   checkTrust,
   checkTrustAndStage,
-  type TrustDecision,
 } from './trust-enforcement.js';
 import { _initTestDatabase, _getTestDb } from './db.js';
 

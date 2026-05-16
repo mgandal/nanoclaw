@@ -584,9 +584,9 @@ describe('scheduler loop lifecycle (regression)', () => {
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
-    const taskFn = vi.fn();
+    const _taskFn = vi.fn();
     const enqueueTask = vi.fn(
-      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+      (_groupJid: string, _taskId: string, _fn: () => Promise<void>) => {
         // Simulate: task was paused by the time enqueueTask checks
         // The scheduler re-reads the task inside the loop before enqueueing
         // so this should not run
@@ -1056,10 +1056,10 @@ describe('edge cases — concurrent execution and guards', () => {
       created_at: '2026-01-01T00:00:00.000Z',
     });
 
-    let enqueueCallCount = 0;
+    let _enqueueCallCount = 0;
     const enqueueTask = vi.fn(
       (_groupJid: string, _taskId: string, _fn: () => Promise<void>) => {
-        enqueueCallCount++;
+        _enqueueCallCount++;
       },
     );
 
