@@ -12,10 +12,7 @@ import {
   dispatchIpcAction,
   registerIpcHandler,
 } from '../handler.js';
-import {
-  pageindexFetchHandler,
-  pageindexIndexHandler,
-} from './pageindex.js';
+import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 
 /**
  * Per-handler tests for the pageindex_* cluster. The PDF reading/indexing
@@ -150,7 +147,9 @@ describe('pageindex_* cluster handlers', () => {
     // Second arg is the mounts array. The handler must include the
     // /workspace/group mount the if-ladder appended.
     const mounts = mockFetch.mock.calls[0]![1] as MountMapping[];
-    const groupMount = mounts.find((m) => m.containerPath === '/workspace/group');
+    const groupMount = mounts.find(
+      (m) => m.containerPath === '/workspace/group',
+    );
     expect(groupMount).toBeDefined();
     expect(groupMount!.readonly).toBe(false);
   });

@@ -1,10 +1,7 @@
 import { resolveGroupFolderPath } from '../../group-folder.js';
 import { validateAdditionalMounts } from '../../mount-security.js';
 import { type MountMapping } from '../../pageindex.js';
-import {
-  runPageindexFetch,
-  runPageindexIndex,
-} from '../../pageindex-ipc.js';
+import { runPageindexFetch, runPageindexIndex } from '../../pageindex-ipc.js';
 import type {
   ExecuteResult,
   IpcHandler,

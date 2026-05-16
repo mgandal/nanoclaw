@@ -9,10 +9,7 @@ import {
   imessageSendHandler,
 } from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
-import {
-  pageindexFetchHandler,
-  pageindexIndexHandler,
-} from './pageindex.js';
+import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 import {
   taskAddHandler,
   taskCloseHandler,
