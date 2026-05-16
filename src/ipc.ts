@@ -30,7 +30,6 @@ import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
-import { handleKgIpc } from './kg-ipc.js';
 import { handleTasksIpc } from './tasks-ipc.js';
 import { decide as governorDecide } from './outbound-governor.js';
 import {
@@ -982,59 +981,8 @@ export async function processTaskIpc(
           mounts,
         );
       }
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        data.type === 'kg_query'
-      ) {
-        // C13: trust enforcement for agent callers. Read-only action;
-        // default trust should be autonomous.
-        const { group: kqBaseGroup, agent: kqAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        let kqAllowed = true;
-        let kqNotify = false;
-        if (kqAgent) {
-          const d = data as Record<string, unknown>;
-          const trust = loadAgentTrust(path.join(AGENTS_DIR, kqAgent));
-          const trustDecision = checkTrustAndStage({
-            agentName: kqAgent,
-            groupFolder: kqBaseGroup,
-            actionType: 'kg_query',
-            summary:
-              typeof d.query === 'string' ? d.query.slice(0, 100) : '(query)',
-            target: 'knowledge-graph',
-            payloadForStaging: {
-              type: 'kg_query',
-              requestId: d.requestId,
-              query: d.query,
-              hops: d.hops,
-            },
-            trust,
-          });
-          kqAllowed = trustDecision.allowed;
-          kqNotify = trustDecision.notify;
-        }
-        if (kqAllowed) {
-          handled = await handleKgIpc(
-            data as Record<string, unknown>,
-            sourceGroup,
-            isMain,
-            DATA_DIR,
-          );
-          await firePostHocNotify({
-            notify: kqNotify,
-            agentName: kqAgent || null,
-            actionType: 'kg_query',
-            summary: `queried KG: ${typeof (data as Record<string, unknown>).query === 'string' ? ((data as Record<string, unknown>).query as string).slice(0, 80) : '(query)'}`,
-            target: 'knowledge-graph',
-            registeredGroups,
-            deps,
-          });
-        } else {
-          handled = true;
-        }
-      }
+      // kg_query migrated to src/ipc/handlers/kg-query.ts — dispatched via
+      // the IpcHandler registry above (dispatchIpcAction).
       if (
         !handled &&
         typeof data.type === 'string' &&
