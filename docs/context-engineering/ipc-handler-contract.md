@@ -124,9 +124,16 @@ Initial allowlist (read-only, observable but not state-mutating):
 
 - `dashboard_query`, `kg_query`, `pageindex_fetch`, `task_list`, `slack_dm_read`, `skill_search`, `skill_invoked`, `imessage_search`, `imessage_read`, `imessage_list_contacts`
 
-Mutating actions **must** go through the gate. The dispatcher rejects a
-`skipGate: true` from an off-allowlist handler with a logged error, treating
-it as a denied authorization.
+Mutating actions **must** go through the gate. When an off-allowlist handler
+declares `skipGate: true` the dispatcher:
+
+1. **Logs** an error with handler type and sourceGroup.
+2. **Denies** the action (execute is not called).
+3. **Writes an `agent_actions` audit row** with `outcome: 'denied_contract_violation'` and `trust_level: 'contract_violation'` — if the caller is an agent (ctx.agentName non-null). A grep on this outcome surfaces every contract abuse for security review even after a process restart.
+4. Does **not throw.** A contributor bug must not crash the IPC watcher and take down every other in-flight dispatch with it. Loud-but-contained is the correct failure mode.
+
+Non-agent callers (bare group, no `+agent` suffix) trigger the deny + log
+but no audit row is written, since `agent_actions` requires an `agent_name`.
 
 ### Rule 5 — Migration commits preserve behaviour
 

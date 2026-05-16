@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
+import { insertAgentAction } from '../db.js';
 import { logger } from '../logger.js';
 import { parseCompoundKey, fsPathToCompoundKey } from '../compound-key.js';
 import { RegisteredGroup } from '../types.js';
@@ -39,6 +40,15 @@ export interface IpcHandlerContext {
   agentName: string | null;
   registeredGroups: Record<string, RegisteredGroup>;
   deps: IpcDeps;
+  /**
+   * Root of the IPC filesystem tree. Defaults to the global DATA_DIR; tests
+   * override via buildContext(dataDirOverride) to isolate per-test fs state
+   * under a tmpdir. The dispatcher reads this when writing result files
+   * (Rule 1) so a test can be mkdtempSync-scoped without touching production
+   * data/. Handlers should reach for this rather than re-importing DATA_DIR
+   * when their work writes under data/ipc/.
+   */
+  dataDir: string;
 }
 
 export interface IpcAuthorization {
@@ -152,6 +162,7 @@ export function buildContext(
   sourceGroup: string,
   isMain: boolean,
   deps: IpcDeps,
+  dataDirOverride?: string,
 ): IpcHandlerContext {
   const { group: baseGroup, agent } = parseCompoundKey(
     fsPathToCompoundKey(sourceGroup),
@@ -163,6 +174,7 @@ export function buildContext(
     agentName: agent,
     registeredGroups: deps.registeredGroups(),
     deps,
+    dataDir: dataDirOverride ?? DATA_DIR,
   };
 }
 
@@ -205,13 +217,41 @@ export async function dispatchIpcAction(
   if (auth === null) return { handled: true };
 
   // Rule 4: skipGate is honored only for allowlisted types. An off-allowlist
-  // handler declaring skipGate is a contract violation; treat as denial.
+  // handler declaring skipGate is a contract violation. We deny + log AND
+  // write a forensic audit row so the violation surfaces in agent_actions
+  // queries (otherwise the gate-bypass attempt leaves no trail). We do NOT
+  // throw — that would crash the IPC watcher process on a contributor bug,
+  // taking down all other in-flight dispatches with it. Loud-but-contained
+  // is the right failure mode.
   const wantsSkipGate = auth.skipGate === true;
   if (wantsSkipGate && !SKIP_GATE_ALLOWLIST.has(handler.type)) {
     logger.error(
       { type: handler.type, sourceGroup: ctx.sourceGroup },
       'IPC handler declared skipGate but type is not on SKIP_GATE_ALLOWLIST — denying',
     );
+    if (ctx.agentName) {
+      // Agent-attributed violation. Write the audit row so a security
+      // reviewer can grep for this outcome and find every contract abuse.
+      try {
+        insertAgentAction({
+          agent_name: ctx.agentName,
+          group_folder: ctx.baseGroup,
+          action_type: handler.type,
+          trust_level: 'contract_violation',
+          summary: `off-allowlist skipGate (target=${auth.target.slice(0, 100)})`,
+          target: auth.auditTarget ?? auth.target,
+          outcome: 'denied_contract_violation',
+        });
+      } catch (err) {
+        // Audit write failure is itself a violation we can't recover from
+        // here. Log and proceed with the denial — primary discipline (deny)
+        // is preserved even if forensics fails.
+        logger.error(
+          { err, type: handler.type },
+          'Failed to write contract-violation audit row',
+        );
+      }
+    }
     return { handled: true };
   }
 
@@ -268,7 +308,13 @@ export async function dispatchIpcAction(
           ? resultPayload
           : { success: true };
     const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
-    writeResultFile(ctx.sourceGroup, resultsDirName, requestId!, filePayload);
+    writeResultFile(
+      ctx.dataDir,
+      ctx.sourceGroup,
+      resultsDirName,
+      requestId!,
+      filePayload,
+    );
   } else if (executed && decision !== null) {
     // Notify path (existing behaviour). decision is null only for skipGate
     // calls, which are read-only and on the allowlist — by construction they
@@ -289,23 +335,26 @@ export async function dispatchIpcAction(
 
 /**
  * Write a result-kind handler's payload to its per-requestId file, atomically.
- * Path: data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json.
+ * Path: {dataDir}/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json.
  *
- * `resultsDirName` comes from the handler's `resultsDirName` field (legacy
- * override) or the dispatcher's default `${type}_results` (new handlers).
+ * `dataDir` comes from ctx.dataDir — the production DATA_DIR by default,
+ * or a tmpdir override in tests. `resultsDirName` comes from the handler's
+ * `resultsDirName` field (legacy override) or the dispatcher's default
+ * `${type}_results` (new handlers).
  *
  * Best-effort: a write failure is logged but does not propagate, since the
  * caller (dispatcher) is past the side effect and the agent will time out
  * its poll — the correct failure mode.
  */
 function writeResultFile(
+  dataDir: string,
   sourceGroup: string,
   resultsDirName: string,
   requestId: string,
   payload: unknown,
 ): void {
   try {
-    const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, resultsDirName);
+    const resultsDir = path.join(dataDir, 'ipc', sourceGroup, resultsDirName);
     fs.mkdirSync(resultsDir, { recursive: true });
     const resultFile = path.join(resultsDir, `${requestId}.json`);
     const tmpFile = `${resultFile}.tmp`;

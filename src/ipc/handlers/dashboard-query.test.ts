@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
@@ -24,22 +25,23 @@ import { dashboardQueryHandler } from './dashboard-query.js';
  * relies on: requestId rejection (Rule 2), skipGate honoring for non-agent
  * callers (Rule 4), and result-file writing (Rule 1).
  *
+ * Tests scope all result-file fs writes to a per-test mkdtempSync directory
+ * via the dataDirOverride argument to buildContext. The agent dir for the
+ * single trust-gate test is still scoped under the live DATA_DIR/agents/
+ * because loadAgentTrust reads from the global AGENTS_DIR constant — that
+ * isolation requires a deeper refactor and is out of scope for Batch 1.
+ * (Mitigation: unique agent name + finally-block cleanup, same as the
+ * existing C13 trust block at src/ipc.test.ts:3476-3483.)
+ *
  * The legacy library entry point is tested separately in
  * src/dashboard-ipc.test.ts; the trust-gate equivalence is in
  * src/ipc.test.ts under 'dashboard_query trust enforcement (C13)'.
  */
 describe('dashboardQueryHandler', () => {
   const SOURCE_GROUP = 'telegram_other';
-  // Wire-format-locked path: container reads from `dashboard_results/`
-  // (singular suffix, prefix-grouped). See dashboard-query.ts and
-  // container/agent-runner/src/ipc-mcp-stdio.ts:733.
-  const RESULTS_DIR = path.join(
-    DATA_DIR,
-    'ipc',
-    SOURCE_GROUP,
-    'dashboard_results',
-  );
 
+  let dataDir: string;
+  let resultsDir: string;
   let deps: IpcDeps;
 
   beforeEach(() => {
@@ -65,11 +67,15 @@ describe('dashboardQueryHandler', () => {
       onTasksChanged: () => undefined,
     };
 
-    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-query-test-'));
+    // Wire-format-locked path: container reads from `dashboard_results/`
+    // (singular suffix, prefix-grouped). See dashboard-query.ts and
+    // container/agent-runner/src/ipc-mcp-stdio.ts:733.
+    resultsDir = path.join(dataDir, 'ipc', SOURCE_GROUP, 'dashboard_results');
   });
 
   afterEach(() => {
-    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
   const dispatch = async (
@@ -77,7 +83,7 @@ describe('dashboardQueryHandler', () => {
     isMain: boolean,
     compoundSource = SOURCE_GROUP,
   ) => {
-    const ctx = buildContext(compoundSource, isMain, deps);
+    const ctx = buildContext(compoundSource, isMain, deps, dataDir);
     return dispatchIpcAction(
       data as { type: string } & Record<string, unknown>,
       ctx,
@@ -85,7 +91,7 @@ describe('dashboardQueryHandler', () => {
   };
 
   const readResult = (requestId: string): Record<string, unknown> | null => {
-    const file = path.join(RESULTS_DIR, `${requestId}.json`);
+    const file = path.join(resultsDir, `${requestId}.json`);
     if (!fs.existsSync(file)) return null;
     return JSON.parse(fs.readFileSync(file, 'utf-8'));
   };
@@ -102,7 +108,7 @@ describe('dashboardQueryHandler', () => {
     expect(result.handled).toBe(true);
     // No result file should be written for malformed requestId — the poller
     // is expected to time out, which is the correct failure mode.
-    expect(fs.existsSync(RESULTS_DIR)).toBe(false);
+    expect(fs.existsSync(resultsDir)).toBe(false);
   });
 
   it('rejects missing requestId at the dispatcher (Rule 2)', async () => {
@@ -111,7 +117,7 @@ describe('dashboardQueryHandler', () => {
       false,
     );
     expect(result.handled).toBe(true);
-    expect(fs.existsSync(RESULTS_DIR)).toBe(false);
+    expect(fs.existsSync(resultsDir)).toBe(false);
   });
 
   it('writes result file for valid task_summary query (Rule 1)', async () => {
@@ -203,7 +209,10 @@ describe('dashboardQueryHandler', () => {
   });
 
   it('writes audit row for agent callers (gate fires)', async () => {
-    const agentName = 'test-dash-agent';
+    // Unique agent name + finally cleanup keeps the live DATA_DIR/agents/
+    // dir tidy. A future refactor that plumbs an agentsDir override through
+    // gateAndStage would let this test scope to dataDir too; out of scope.
+    const agentName = `test-dash-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const agentDir = path.join(DATA_DIR, 'agents', agentName);
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(
@@ -253,7 +262,7 @@ describe('dashboardQueryHandler', () => {
     );
 
     const expectedFile = path.join(
-      DATA_DIR,
+      dataDir,
       'ipc',
       SOURCE_GROUP,
       'dashboard_results',
@@ -265,18 +274,13 @@ describe('dashboardQueryHandler', () => {
     // accidentally. If a future contributor drops resultsDirName from the
     // handler, this assertion fails and steers them to read the contract.
     const wrongFile = path.join(
-      DATA_DIR,
+      dataDir,
       'ipc',
       SOURCE_GROUP,
       'dashboard_query_results',
       'req-wire-format.json',
     );
     expect(fs.existsSync(wrongFile)).toBe(false);
-
-    fs.rmSync(
-      path.join(DATA_DIR, 'ipc', SOURCE_GROUP, 'dashboard_query_results'),
-      { recursive: true, force: true },
-    );
   });
 });
 
@@ -288,13 +292,9 @@ describe('dashboardQueryHandler', () => {
 // in-container poller must never hang because of a thrown error.
 describe('dispatcher Rule 1: failure-file on execute throw', () => {
   const SOURCE_GROUP = 'telegram_other';
-  const RESULTS_DIR = path.join(
-    DATA_DIR,
-    'ipc',
-    SOURCE_GROUP,
-    'throwing_test_results',
-  );
 
+  let dataDir: string;
+  let resultsDir: string;
   let deps: IpcDeps;
 
   beforeEach(() => {
@@ -309,18 +309,15 @@ describe('dispatcher Rule 1: failure-file on execute throw', () => {
       writeGroupsSnapshot: () => undefined,
       onTasksChanged: () => undefined,
     };
-    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'throwing-test-'));
+    resultsDir = path.join(dataDir, 'ipc', SOURCE_GROUP, 'throwing_test_results');
   });
 
   afterEach(() => {
-    fs.rmSync(RESULTS_DIR, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('writes {success:false, message:"Error: ..."} when handler throws', async () => {
-    // Register a deliberately throwing handler on a unique allowlisted-ish
-    // type. We don't need it on SKIP_GATE_ALLOWLIST because no agent caller
-    // is involved (sourceGroup has no '+agent'), so gateAndStage allows
-    // unconditionally for non-agent callers.
     registerIpcHandler({
       type: 'throwing_test',
       responseKind: 'result',
@@ -335,13 +332,13 @@ describe('dispatcher Rule 1: failure-file on execute throw', () => {
       },
     });
 
-    const ctx = buildContext(SOURCE_GROUP, true, deps);
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     await dispatchIpcAction(
       { type: 'throwing_test', requestId: 'req-throw' },
       ctx,
     );
 
-    const file = path.join(RESULTS_DIR, 'req-throw.json');
+    const file = path.join(resultsDir, 'req-throw.json');
     expect(fs.existsSync(file)).toBe(true);
     const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
     expect(payload.success).toBe(false);
@@ -361,16 +358,116 @@ describe('dispatcher Rule 1: failure-file on execute throw', () => {
       execute: () => ({ executed: false }) as const,
     });
 
-    const ctx = buildContext(SOURCE_GROUP, true, deps);
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     await dispatchIpcAction(
       { type: 'throwing_test', requestId: 'req-bail' },
       ctx,
     );
 
-    const file = path.join(RESULTS_DIR, 'req-bail.json');
+    const file = path.join(resultsDir, 'req-bail.json');
     expect(fs.existsSync(file)).toBe(true);
     const payload = JSON.parse(fs.readFileSync(file, 'utf-8'));
     expect(payload.success).toBe(false);
     expect(payload.message).toBe('execution bailed');
+  });
+});
+
+// --- I2: off-allowlist skipGate violation writes audit row ---
+//
+// Rule 4 of the contract: a handler declaring skipGate: true but whose type
+// is NOT in SKIP_GATE_ALLOWLIST is a contract violation. Dispatcher denies
+// AND writes a forensic agent_actions row with outcome='denied_contract_
+// violation' so a security reviewer can grep the violations even after a
+// process restart purges in-memory state.
+describe('dispatcher Rule 4: off-allowlist skipGate violation audit', () => {
+  const SOURCE_GROUP = 'telegram_other';
+
+  let dataDir: string;
+  let agentDir: string;
+  let agentName: string;
+  let deps: IpcDeps;
+
+  beforeEach(() => {
+    _initTestDatabase();
+    _resetHandlersForTests();
+    deps = {
+      sendMessage: async () => undefined,
+      registeredGroups: () => ({}),
+      registerGroup: () => undefined,
+      syncGroups: async () => undefined,
+      getAvailableGroups: () => [],
+      writeGroupsSnapshot: () => undefined,
+      onTasksChanged: () => undefined,
+    };
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'violation-test-'));
+    agentName = `violation-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  it('writes audit row with outcome=denied_contract_violation when off-allowlist handler declares skipGate', async () => {
+    registerIpcHandler({
+      type: 'bad_mutating_handler',
+      responseKind: 'notify',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'should-be-gated',
+        notifySummary: 'should not happen',
+        payloadForStaging: {},
+        // Contract violation: this type is NOT in SKIP_GATE_ALLOWLIST.
+        skipGate: true,
+      }),
+      execute: () => {
+        // Should never run — the dispatcher denies before reaching execute.
+        throw new Error('execute should not be reached');
+      },
+    });
+
+    const ctx = buildContext(`${SOURCE_GROUP}--${agentName}`, false, deps, dataDir);
+    await dispatchIpcAction({ type: 'bad_mutating_handler' }, ctx);
+
+    const rows = getDb()
+      .prepare(
+        "SELECT outcome, trust_level FROM agent_actions WHERE action_type = 'bad_mutating_handler' AND agent_name = ?",
+      )
+      .all(agentName) as { outcome: string; trust_level: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('denied_contract_violation');
+    expect(rows[0].trust_level).toBe('contract_violation');
+  });
+
+  it('skips audit row when non-agent caller violates contract (no agent_name to attribute to)', async () => {
+    registerIpcHandler({
+      type: 'bad_mutating_handler',
+      responseKind: 'notify',
+      parse: () => ({}),
+      authorize: () => ({
+        target: 'should-be-gated',
+        notifySummary: 'should not happen',
+        payloadForStaging: {},
+        skipGate: true,
+      }),
+      execute: () => {
+        throw new Error('execute should not be reached');
+      },
+    });
+
+    // No '+agent' suffix — bare group. agentName is null in ctx. Violation
+    // is still denied (execute does not run), but no audit row is written
+    // because agent_actions requires an agent_name.
+    const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+    await dispatchIpcAction({ type: 'bad_mutating_handler' }, ctx);
+
+    const rows = getDb()
+      .prepare(
+        "SELECT * FROM agent_actions WHERE action_type = 'bad_mutating_handler'",
+      )
+      .all();
+    expect(rows).toHaveLength(0);
   });
 });
