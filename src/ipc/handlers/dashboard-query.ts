@@ -58,13 +58,9 @@ export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
     return {
       target: 'dashboard',
       auditSummary:
-        typeof input.view === 'string'
-          ? input.view.slice(0, 100)
-          : '(query)',
+        typeof input.view === 'string' ? input.view.slice(0, 100) : '(query)',
       notifySummary: `queried ${
-        typeof input.view === 'string'
-          ? input.view.slice(0, 80)
-          : '(view)'
+        typeof input.view === 'string' ? input.view.slice(0, 80) : '(view)'
       }`,
       payloadForStaging: {
         type: 'dashboard_query',
