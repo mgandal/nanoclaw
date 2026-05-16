@@ -932,7 +932,7 @@ interface ScriptResult {
 
 const SCRIPT_TIMEOUT_MS = 30_000;
 
-async function runScript(script: string): Promise<ScriptResult | null> {
+export async function runScript(script: string): Promise<ScriptResult | null> {
   const scriptPath = '/tmp/task-script.sh';
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 
@@ -959,26 +959,32 @@ async function runScript(script: string): Promise<ScriptResult | null> {
           return resolve(null);
         }
 
-        // Parse last non-empty line of stdout as JSON
+        // Fail-open default: when output is missing or unparseable, run the
+        // agent rather than silently skip. Skipping should require an explicit
+        // {"wakeAgent": false} contract.
+        const failOpen: ScriptResult = { wakeAgent: true };
+
         const lines = stdout.trim().split('\n');
         const lastLine = lines[lines.length - 1];
         if (!lastLine) {
-          log('Script produced no output');
-          return resolve(null);
+          log('Script produced no output — failing open (wakeAgent=true)');
+          return resolve(failOpen);
         }
 
         try {
           const result = JSON.parse(lastLine);
           if (typeof result.wakeAgent !== 'boolean') {
             log(
-              `Script output missing wakeAgent boolean: ${lastLine.slice(0, 200)}`,
+              `Script output missing wakeAgent boolean, failing open: ${lastLine.slice(0, 200)}`,
             );
-            return resolve(null);
+            return resolve(failOpen);
           }
           resolve(result as ScriptResult);
         } catch {
-          log(`Script output is not valid JSON: ${lastLine.slice(0, 200)}`);
-          resolve(null);
+          log(
+            `Script output is not valid JSON, failing open: ${lastLine.slice(0, 200)}`,
+          );
+          resolve(failOpen);
         }
       },
     );

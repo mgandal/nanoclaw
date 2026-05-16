@@ -21,6 +21,7 @@ import {
   buildMcpServers,
   shouldOfferCrystallize,
   appendCrystallizeOffer,
+  runScript,
   OUTPUT_START_MARKER,
   OUTPUT_END_MARKER,
   type ContainerInput,
@@ -630,3 +631,65 @@ describe('appendCrystallizeOffer', () => {
     expect(appendCrystallizeOffer(null, 4)).toBeNull();
   });
 });
+
+// ─── runScript ───────────────────────────────────────────────────────────────
+
+describe('runScript', () => {
+  it('parses valid JSON last line with wakeAgent=true and data payload', async () => {
+    const script = `#!/bin/bash
+echo "some preamble noise"
+echo '{"wakeAgent": true, "data": {"count": 7}}'
+`;
+    const result = await runScript(script);
+    expect(result).not.toBeNull();
+    expect(result!.wakeAgent).toBe(true);
+    expect(result!.data).toEqual({ count: 7 });
+  });
+
+  it('parses valid JSON last line with wakeAgent=false', async () => {
+    const script = `#!/bin/bash
+echo '{"wakeAgent": false}'
+`;
+    const result = await runScript(script);
+    expect(result).not.toBeNull();
+    expect(result!.wakeAgent).toBe(false);
+  });
+
+  it('fails open (wakeAgent=true) when last stdout line is not JSON', async () => {
+    const script = `#!/bin/bash
+echo "pending=30"
+echo "inbox empty"
+`;
+    const result = await runScript(script);
+    expect(result).not.toBeNull();
+    expect(result!.wakeAgent).toBe(true);
+  });
+
+  it('fails open (wakeAgent=true) when JSON is valid but missing wakeAgent field', async () => {
+    const script = `#!/bin/bash
+echo '{"data": {"foo": 1}}'
+`;
+    const result = await runScript(script);
+    expect(result).not.toBeNull();
+    expect(result!.wakeAgent).toBe(true);
+  });
+
+  it('fails open (wakeAgent=true) when stdout is empty', async () => {
+    const script = `#!/bin/bash
+exit 0
+`;
+    const result = await runScript(script);
+    expect(result).not.toBeNull();
+    expect(result!.wakeAgent).toBe(true);
+  });
+
+  it('returns null when script exits non-zero (crash signal preserved)', async () => {
+    const script = `#!/bin/bash
+echo '{"wakeAgent": true}'
+exit 7
+`;
+    const result = await runScript(script);
+    expect(result).toBeNull();
+  });
+});
+
