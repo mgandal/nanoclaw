@@ -73,6 +73,14 @@ echo "=========================================="
 export PATH="/Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export GMAIL_MIGRATE_USER="mikejg1838@gmail.com"
 
+# Two-counter exit classifier (sync-exit-triage 2026-05-16). Replaces
+# the legacy `ERRORS=$((ERRORS + 1))` ... `exit $ERRORS` pattern that
+# treated all warnings the same and produced exit codes equal to the
+# raw warning count. See sync-exit-classifier.sh for the contract.
+# shellcheck source=./sync-exit-classifier.sh
+source "$SCRIPT_DIR/sync-exit-classifier.sh"
+# Back-compat alias so the SYNC COMPLETE summary line can still print
+# a total. Recomputed at the end.
 ERRORS=0
 
 # --- Pre-flight: verify dependencies are reachable ---
@@ -86,8 +94,15 @@ echo "[pre-flight] Checking sync dependencies..."
 bash "$SCRIPT_DIR/sync-health-check.sh" 2>&1 | grep -E '✓|✗|⚠|Results'
 HEALTH_EC=${PIPESTATUS[0]}
 if [ "$HEALTH_EC" -ne 0 ]; then
-    echo "[pre-flight] WARNING: health check reported failures (exit $HEALTH_EC)"
-    ERRORS=$((ERRORS + 1))
+    # SOFT: every pre-flight FAIL today is an external-dep flake
+    # (Ollama daemon bounce, slack-mcp 404, mikejg token refresh blip,
+    # vault unmount, etc.). A hard pre-flight bug — e.g. health-check
+    # script itself errored — would surface as EC=2 or higher, but the
+    # health-check exits 1 for any failed sub-check by design. We treat
+    # all pre-flight as SOFT because the individual step that actually
+    # depends on the unhealthy dep will fire its own HARD bump if the
+    # dep stays down.
+    bump_soft "pre-flight health check reported failures (exit $HEALTH_EC)"
 fi
 echo ""
 
@@ -109,21 +124,18 @@ if [ -f "$MIGRATE_SCRIPT" ]; then
     /usr/bin/perl -e 'alarm 1800; exec @ARGV' $PYTHON3 "$MIGRATE_SCRIPT" 2>&1
     EC=$?
     if [ $EC -eq 142 ]; then
-        echo "[1/10] WARNING: Exchange sync timed out after 1800s (lock released)"
-        ERRORS=$((ERRORS + 1))
+        bump_soft "[1/10] Exchange sync timed out after 1800s (Mac Mail flaky)"
     elif [ $EC -eq 143 ]; then
         # 128 + SIGTERM (15). Sent by `launchctl kickstart -k` mid-step or by
         # launchd's ExitTimeOut. Distinct from a 1800s alarm so the operator
         # can tell "alarm fired" from "we got killed externally."
-        echo "[1/10] WARNING: Exchange sync killed (SIGTERM — kickstart -k or launchd ExitTimeOut)"
-        ERRORS=$((ERRORS + 1))
+        bump_soft "[1/10] Exchange sync killed (SIGTERM — kickstart -k or launchd ExitTimeOut)"
     elif [ $EC -ne 0 ]; then
-        echo "[1/10] WARNING: Exchange sync had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
+        # Real script error (traceback, OAuth scope downgrade, etc.) — HARD.
+        bump_hard "[1/10] Exchange sync had errors (exit $EC)"
     fi
 else
-    echo "[1/10] WARNING: $MIGRATE_SCRIPT not found"
-    ERRORS=$((ERRORS + 1))
+    bump_hard "[1/10] $MIGRATE_SCRIPT not found"
 fi
 
 # --- Step 2: Gmail sync (mgandal → mikejg1838) ---
@@ -132,8 +144,11 @@ echo "[2/10] Gmail sync: mgandal@gmail.com → mikejg1838@gmail.com..."
 $PYTHON3 "$SCRIPT_DIR/gmail-sync.py" 2>&1
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[2/10] WARNING: Gmail sync had errors (exit $EC)"
-    ERRORS=$((ERRORS + 1))
+    # Gmail API rate-limits / 5xx are TRANSIENT; real script errors are HARD.
+    # gmail-sync.py doesn't currently distinguish, so any nonzero is HARD
+    # until we have better signal. False positives surface as a real
+    # regression alert — preferable to silent degrade.
+    bump_hard "[2/10] Gmail sync had errors (exit $EC)"
 fi
 
 # --- Step 3: Email knowledge ingestion ---
@@ -151,20 +166,17 @@ EC=$?
 case "$EC" in
     0) ;;
     124)
-        echo "[3/10] WARNING: Email ingest timed out after 1200s (Ollama hung?)"
-        ERRORS=$((ERRORS + 1))
+        bump_soft "[3/10] Email ingest timed out after 1200s (Ollama hung?)"
         ;;
     137)
-        echo "[3/10] WARNING: Email ingest hard-killed after 1200s+10s"
-        ERRORS=$((ERRORS + 1))
+        bump_soft "[3/10] Email ingest hard-killed after 1200s+10s"
         ;;
     143)
-        echo "[3/10] WARNING: Email ingest killed (SIGTERM)"
-        ERRORS=$((ERRORS + 1))
+        bump_soft "[3/10] Email ingest killed (SIGTERM)"
         ;;
     *)
-        echo "[3/10] WARNING: Email ingest had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
+        # Unexpected nonzero — could be classifier crash, JSON parse, etc. HARD.
+        bump_hard "[3/10] Email ingest had errors (exit $EC)"
         ;;
 esac
 
@@ -174,8 +186,10 @@ echo "[4/10] Slack ingest..."
 $PYTHON3 "$SCRIPT_DIR/slack-ingest.py" 2>&1 | tail -5
 EC=${PIPESTATUS[0]}
 if [ $EC -ne 0 ]; then
-    echo "[4/10] WARNING: Slack ingest had errors (exit $EC)"
-    ERRORS=$((ERRORS + 1))
+    # slack-mcp at :8190 is chronically 404/race-conditiony per
+    # project_slack_ingest_self_heal.md. Treat as SOFT — operator alerted
+    # by the dedicated slack-mcp self-heal task, not by sync exit code.
+    bump_soft "[4/10] Slack ingest had errors (exit $EC) — likely slack-mcp flake"
 fi
 
 # --- Step 5: Apple Notes re-export to markdown ---
@@ -193,12 +207,15 @@ EC=$?
 case "$EC" in
     0) ;;  # success or graceful skip
     124|137|143)
-        echo "[5/10] WARNING: notes-export-step exited $EC (timeout / killed)"
-        ERRORS=$((ERRORS + 1))
+        # Notes.app deadlock / killed by external signal. Chronic and
+        # benign — previous export is preserved (notes-export-step.sh
+        # has the atomic-rename guard).
+        bump_soft "[5/10] notes-export-step exited $EC (timeout / killed)"
         ;;
     *)
-        echo "[5/10] WARNING: notes-export-step exited $EC"
-        ERRORS=$((ERRORS + 1))
+        # Real script error — missing notes-export-step.sh, malformed
+        # JSON output, etc. HARD.
+        bump_hard "[5/10] notes-export-step exited $EC"
         ;;
 esac
 
@@ -208,8 +225,8 @@ echo "=== [6/10] Skill catalog refresh ==="
 bash "$SCRIPT_DIR/skill-catalog-sync.sh"
 EC=$?
 if [ $EC -ne 0 ]; then
-    echo "[6/10] WARNING: Skill catalog sync had errors (exit $EC)"
-    ERRORS=$((ERRORS + 1))
+    # No external deps — purely local file scan. HARD.
+    bump_hard "[6/10] Skill catalog sync had errors (exit $EC)"
 fi
 
 # --- Step 7: QMD update (re-scan collections for new/changed files) ---
@@ -221,8 +238,13 @@ if command -v qmd &>/dev/null; then
     BUN_INSTALL= qmd update 2>&1
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[7/10] WARNING: QMD update had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
+        # qmd update wraps 16 collection scans; today's chronic failure
+        # is the slack collection's `update-cmd` hitting slack-mcp at
+        # :8190 (404). One sub-collection flake is SOFT because the
+        # other 15 still indexed. A real qmd bug surfaces as EC>1 or
+        # repeated failures across collections — operator catches that
+        # via run-to-run log diff, not via exit code alone.
+        bump_soft "[7/10] QMD update had errors (exit $EC)"
     fi
 else
     echo "[7/10] SKIP: qmd not found in PATH"
@@ -241,20 +263,23 @@ if command -v qmd &>/dev/null; then
     case "$EC" in
         0) ;;
         124)
-            echo "[8/10] WARNING: QMD embed timed out after 600s (Ollama hung?)"
-            ERRORS=$((ERRORS + 1))
+            bump_soft "[8/10] QMD embed timed out after 600s (Ollama hung?)"
             ;;
         137)
-            echo "[8/10] WARNING: QMD embed hard-killed after 600s+10s"
-            ERRORS=$((ERRORS + 1))
+            bump_soft "[8/10] QMD embed hard-killed after 600s+10s"
             ;;
         143)
-            echo "[8/10] WARNING: QMD embed killed (SIGTERM)"
-            ERRORS=$((ERRORS + 1))
+            bump_soft "[8/10] QMD embed killed (SIGTERM)"
+            ;;
+        134)
+            # SIGABRT — sqlite-vec extension crash from BUN_INSTALL leaking
+            # in. Per CLAUDE.md sync-area note: BUN_INSTALL= prefix prevents
+            # this, but a bad env can still bleed through. HARD because the
+            # operator must fix it; retrying won't help.
+            bump_hard "[8/10] QMD embed crashed (SIGABRT, exit 134) — check BUN_INSTALL leak"
             ;;
         *)
-            echo "[8/10] WARNING: QMD embed had errors (exit $EC)"
-            ERRORS=$((ERRORS + 1))
+            bump_hard "[8/10] QMD embed had errors (exit $EC)"
             ;;
     esac
 else
@@ -269,8 +294,8 @@ if command -v bun &>/dev/null && [ -f "$PROJECT_ROOT/scripts/trust/run-analyzer.
     (cd "$PROJECT_ROOT" && bun scripts/trust/run-analyzer.ts 2>&1)
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[9/10] WARNING: Trust analyzer had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
+        # Local TS analyzer. No external deps. HARD.
+        bump_hard "[9/10] Trust analyzer had errors (exit $EC)"
     fi
 else
     echo "[9/10] SKIP: bun or run-analyzer.ts not found"
@@ -283,8 +308,8 @@ if [ -f "$PROJECT_ROOT/scripts/kg/ingest_phase1.py" ]; then
     (cd "$PROJECT_ROOT" && $PYTHON3 scripts/kg/ingest_phase1.py 2>&1)
     EC=$?
     if [ $EC -ne 0 ]; then
-        echo "[10/10] WARNING: KG ingest had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
+        # Local Python over SQLite. No external deps. HARD.
+        bump_hard "[10/10] KG ingest had errors (exit $EC)"
     fi
 else
     echo "[10/10] SKIP: ingest_phase1.py not found"
@@ -292,7 +317,13 @@ fi
 
 echo ""
 echo "=========================================="
-echo "SYNC COMPLETE: $(date '+%a %b %d %H:%M:%S %Z %Y') (errors: $ERRORS)"
+# Compute final exit code via the two-counter classifier. ERRORS in the
+# legacy summary line is now soft+hard so existing log-scrapers
+# (sync-health-check.sh, launchd-health-monitor) still see a single
+# integer. The classifier_summary line gives the category split.
+ERRORS=$((SOFT_ERRORS + HARD_ERRORS))
+SYNC_EXIT_CODE=$(compute_exit_code)
+echo "SYNC COMPLETE: $(date '+%a %b %d %H:%M:%S %Z %Y') (errors: $ERRORS — $(classifier_summary), exit=$SYNC_EXIT_CODE)"
 echo "=========================================="
 
 # C8: trim ALL live sync-area logs if over 1 MB, not just sync.log.
@@ -313,4 +344,6 @@ for logf in "$LOG_FILE" "$LAUNCHD_STDOUT_LOG" "$LAUNCHD_STDERR_LOG"; do
     fi
 done
 
-exit $ERRORS
+# SYNC_EXIT_CODE was set above by compute_exit_code; preserve it so the
+# log rotation block can't override the exit status via a late command.
+exit "$SYNC_EXIT_CODE"

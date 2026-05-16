@@ -126,6 +126,17 @@ class TestLiveAllowlist:
         # Specifically code 2 only — not "any nonzero" (would swallow real crashes).
         assert entry["codes"] == [2]
 
+    def test_sync_is_allowlisted_for_ex_tempfail(self, mod):
+        # sync-all.sh routes step warnings through sync-exit-classifier.sh
+        # (scripts/sync/sync-exit-classifier.sh). Soft-only flakes exit 75
+        # (EX_TEMPFAIL per sysexits.h); hard regressions still exit 1 and
+        # MUST surface here. Pin the entry so a future deletion fires this
+        # test (otherwise OPS-claw alerts on every soft-only daily run).
+        entry = mod.EXPECTED_NONZERO.get("com.nanoclaw.sync")
+        assert entry is not None
+        # Specifically code 75 only — exit 1 (hard regression) must still alert.
+        assert entry["codes"] == [75]
+
 
 class TestListLoadedJobs:
     def test_filter_to_nanoclaw_prefix(self, mod, monkeypatch):
