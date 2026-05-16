@@ -267,6 +267,67 @@ else
     warn "Sync log" "sync.log not found"
 fi
 
+# 9. MLX memory governor — flag CASCADE/CRITICAL events in last 4h.
+# Governor is observation-only (kill caused the 2026-05-16 panic cascade);
+# real-time alerting must come from health-check sweep. See
+# project_mlx_panic_20260516.md.
+GOV_LOG="$HOME/.hermes/logs/mlx-memory-governor.log"
+if [ -f "$GOV_LOG" ]; then
+    if [ "$(find "$GOV_LOG" -mmin -240 2>/dev/null)" ]; then
+        GOV_HITS=$("$PYTHON3" - "$GOV_LOG" <<'PYEOF'
+import sys, re, time, datetime
+cutoff = time.time() - 4*3600
+pat = re.compile(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] \[MLX_GOV (CRITICAL|CASCADE)\]')
+n = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        m = pat.search(line)
+        if not m: continue
+        ts = datetime.datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S').timestamp()
+        if ts >= cutoff: n += 1
+print(n)
+PYEOF
+)
+        if [ "${GOV_HITS:-0}" -gt 0 ]; then
+            warn "MLX memory governor" "$GOV_HITS CRITICAL/CASCADE events in last 4h — check $GOV_LOG"
+        else
+            check "MLX memory governor" "" 0
+        fi
+    else
+        warn "MLX memory governor" "log not updated in last 4h — governor may be stalled"
+    fi
+else
+    warn "MLX memory governor" "log not found at $GOV_LOG"
+fi
+
+# 10. MLX watchdog RESTART events in last 4h — early warning of kill-storm.
+for WDOG in qwen36-a3b qwen25-vl-32b; do
+    WLOG="$HOME/.hermes/logs/mlx-watchdog-$WDOG.log"
+    if [ -f "$WLOG" ] && [ "$(find "$WLOG" -mmin -240 2>/dev/null)" ]; then
+        RESTART_HITS=$("$PYTHON3" - "$WLOG" <<'PYEOF'
+import sys, re, time, datetime
+cutoff = time.time() - 4*3600
+pat = re.compile(r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] RESTART triggered')
+n = 0
+with open(sys.argv[1]) as f:
+    for line in f:
+        m = pat.search(line)
+        if not m: continue
+        ts = datetime.datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S').timestamp()
+        if ts >= cutoff: n += 1
+print(n)
+PYEOF
+)
+        if [ "${RESTART_HITS:-0}" -ge 2 ]; then
+            check "MLX watchdog $WDOG" "$RESTART_HITS RESTART events in last 4h — possible kill-storm" 1
+        elif [ "${RESTART_HITS:-0}" -eq 1 ]; then
+            warn "MLX watchdog $WDOG" "1 RESTART event in last 4h"
+        else
+            check "MLX watchdog $WDOG" "" 0
+        fi
+    fi
+done
+
 echo "──────────────────────────────────"
 echo "Results: $PASS passed, $FAIL failed, $WARN warnings"
 
