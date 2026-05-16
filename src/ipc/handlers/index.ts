@@ -2,6 +2,12 @@ import { registerIpcHandler } from '../handler.js';
 import { cancelTaskHandler } from './cancel-task.js';
 import { dashboardQueryHandler } from './dashboard-query.js';
 import { deployMiniAppHandler } from './deploy-mini-app.js';
+import {
+  imessageListContactsHandler,
+  imessageReadHandler,
+  imessageSearchHandler,
+  imessageSendHandler,
+} from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
 import {
   taskAddHandler,
@@ -38,6 +44,10 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(dashboardQueryHandler);
   registerIpcHandler(deployMiniAppHandler);
   registerIpcHandler(kgQueryHandler);
+  registerIpcHandler(imessageSearchHandler);
+  registerIpcHandler(imessageReadHandler);
+  registerIpcHandler(imessageSendHandler);
+  registerIpcHandler(imessageListContactsHandler);
   registerIpcHandler(taskAddHandler);
   registerIpcHandler(taskListHandler);
   registerIpcHandler(taskCloseHandler);
