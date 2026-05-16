@@ -305,12 +305,7 @@ function writeResultFile(
   payload: unknown,
 ): void {
   try {
-    const resultsDir = path.join(
-      DATA_DIR,
-      'ipc',
-      sourceGroup,
-      resultsDirName,
-    );
+    const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, resultsDirName);
     fs.mkdirSync(resultsDir, { recursive: true });
     const resultFile = path.join(resultsDir, `${requestId}.json`);
     const tmpFile = `${resultFile}.tmp`;
