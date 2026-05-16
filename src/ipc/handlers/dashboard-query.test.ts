@@ -310,7 +310,12 @@ describe('dispatcher Rule 1: failure-file on execute throw', () => {
       onTasksChanged: () => undefined,
     };
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'throwing-test-'));
-    resultsDir = path.join(dataDir, 'ipc', SOURCE_GROUP, 'throwing_test_results');
+    resultsDir = path.join(
+      dataDir,
+      'ipc',
+      SOURCE_GROUP,
+      'throwing_test_results',
+    );
   });
 
   afterEach(() => {
@@ -428,7 +433,12 @@ describe('dispatcher Rule 4: off-allowlist skipGate violation audit', () => {
       },
     });
 
-    const ctx = buildContext(`${SOURCE_GROUP}--${agentName}`, false, deps, dataDir);
+    const ctx = buildContext(
+      `${SOURCE_GROUP}--${agentName}`,
+      false,
+      deps,
+      dataDir,
+    );
     await dispatchIpcAction({ type: 'bad_mutating_handler' }, ctx);
 
     const rows = getDb()
