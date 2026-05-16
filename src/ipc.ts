@@ -24,12 +24,9 @@ import { insertAgentAction } from './db.js';
 import { loadAgentTrust } from './agent-registry.js';
 import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
 import { firePostHocNotify } from './trust-notify.js';
-import { resolveGroupFolderPath } from './group-folder.js';
 import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
-import { validateAdditionalMounts } from './mount-security.js';
-import { handlePageindexIpc } from './pageindex-ipc.js';
 import { decide as governorDecide } from './outbound-governor.js';
 import {
   clearDispatch,
@@ -948,38 +945,9 @@ export async function processTaskIpc(
       // deploy_mini_app migrated to src/ipc/handlers/deploy-mini-app.ts.
       // dashboard_query migrated to src/ipc/handlers/dashboard-query.ts —
       // both dispatched via the IpcHandler registry above (dispatchIpcAction).
-      if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
-        // Build mount mappings from registered group config
-        const groupEntry = Object.values(registeredGroups).find(
-          (g) => g.folder === sourceGroup,
-        );
-        const mounts: Array<{
-          hostPath: string;
-          containerPath: string;
-          readonly: boolean;
-        }> = [];
-        if (groupEntry?.containerConfig?.additionalMounts) {
-          const validated = validateAdditionalMounts(
-            groupEntry.containerConfig.additionalMounts,
-            groupEntry.name || sourceGroup,
-            isMain,
-          );
-          mounts.push(...validated);
-        }
-        // Add group folder mount
-        mounts.push({
-          hostPath: resolveGroupFolderPath(sourceGroup),
-          containerPath: '/workspace/group',
-          readonly: false,
-        });
-        handled = await handlePageindexIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          DATA_DIR,
-          mounts,
-        );
-      }
+      // pageindex_* migrated to src/ipc/handlers/pageindex.ts — dispatched
+      // via the IpcHandler registry above. The per-call mount resolution
+      // lives in pageindex.ts:resolveMountsForGroup (execute-time).
       // kg_query migrated to src/ipc/handlers/kg-query.ts — dispatched via
       // the IpcHandler registry above (dispatchIpcAction).
       // task_add / task_list / task_close / task_reopen migrated to

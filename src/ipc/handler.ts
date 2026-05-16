@@ -35,10 +35,11 @@ const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   // silent-failure-wedge candidate: closing the bypass is a Batch 4
   // follow-up that adds a trust.yaml entry + removes the type from
   // this list, in one focused commit per action.
-  // TODO(Batch4): gate task_add / task_close / task_reopen.
+  // TODO(Batch4): gate task_add / task_close / task_reopen / pageindex_index.
   'task_add',
   'task_close',
   'task_reopen',
+  'pageindex_index',
 ]);
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

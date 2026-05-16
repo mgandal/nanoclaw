@@ -10,6 +10,10 @@ import {
 } from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
 import {
+  pageindexFetchHandler,
+  pageindexIndexHandler,
+} from './pageindex.js';
+import {
   taskAddHandler,
   taskCloseHandler,
   taskListHandler,
@@ -52,6 +56,8 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(taskListHandler);
   registerIpcHandler(taskCloseHandler);
   registerIpcHandler(taskReopenHandler);
+  registerIpcHandler(pageindexFetchHandler);
+  registerIpcHandler(pageindexIndexHandler);
   registered = true;
 }
 
