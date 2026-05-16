@@ -14,10 +14,7 @@
  * - Multiple links in one string
  */
 import { describe, it, expect } from 'vitest';
-import {
-  parseTextStyles,
-  parseSignalStyles,
-} from './text-styles.js';
+import { parseTextStyles, parseSignalStyles } from './text-styles.js';
 
 // ---------------------------------------------------------------------------
 // 1. Empty / falsy inputs

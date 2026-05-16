@@ -4,10 +4,7 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
-import {
-  checkTrust,
-  checkTrustAndStage,
-} from './trust-enforcement.js';
+import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
 import { _initTestDatabase, _getTestDb } from './db.js';
 
 describe('checkTrust', () => {
