@@ -33,12 +33,19 @@ run_preflight_block() {
   cat > "$TEST_TMP/runner.sh" <<EOF
 #!/bin/bash
 set -o pipefail
+# sync-all.sh sources the classifier before the pre-flight block, so
+# the test harness must too. Without this, bump_soft is undefined and
+# the pre-flight ERRORS bump silently no-ops.
+source "$BATS_TEST_DIRNAME/../sync-exit-classifier.sh"
 ERRORS=0
 SCRIPT_DIR="$TEST_TMP"
 EOF
   # Append the actual pre-flight block from sync-all.sh, verbatim
   awk '/^# --- Pre-flight:/,/^# --- Step 1:/' "$BATS_TEST_DIRNAME/../sync-all.sh" \
     | sed '$d' >> "$TEST_TMP/runner.sh"  # drop the trailing "# --- Step 1:" line
+  # FINAL_ERRORS reflects the combined soft+hard total so the existing
+  # assertions still see a meaningful number.
+  echo 'ERRORS=$((SOFT_ERRORS + HARD_ERRORS))' >> "$TEST_TMP/runner.sh"
   echo 'echo "FINAL_ERRORS=$ERRORS"' >> "$TEST_TMP/runner.sh"
 
   # Install the fake health-check
@@ -78,7 +85,11 @@ FAKE
   run run_preflight_block "$TEST_TMP/fake-fail.sh"
   [ "$status" -eq 0 ]   # pre-flight does NOT abort the pipeline
   [[ "$output" == *"FINAL_ERRORS=1"* ]]
-  [[ "$output" == *"WARNING: health check reported failures"* ]]
+  # Tagged via the new classifier (SOFT category for pre-flight per the
+  # 2026-05-16 sync-exit-triage). Older "WARNING: health check reported
+  # failures" wording was bumping ERRORS without category metadata.
+  [[ "$output" == *"pre-flight health check reported failures"* ]]
+  [[ "$output" == *"[SOFT WARNING]"* ]]
 }
 
 @test "health check exit 2 increments ERRORS to 1 (any non-zero counts)" {
