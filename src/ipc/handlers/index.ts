@@ -1,5 +1,6 @@
 import { registerIpcHandler } from '../handler.js';
 import { cancelTaskHandler } from './cancel-task.js';
+import { dashboardQueryHandler } from './dashboard-query.js';
 import { knowledgePublishHandler } from './knowledge-publish.js';
 import { pauseTaskHandler } from './pause-task.js';
 import { publishToBusHandler } from './publish-to-bus.js';
@@ -26,6 +27,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(knowledgePublishHandler);
   registerIpcHandler(writeAgentMemoryHandler);
   registerIpcHandler(writeAgentStateHandler);
+  registerIpcHandler(dashboardQueryHandler);
   registered = true;
 }
 

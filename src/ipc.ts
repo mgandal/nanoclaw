@@ -29,7 +29,6 @@ import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { handleDashboardIpc } from './dashboard-ipc.js';
 import { handleDeployMiniApp } from './vercel-deployer.js';
 import { handlePageindexIpc } from './pageindex-ipc.js';
 import { handleKgIpc } from './kg-ipc.js';
@@ -1009,55 +1008,8 @@ export async function processTaskIpc(
           handled = true; // staged/blocked, not passed through
         }
       }
-      if (typeof data.type === 'string' && data.type === 'dashboard_query') {
-        // C13: trust enforcement for agent callers. Read-only action;
-        // default trust should be autonomous.
-        const { group: dqBaseGroup, agent: dqAgent } = parseCompoundKey(
-          fsPathToCompoundKey(sourceGroup),
-        );
-        let dqAllowed = true;
-        let dqNotify = false;
-        if (dqAgent) {
-          const d = data as Record<string, unknown>;
-          const trust = loadAgentTrust(path.join(AGENTS_DIR, dqAgent));
-          const trustDecision = checkTrustAndStage({
-            agentName: dqAgent,
-            groupFolder: dqBaseGroup,
-            actionType: 'dashboard_query',
-            summary:
-              typeof d.view === 'string' ? d.view.slice(0, 100) : '(query)',
-            target: 'dashboard',
-            payloadForStaging: {
-              type: 'dashboard_query',
-              requestId: d.requestId,
-              view: d.view,
-              params: d.params,
-            },
-            trust,
-          });
-          dqAllowed = trustDecision.allowed;
-          dqNotify = trustDecision.notify;
-        }
-        if (dqAllowed) {
-          handled = await handleDashboardIpc(
-            data as Record<string, unknown>,
-            sourceGroup,
-            isMain,
-            DATA_DIR,
-          );
-          await firePostHocNotify({
-            notify: dqNotify,
-            agentName: dqAgent || null,
-            actionType: 'dashboard_query',
-            summary: `queried ${typeof (data as Record<string, unknown>).view === 'string' ? ((data as Record<string, unknown>).view as string).slice(0, 80) : '(view)'}`,
-            target: 'dashboard',
-            registeredGroups,
-            deps,
-          });
-        } else {
-          handled = true;
-        }
-      }
+      // dashboard_query migrated to src/ipc/handlers/dashboard-query.ts —
+      // dispatched via the IpcHandler registry above (dispatchIpcAction).
       if (typeof data.type === 'string' && data.type.startsWith('pageindex_')) {
         // Build mount mappings from registered group config
         const groupEntry = Object.values(registeredGroups).find(

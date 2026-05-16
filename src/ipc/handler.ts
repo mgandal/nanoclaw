@@ -1,8 +1,36 @@
+import fs from 'fs';
+import path from 'path';
+
+import { DATA_DIR } from '../config.js';
 import { logger } from '../logger.js';
 import { parseCompoundKey, fsPathToCompoundKey } from '../compound-key.js';
 import { RegisteredGroup } from '../types.js';
 import type { IpcDeps } from '../ipc.js';
 import { gateAndStage, fireNotifyIfRequested } from './trust-gate.js';
+
+/**
+ * Read-only IPC actions allowed to declare `skipGate: true` in their
+ * authorization. Rule 4 of docs/context-engineering/ipc-handler-contract.md.
+ *
+ * Hardcoded (not a registration flag) so that adding a type here requires
+ * a code change in this file — a reviewer who knows the trust contract sees
+ * the addition. Mutating actions must go through the gate; the dispatcher
+ * rejects `skipGate: true` from off-allowlist handlers.
+ */
+const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
+  'dashboard_query',
+  'kg_query',
+  'pageindex_fetch',
+  'task_list',
+  'slack_dm_read',
+  'skill_search',
+  'skill_invoked',
+  'imessage_search',
+  'imessage_read',
+  'imessage_list_contacts',
+]);
+
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 export interface IpcHandlerContext {
   sourceGroup: string;
@@ -33,20 +61,48 @@ export interface IpcAuthorization {
    */
   auditTarget?: string;
   payloadForStaging: Record<string, unknown>;
+  /**
+   * Opt out of the trust gate. Permitted only when the handler's `type` is
+   * in SKIP_GATE_ALLOWLIST — the dispatcher rejects this flag from
+   * off-allowlist handlers as a defense-in-depth check. Rule 4 of the IPC
+   * handler contract. Read-only actions only.
+   */
+  skipGate?: true;
 }
 
 /**
- * Result of execute(). Returning void or undefined is treated as "executed
- * normally" — the dispatcher fires the post-hoc notify. Return `{ executed:
- * false }` to signal a no-op (a race-disappearance, a deferred validation
- * failure, etc.) — the dispatcher skips the notify so the user does not see
- * a misleading message for an action that didn't actually happen. The audit
- * log row was already written upstream and is unaffected.
+ * Result of execute().
+ *
+ * - `void` / `undefined`: executed normally. Dispatcher fires the post-hoc
+ *   notify for `responseKind: 'notify'` handlers.
+ * - `{ executed: false }`: handler bailed (race-disappearance, deferred
+ *   validation failure). Dispatcher skips the notify so the user does not
+ *   see a misleading message. The audit row was already written upstream.
+ *   For `responseKind: 'result'` handlers, the dispatcher writes a failure
+ *   result file so the in-container poller does not hang.
+ * - `{ executed: true; result: unknown }`: executed and produced a result
+ *   payload. Required for `responseKind: 'result'` handlers; the dispatcher
+ *   writes the payload to data/ipc/{group}/{type}_results/{requestId}.json
+ *   using atomic .tmp + rename. The post-hoc notify does NOT fire for
+ *   result-kind handlers — the result file is the response surface.
  */
-export type ExecuteResult = void | { executed: boolean };
+export type ExecuteResult =
+  | void
+  | { executed: false }
+  | { executed: true; result?: unknown };
 
 export interface IpcHandler<TInput, TResult extends ExecuteResult = void> {
   readonly type: string;
+  /**
+   * 'notify' (default): fire-and-forget. Dispatcher fires post-hoc notify
+   * iff the gate decision asked for one and execute returned non-bailed.
+   *
+   * 'result': request/response. Dispatcher requires data.requestId, writes
+   * the handler's `result` payload to a per-requestId file the agent polls.
+   * See Rule 1 of the IPC handler contract — handlers never write the file
+   * themselves.
+   */
+  readonly responseKind?: 'notify' | 'result';
   parse(raw: unknown): TInput | null;
   authorize(input: TInput, ctx: IpcHandlerContext): IpcAuthorization | null;
   execute(input: TInput, ctx: IpcHandlerContext): Promise<TResult> | TResult;
@@ -98,6 +154,25 @@ export async function dispatchIpcAction(
   const handler = HANDLERS.get(data.type);
   if (!handler) return { handled: false };
 
+  const responseKind = handler.responseKind ?? 'notify';
+
+  // Rule 2: result-kind handlers require a valid requestId BEFORE we parse
+  // or authorize. A malformed call cannot produce a result file (the poller
+  // will time out, which is correct for malformed input). This matches the
+  // if-ladder's pre-parse requestId check for dashboard/kg/pageindex/etc.
+  let requestId: string | null = null;
+  if (responseKind === 'result') {
+    const raw = data.requestId;
+    if (typeof raw !== 'string' || !REQUEST_ID_PATTERN.test(raw)) {
+      logger.warn(
+        { type: data.type, sourceGroup: ctx.sourceGroup, requestId: raw },
+        'IPC handler rejected: missing or malformed requestId for result-kind',
+      );
+      return { handled: true };
+    }
+    requestId = raw;
+  }
+
   const input = handler.parse(data);
   if (input === null) {
     logger.warn(
@@ -110,26 +185,75 @@ export async function dispatchIpcAction(
   const auth = handler.authorize(input, ctx);
   if (auth === null) return { handled: true };
 
+  // Rule 4: skipGate is honored only for allowlisted types. An off-allowlist
+  // handler declaring skipGate is a contract violation; treat as denial.
+  const wantsSkipGate = auth.skipGate === true;
+  if (wantsSkipGate && !SKIP_GATE_ALLOWLIST.has(handler.type)) {
+    logger.error(
+      { type: handler.type, sourceGroup: ctx.sourceGroup },
+      'IPC handler declared skipGate but type is not on SKIP_GATE_ALLOWLIST — denying',
+    );
+    return { handled: true };
+  }
+
   const auditSummary = auth.auditSummary ?? auth.target;
   const auditTarget = auth.auditTarget ?? auth.target;
 
-  const decision = gateAndStage({
-    agentName: ctx.agentName,
-    baseGroup: ctx.baseGroup,
-    actionType: handler.type,
-    summary: auditSummary,
-    target: auditTarget,
-    payloadForStaging: auth.payloadForStaging,
-  });
-  if (!decision.allowed) return { handled: true };
+  const decision = wantsSkipGate
+    ? null
+    : gateAndStage({
+        agentName: ctx.agentName,
+        baseGroup: ctx.baseGroup,
+        actionType: handler.type,
+        summary: auditSummary,
+        target: auditTarget,
+        payloadForStaging: auth.payloadForStaging,
+      });
+  if (decision !== null && !decision.allowed) return { handled: true };
 
-  const executeResult = await handler.execute(input, ctx);
-  // Treat void/undefined as executed normally; explicit { executed: false }
-  // means the handler bailed (e.g., race, deferred validation) and the user
-  // should NOT see a post-hoc notification claiming the action happened.
-  const executed = executeResult ? executeResult.executed !== false : true;
+  let executed = true;
+  let resultPayload: unknown = undefined;
+  let executeThrew = false;
+  let throwMessage = '';
+  try {
+    const executeResult = await handler.execute(input, ctx);
+    if (executeResult && typeof executeResult === 'object') {
+      if ('executed' in executeResult && executeResult.executed === false) {
+        executed = false;
+      } else if (
+        'executed' in executeResult &&
+        executeResult.executed === true &&
+        'result' in executeResult
+      ) {
+        resultPayload = executeResult.result;
+      }
+    }
+  } catch (err) {
+    executeThrew = true;
+    throwMessage = err instanceof Error ? err.message : String(err);
+    logger.error(
+      { err, type: handler.type, sourceGroup: ctx.sourceGroup },
+      'IPC handler execute threw',
+    );
+  }
 
-  if (executed) {
+  if (responseKind === 'result') {
+    // Rule 1: dispatcher owns the result file. Always write something so the
+    // poller never hangs — success payload on success, deliberate failure
+    // shape on throw or bail.
+    const filePayload: unknown = executeThrew
+      ? { success: false, message: `Error: ${throwMessage}` }
+      : !executed
+        ? { success: false, message: 'execution bailed' }
+        : resultPayload !== undefined
+          ? resultPayload
+          : { success: true };
+    writeResultFile(ctx.sourceGroup, handler.type, requestId!, filePayload);
+  } else if (executed && decision !== null) {
+    // Notify path (existing behaviour). decision is null only for skipGate
+    // calls, which are read-only and on the allowlist — by construction they
+    // never produce a notify, and skipping fireNotifyIfRequested here keeps
+    // that invariant explicit.
     await fireNotifyIfRequested(decision, {
       agentName: ctx.agentName,
       actionType: handler.type,
@@ -141,4 +265,38 @@ export async function dispatchIpcAction(
   }
 
   return { handled: true };
+}
+
+/**
+ * Write a result-kind handler's payload to its per-requestId file, atomically.
+ * Path: data/ipc/{sourceGroup}/{type}_results/{requestId}.json.
+ *
+ * Best-effort: a write failure is logged but does not propagate, since the
+ * caller (dispatcher) is past the side effect and the agent will time out
+ * its poll — the correct failure mode.
+ */
+function writeResultFile(
+  sourceGroup: string,
+  actionType: string,
+  requestId: string,
+  payload: unknown,
+): void {
+  try {
+    const resultsDir = path.join(
+      DATA_DIR,
+      'ipc',
+      sourceGroup,
+      `${actionType}_results`,
+    );
+    fs.mkdirSync(resultsDir, { recursive: true });
+    const resultFile = path.join(resultsDir, `${requestId}.json`);
+    const tmpFile = `${resultFile}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(payload));
+    fs.renameSync(tmpFile, resultFile);
+  } catch (err) {
+    logger.error(
+      { err, sourceGroup, actionType, requestId },
+      'Failed to write IPC result file',
+    );
+  }
 }

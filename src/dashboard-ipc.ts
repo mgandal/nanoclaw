@@ -13,48 +13,33 @@ import { logger } from './logger.js';
 const GROUPS_DIR = path.join(process.cwd(), 'groups');
 const SESSIONS_DIR = path.join(process.cwd(), 'data', 'sessions');
 
+export type DashboardQueryResult = Record<string, unknown>;
+
 /**
- * Handle dashboard_query IPC requests from container agents.
- * Follows the same pattern as handlePageindexIpc.
- * Returns true if handled, false if not a dashboard type.
+ * Compute a dashboard query result without touching the filesystem.
+ *
+ * Two callers consume this seam:
+ *   1. `handleDashboardIpc` — legacy library entry point, writes the result
+ *      to data/ipc/.../dashboard_results/{requestId}.json. Still exported
+ *      for backwards compatibility and the dashboard-ipc.test.ts harness.
+ *   2. `dashboardQueryHandler` (src/ipc/handlers/dashboard-query.ts) — new
+ *      registered IPC handler. Returns the result via the ExecuteResult
+ *      contract; the dispatcher writes the file (Rule 1 of the contract).
+ *
+ * Pure-ish: reads from the DB and from disk (`SESSIONS_DIR`, state dir).
+ * No side effects on the IPC results directory.
  */
-export async function handleDashboardIpc(
-  data: Record<string, unknown>,
+export function runDashboardQuery(
+  queryType: string | undefined,
   sourceGroup: string,
   isMain: boolean,
-  dataDir: string,
-): Promise<boolean> {
-  if (data.type !== 'dashboard_query') return false;
-
-  const requestId = data.requestId as string | undefined;
-  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
-    logger.warn({ sourceGroup, requestId }, 'dashboard IPC invalid requestId');
-    return true;
-  }
-
-  const queryType = data.queryType as string | undefined;
-  const resultsDir = path.join(
-    dataDir,
-    'ipc',
-    sourceGroup,
-    'dashboard_results',
-  );
-  fs.mkdirSync(resultsDir, { recursive: true });
-
-  const writeResult = (result: Record<string, unknown>) => {
-    const resultFile = path.join(resultsDir, `${requestId}.json`);
-    const tmpFile = `${resultFile}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(result));
-    fs.renameSync(tmpFile, resultFile);
-  };
-
-  const denyNonMain = (): boolean => {
+): DashboardQueryResult {
+  const denyNonMain = (): DashboardQueryResult => {
     logger.warn(
       { sourceGroup, queryType },
       'dashboard IPC query restricted to main group',
     );
-    writeResult({ success: false, error: 'query restricted to main group' });
-    return true;
+    return { success: false, error: 'query restricted to main group' };
   };
 
   try {
@@ -65,7 +50,7 @@ export async function handleDashboardIpc(
         const tasks = isMain
           ? getAllTasks()
           : getAllTasks().filter((t) => t.group_folder === sourceGroup);
-        writeResult({
+        return {
           success: true,
           tasks: tasks.map((t) => ({
             id: t.id,
@@ -78,8 +63,7 @@ export async function handleDashboardIpc(
             last_result: t.last_result,
             context_mode: t.context_mode,
           })),
-        });
-        break;
+        };
       }
 
       case 'run_logs_24h': {
@@ -87,8 +71,7 @@ export async function handleDashboardIpc(
         const logs = isMain
           ? getTaskRunLogs(since)
           : getTaskRunLogsForGroup(since, sourceGroup);
-        writeResult({ success: true, logs });
-        break;
+        return { success: true, logs };
       }
 
       case 'run_logs_7d': {
@@ -96,8 +79,7 @@ export async function handleDashboardIpc(
         const logs = isMain
           ? getTaskRunLogs(since)
           : getTaskRunLogsForGroup(since, sourceGroup);
-        writeResult({ success: true, logs });
-        break;
+        return { success: true, logs };
       }
 
       case 'group_summary': {
@@ -107,7 +89,7 @@ export async function handleDashboardIpc(
         if (!isMain) return denyNonMain();
         const groups = getAllRegisteredGroups();
         const sessions = getAllSessions();
-        writeResult({
+        return {
           success: true,
           groups: Object.entries(groups).map(([jid, g]) => ({
             jid,
@@ -116,8 +98,7 @@ export async function handleDashboardIpc(
             isMain: g.isMain,
             hasSession: !!sessions[g.folder],
           })),
-        });
-        break;
+        };
       }
 
       case 'skill_inventory': {
@@ -140,8 +121,7 @@ export async function handleDashboardIpc(
             inventory[g.folder] = 0;
           }
         }
-        writeResult({ success: true, inventory });
-        break;
+        return { success: true, inventory };
       }
 
       case 'state_freshness': {
@@ -158,25 +138,64 @@ export async function handleDashboardIpc(
         } catch {
           // state dir may not exist
         }
-        writeResult({ success: true, freshness });
-        break;
+        return { success: true, freshness };
       }
 
       default:
-        writeResult({
+        return {
           success: false,
           error: `Unknown query type: ${queryType}`,
-        });
+        };
     }
-
-    logger.info({ queryType, requestId, sourceGroup }, 'dashboard IPC handled');
-    return true;
   } catch (err) {
-    logger.error({ err, queryType, requestId }, 'dashboard IPC error');
-    writeResult({
+    logger.error({ err, queryType }, 'dashboard query error');
+    return {
       success: false,
       error: `Error: ${err instanceof Error ? err.message : String(err)}`,
-    });
+    };
+  }
+}
+
+/**
+ * Legacy library entry point. Validates requestId, computes the result
+ * via {@link runDashboardQuery}, writes to dataDir/ipc/{sourceGroup}/
+ * dashboard_results/{requestId}.json.
+ *
+ * The new dispatcher-driven path lives in
+ * src/ipc/handlers/dashboard-query.ts and is registered through the
+ * IpcHandler registry. This function is retained for the dashboard-ipc
+ * test harness and any direct callers; the if-ladder caller has been
+ * removed.
+ */
+export async function handleDashboardIpc(
+  data: Record<string, unknown>,
+  sourceGroup: string,
+  isMain: boolean,
+  dataDir: string,
+): Promise<boolean> {
+  if (data.type !== 'dashboard_query') return false;
+
+  const requestId = data.requestId as string | undefined;
+  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
+    logger.warn({ sourceGroup, requestId }, 'dashboard IPC invalid requestId');
     return true;
   }
+
+  const queryType = data.queryType as string | undefined;
+  const result = runDashboardQuery(queryType, sourceGroup, isMain);
+
+  const resultsDir = path.join(
+    dataDir,
+    'ipc',
+    sourceGroup,
+    'dashboard_results',
+  );
+  fs.mkdirSync(resultsDir, { recursive: true });
+  const resultFile = path.join(resultsDir, `${requestId}.json`);
+  const tmpFile = `${resultFile}.tmp`;
+  fs.writeFileSync(tmpFile, JSON.stringify(result));
+  fs.renameSync(tmpFile, resultFile);
+
+  logger.info({ queryType, requestId, sourceGroup }, 'dashboard IPC handled');
+  return true;
 }
