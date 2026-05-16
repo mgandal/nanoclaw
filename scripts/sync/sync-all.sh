@@ -137,14 +137,36 @@ if [ $EC -ne 0 ]; then
 fi
 
 # --- Step 3: Email knowledge ingestion ---
+# Wrapped in gtimeout because email-ingest.py calls Ollama (phi4-mini for
+# classification). If Ollama hangs (see ~/.claude/projects/.../memory/
+# project_qwen3_ollama_bug.md — qwen3:8b hangs after first request on
+# Ollama 0.20.x), this step would hang indefinitely under launchd. The
+# pinning watchdog won't catch it (Ollama hang = python at 0% CPU).
+# Same gtimeout-without-foreground pattern as notes-export-step.sh.
+# 1200s = 20 min, generous for ~100 emails through classification.
 echo ""
 echo "[3/10] Email knowledge ingestion..."
-$PYTHON3 "$SCRIPT_DIR/email-ingest.py" 2>&1
+gtimeout --kill-after=10 1200 $PYTHON3 "$SCRIPT_DIR/email-ingest.py" 2>&1
 EC=$?
-if [ $EC -ne 0 ]; then
-    echo "[3/10] WARNING: Email ingest had errors (exit $EC)"
-    ERRORS=$((ERRORS + 1))
-fi
+case "$EC" in
+    0) ;;
+    124)
+        echo "[3/10] WARNING: Email ingest timed out after 1200s (Ollama hung?)"
+        ERRORS=$((ERRORS + 1))
+        ;;
+    137)
+        echo "[3/10] WARNING: Email ingest hard-killed after 1200s+10s"
+        ERRORS=$((ERRORS + 1))
+        ;;
+    143)
+        echo "[3/10] WARNING: Email ingest killed (SIGTERM)"
+        ERRORS=$((ERRORS + 1))
+        ;;
+    *)
+        echo "[3/10] WARNING: Email ingest had errors (exit $EC)"
+        ERRORS=$((ERRORS + 1))
+        ;;
+esac
 
 # --- Step 4: Slack message ingestion (DMs + channels → ~/.cache/slack-ingest/exported) ---
 echo ""
@@ -207,15 +229,34 @@ else
 fi
 
 # --- Step 8: QMD embed (vectorize pending docs) ---
+# Wrapped in gtimeout because qmd embed calls Ollama (nomic-embed-text
+# or embeddinggemma). Same Ollama-hang risk as Step 3. 600s = 10 min,
+# covers typical batches of ~hundreds of doc chunks. Same pattern as
+# notes-export-step.sh: gtimeout without --foreground.
 echo ""
 echo "[8/10] QMD embed..."
 if command -v qmd &>/dev/null; then
-    BUN_INSTALL= qmd embed 2>&1
+    gtimeout --kill-after=10 600 env BUN_INSTALL= qmd embed 2>&1
     EC=$?
-    if [ $EC -ne 0 ]; then
-        echo "[8/10] WARNING: QMD embed had errors (exit $EC)"
-        ERRORS=$((ERRORS + 1))
-    fi
+    case "$EC" in
+        0) ;;
+        124)
+            echo "[8/10] WARNING: QMD embed timed out after 600s (Ollama hung?)"
+            ERRORS=$((ERRORS + 1))
+            ;;
+        137)
+            echo "[8/10] WARNING: QMD embed hard-killed after 600s+10s"
+            ERRORS=$((ERRORS + 1))
+            ;;
+        143)
+            echo "[8/10] WARNING: QMD embed killed (SIGTERM)"
+            ERRORS=$((ERRORS + 1))
+            ;;
+        *)
+            echo "[8/10] WARNING: QMD embed had errors (exit $EC)"
+            ERRORS=$((ERRORS + 1))
+            ;;
+    esac
 else
     echo "[8/10] SKIP: qmd not found in PATH"
 fi
