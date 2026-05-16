@@ -34,9 +34,7 @@ vi.mock('../../imessage-host.js', () => ({
     success: true,
     message: 'sent',
   }),
-  imessageListContacts: vi
-    .fn()
-    .mockReturnValue([{ name: 'Alice', id: 'c1' }]),
+  imessageListContacts: vi.fn().mockReturnValue([{ name: 'Alice', id: 'c1' }]),
 }));
 
 describe('imessage_* cluster handlers', () => {
@@ -124,7 +122,10 @@ describe('imessage_* cluster handlers', () => {
       },
       true,
     );
-    await dispatch({ type: 'imessage_list_contacts', requestId: 'req-l' }, true);
+    await dispatch(
+      { type: 'imessage_list_contacts', requestId: 'req-l' },
+      true,
+    );
 
     for (const id of ['req-s', 'req-r', 'req-w', 'req-l']) {
       expect(readResult(MAIN_GROUP, id)).not.toBeNull();
@@ -156,10 +157,7 @@ describe('imessage_* cluster handlers', () => {
   });
 
   it('imessage_read returns missing-contact failure when contact param absent', async () => {
-    await dispatch(
-      { type: 'imessage_read', requestId: 'req-r-empty' },
-      true,
-    );
+    await dispatch({ type: 'imessage_read', requestId: 'req-r-empty' }, true);
     const result = readResult(MAIN_GROUP, 'req-r-empty');
     expect(result).not.toBeNull();
     expect(result!.success).toBe(false);
