@@ -6,6 +6,45 @@ export interface TaskOutcomeConfig {
   onEvent: (event: RawEvent) => void;
 }
 
+/**
+ * Only emit task outcomes for runs completed within this window. Older rows
+ * are treated as already-handled — even if `outcome_emitted=0`. This is the
+ * storm guard for 2026-05-16: flipping `surface_outputs=1` on a task with
+ * months of accumulated history was making the watcher dump 100 events per
+ * tick into the event router → Ollama AbortError storm.
+ */
+export const TASK_OUTCOME_RECENCY_MS = 24 * 3600_000;
+
+/**
+ * One-shot startup helper. Marks pre-existing `task_run_logs` rows that are
+ * older than the recency horizon as `outcome_emitted=1`, so a future flip of
+ * `surface_outputs` cannot resurface them. Returns the number of rows
+ * updated. Safe to call repeatedly (idempotent — only touches rows with
+ * `outcome_emitted=0`).
+ */
+export function markStaleTaskOutcomesEmitted(
+  recencyMs: number = TASK_OUTCOME_RECENCY_MS,
+): number {
+  const db = getDb();
+  if (!db) return 0;
+  const horizon = new Date(Date.now() - recencyMs).toISOString();
+  const res = db
+    .prepare(
+      `UPDATE task_run_logs
+         SET outcome_emitted = 1
+       WHERE (outcome_emitted IS NULL OR outcome_emitted = 0)
+         AND run_at < ?`,
+    )
+    .run(horizon);
+  if (res.changes > 0) {
+    logger.info(
+      { changes: res.changes, horizon },
+      'task-outcome-watcher: marked stale rows as emitted (storm guard)',
+    );
+  }
+  return res.changes;
+}
+
 export class TaskOutcomeWatcher {
   private cfg: TaskOutcomeConfig;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -16,6 +55,9 @@ export class TaskOutcomeWatcher {
 
   poll(): void {
     const db = getDb();
+    const horizon = new Date(
+      Date.now() - TASK_OUTCOME_RECENCY_MS,
+    ).toISOString();
     const rows = db
       .prepare(
         `SELECT l.id AS log_id, l.task_id, l.result, l.run_at
@@ -25,9 +67,10 @@ export class TaskOutcomeWatcher {
          AND (l.outcome_emitted IS NULL OR l.outcome_emitted = 0)
          AND t.surface_outputs = 1
          AND l.result IS NOT NULL AND TRIM(l.result) <> ''
+         AND l.run_at >= ?
        ORDER BY l.run_at ASC LIMIT 100`,
       )
-      .all() as {
+      .all(horizon) as {
       log_id: number;
       task_id: string;
       result: string;
