@@ -113,6 +113,16 @@ Dispatch order is fixed:
    **Result write** (for `responseKind: 'result'`) — dispatcher writes the
    `{requestId}.json` file from the `result` field.
 
+   The dispatcher passes `auth.actionTypeOverride ?? handler.type` to the
+   gate and to the post-hoc notify. Use `actionTypeOverride` ONLY when
+   bridging legacy verb_noun audit names whose wire type is noun_verb (the
+   slack cluster's `read_slack_dm` / `send_slack_dm` is the canonical
+   example — without the override, migration silently invalidates live
+   `trust.yaml` policies and the container-side MCP tool descriptions
+   that reference the legacy name). New handlers must design the wire and
+   audit types to match — the override is a one-way bridge for existing
+   mismatches, not a design escape hatch.
+
 ### Rule 4 — `skipGate: true` is allowlisted
 
 A handler may declare `skipGate: true` in its authorization only when it is
@@ -187,6 +197,10 @@ When adding a new IPC action:
    `notifySummary` with care — these end up in `agent_actions` and in the
    user's Telegram. Do **not** set `skipGate: true` unless your type is on
    the Rule 4 allowlist.
+   - Do not set `actionTypeOverride` for a brand-new handler. The override
+     exists only to preserve legacy `trust.yaml` keys during migration.
+     If you find yourself wanting it for a new action, rename the wire
+     type to match instead.
 5. Write `execute(input, ctx)`. Side effects only. Return the result payload
    for `'result'` kinds.
 6. Register in `src/ipc/handlers/index.ts` (core) or your skill's

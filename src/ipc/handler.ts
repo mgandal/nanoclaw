@@ -81,6 +81,25 @@ export interface IpcAuthorization {
    * notify references the newly-generated taskId).
    */
   auditTarget?: string;
+  /**
+   * Override for the action_type string written to agent_actions and looked
+   * up in trust.yaml. Defaults to `handler.type` (the wire type). The
+   * contract-violation audit row (handler.ts off-allowlist skipGate) keeps
+   * using `handler.type` regardless — that row describes the handler, not
+   * the user action.
+   *
+   * Use this when migrating a legacy handler whose audit action_type does
+   * not match the wire type. Example: the legacy slack cluster used
+   * verb_noun audit names (`read_slack_dm`, `send_slack_dm`) but the wire
+   * types are noun_verb (`slack_dm_read`, `slack_dm`). Without this
+   * override, the migration would silently invalidate every existing
+   * trust.yaml policy keyed on the legacy name and break the agent-facing
+   * MCP tool description that references the legacy name.
+   *
+   * NEW handlers should NOT use this — design the wire type and audit type
+   * to match. The override exists only to bridge legacy mismatches.
+   */
+  actionTypeOverride?: string;
   payloadForStaging: Record<string, unknown>;
   /**
    * Opt out of the trust gate. Permitted only when the handler's `type` is
@@ -268,13 +287,14 @@ export async function dispatchIpcAction(
 
   const auditSummary = auth.auditSummary ?? auth.target;
   const auditTarget = auth.auditTarget ?? auth.target;
+  const auditActionType = auth.actionTypeOverride ?? handler.type;
 
   const decision = wantsSkipGate
     ? null
     : gateAndStage({
         agentName: ctx.agentName,
         baseGroup: ctx.baseGroup,
-        actionType: handler.type,
+        actionType: auditActionType,
         summary: auditSummary,
         target: auditTarget,
         payloadForStaging: auth.payloadForStaging,
@@ -333,7 +353,7 @@ export async function dispatchIpcAction(
     // that invariant explicit.
     await fireNotifyIfRequested(decision, {
       agentName: ctx.agentName,
-      actionType: handler.type,
+      actionType: auditActionType,
       summary: auth.notifySummary,
       target: auth.target,
       registeredGroups: ctx.registeredGroups,
