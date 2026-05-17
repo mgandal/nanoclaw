@@ -20,9 +20,8 @@ import {
 import { parseCompoundKey, fsPathToCompoundKey } from './compound-key.js';
 import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
-import { insertAgentAction } from './db.js';
 import { loadAgentTrust } from './agent-registry.js';
-import { checkTrust, checkTrustAndStage } from './trust-enforcement.js';
+import { checkTrustAndStage } from './trust-enforcement.js';
 import { firePostHocNotify } from './trust-notify.js';
 import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
