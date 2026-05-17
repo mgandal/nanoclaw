@@ -10,6 +10,7 @@ import {
 } from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
 import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
+import { slackDmReadHandler } from './slack.js';
 import {
   taskAddHandler,
   taskCloseHandler,
@@ -55,6 +56,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(taskReopenHandler);
   registerIpcHandler(pageindexFetchHandler);
   registerIpcHandler(pageindexIndexHandler);
+  registerIpcHandler(slackDmReadHandler);
   registered = true;
 }
 

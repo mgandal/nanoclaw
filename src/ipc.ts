@@ -955,6 +955,10 @@ export async function processTaskIpc(
       // above (dispatchIpcAction).
       // imessage_* migrated to src/ipc/handlers/imessage.ts — dispatched
       // via the IpcHandler registry above (dispatchIpcAction).
+      // slack_dm_read migrated to src/ipc/handlers/slack.ts — dispatched
+      // via the IpcHandler registry above (dispatchIpcAction). slack_dm
+      // remains in the if-ladder below pending Batch 2F.1 (contract
+      // widening for post-hoc-notify-after-result hybrids).
       if (
         !handled &&
         typeof data.type === 'string' &&
@@ -965,17 +969,6 @@ export async function processTaskIpc(
           sourceGroup,
           isMain,
           { registeredGroups, deps },
-        );
-      }
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        data.type === 'slack_dm_read'
-      ) {
-        handled = await handleSlackDmReadIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
         );
       }
       if (
@@ -1194,114 +1187,6 @@ export async function handleSlackDmIpc(
     return true;
   } catch (err) {
     logger.error({ err, requestId }, 'slack_dm IPC error');
-    writeResult({
-      success: false,
-      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
-    });
-    return true;
-  }
-}
-
-async function handleSlackDmReadIpc(
-  data: Record<string, unknown>,
-  sourceGroup: string,
-  _isMain: boolean,
-): Promise<boolean> {
-  // Trust enforcement: extract agent name from compound key
-  const baseKey = fsPathToCompoundKey(sourceGroup);
-  const { group: baseGroupFolder, agent: agentName } =
-    parseCompoundKey(baseKey);
-  if (agentName) {
-    const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
-    const decision = checkTrust(
-      agentName,
-      baseGroupFolder,
-      'read_slack_dm',
-      trust,
-    );
-    insertAgentAction({
-      agent_name: agentName,
-      group_folder: baseGroupFolder,
-      action_type: 'read_slack_dm',
-      trust_level: decision.level,
-      summary: `Read DM channel: ${(data.channel as string) || 'unknown'}`,
-      target: (data.channel as string) || '',
-      outcome: decision.allowed ? 'allowed' : 'blocked',
-    });
-    if (!decision.allowed) {
-      logger.info(
-        { agentName, sourceGroup, level: decision.level },
-        'Trust: read_slack_dm blocked for agent',
-      );
-      return true;
-    }
-  }
-
-  const requestId = data.requestId as string | undefined;
-  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
-    logger.warn({ data }, 'slack_dm_read IPC invalid requestId');
-    return true;
-  }
-
-  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'slack_results');
-  fs.mkdirSync(resultsDir, { recursive: true });
-
-  const writeResult = (result: {
-    success: boolean;
-    message: string;
-    data?: unknown;
-  }) => {
-    const resultFile = path.join(resultsDir, `${requestId}.json`);
-    const tmpFile = `${resultFile}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(result));
-    fs.renameSync(tmpFile, resultFile);
-  };
-
-  try {
-    const channel = data.channel as string | undefined;
-    const limit = data.limit as number | undefined;
-
-    if (!channel) {
-      writeResult({
-        success: false,
-        message: 'Missing required parameter: channel',
-      });
-      return true;
-    }
-
-    const body: Record<string, unknown> = { channel };
-    if (limit) body.limit = limit;
-
-    const response = await fetch('http://127.0.0.1:19876/slack/dm/read', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    const result = (await response.json()) as Record<string, unknown>;
-
-    if (response.ok) {
-      const messages = result.messages as unknown[];
-      writeResult({
-        success: true,
-        message: JSON.stringify(messages || [], null, 2),
-        data: result,
-      });
-    } else {
-      writeResult({
-        success: false,
-        message:
-          (result.error as string) || `Bridge returned ${response.status}`,
-      });
-    }
-
-    logger.info(
-      { requestId, sourceGroup, channel },
-      'slack_dm_read IPC handled',
-    );
-    return true;
-  } catch (err) {
-    logger.error({ err, requestId }, 'slack_dm_read IPC error');
     writeResult({
       success: false,
       message: `Error: ${err instanceof Error ? err.message : String(err)}`,
