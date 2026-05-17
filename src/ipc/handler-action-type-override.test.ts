@@ -1,13 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../db.js';
 import { DATA_DIR } from '../config.js';
@@ -106,9 +100,7 @@ describe('actionTypeOverride dispatcher behavior', () => {
     await dispatch({ type: 'wire_x' });
 
     const rows = getDb()
-      .prepare(
-        "SELECT action_type FROM agent_actions WHERE agent_name = ?",
-      )
+      .prepare('SELECT action_type FROM agent_actions WHERE agent_name = ?')
       .all(agentName) as { action_type: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].action_type).toBe('audit_x');
@@ -136,7 +128,7 @@ describe('actionTypeOverride dispatcher behavior', () => {
     await dispatch({ type: 'wire_y' });
 
     const rows = getDb()
-      .prepare("SELECT action_type FROM agent_actions WHERE agent_name = ?")
+      .prepare('SELECT action_type FROM agent_actions WHERE agent_name = ?')
       .all(agentName) as { action_type: string }[];
     expect(rows).toHaveLength(1);
     expect(rows[0].action_type).toBe('wire_y');
@@ -229,7 +221,7 @@ describe('actionTypeOverride dispatcher behavior', () => {
 
     const rows = getDb()
       .prepare(
-        "SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?",
+        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
       )
       .all(agentName) as { action_type: string; outcome: string }[];
     expect(rows).toHaveLength(1);

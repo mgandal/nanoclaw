@@ -1,14 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { DATA_DIR } from '../../config.js';
@@ -239,10 +232,7 @@ describe('slack_dm_read handler', () => {
     const bodyWith = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(bodyWith).toEqual({ channel: 'D1', limit: 25 });
 
-    await slackDmReadHandler.execute(
-      { channel: 'D1', limit: undefined },
-      ctx,
-    );
+    await slackDmReadHandler.execute({ channel: 'D1', limit: undefined }, ctx);
     const bodyWithout = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(bodyWithout).toEqual({ channel: 'D1' });
   });
@@ -360,14 +350,14 @@ describe('slack_dm_read handler', () => {
 
       const rows = getDb()
         .prepare(
-          "SELECT action_type, summary, target, outcome FROM agent_actions WHERE agent_name = ?",
+          'SELECT action_type, summary, target, outcome FROM agent_actions WHERE agent_name = ?',
         )
         .all(agentName) as {
-          action_type: string;
-          summary: string;
-          target: string;
-          outcome: string;
-        }[];
+        action_type: string;
+        summary: string;
+        target: string;
+        outcome: string;
+      }[];
 
       expect(rows).toHaveLength(1);
       expect(rows[0].action_type).toBe('read_slack_dm');
