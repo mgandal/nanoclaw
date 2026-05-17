@@ -142,6 +142,73 @@ describe('actionTypeOverride dispatcher behavior', () => {
     expect(rows[0].action_type).toBe('wire_y');
   });
 
+  it('post-hoc notify uses actionTypeOverride in user-facing text (not handler.type)', async () => {
+    // Regression pin for handler.ts:356 — the dispatcher passes
+    // `actionType: auditActionType` (override-aware) to fireNotifyIfRequested.
+    // If a future refactor reverts that to `actionType: handler.type`, the
+    // user-visible Telegram notification would silently leak the wire type
+    // instead of the audit/trust action name. This test catches that.
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  audit_x: notify\n',
+    );
+
+    const MAIN_JID = 'tg:main-override';
+    setRegisteredGroup(MAIN_JID, {
+      name: 'Main',
+      folder: 'telegram_main',
+      trigger: '@Claire',
+      added_at: '2024-01-01T00:00:00.000Z',
+      isMain: true,
+    });
+
+    const sent: { jid: string; text: string }[] = [];
+    // Replace deps BEFORE buildContext runs (inside dispatch helper) — the
+    // context captures `deps` by reference, and the dispatcher's call to
+    // fireNotifyIfRequested reads ctx.deps.sendMessage at notify-time.
+    // We also need registeredGroups() to surface the main jid so
+    // firePostHocNotify can resolve it (it returns early if no main jid found).
+    deps = {
+      ...deps,
+      sendMessage: async (jid, text) => {
+        sent.push({ jid, text });
+      },
+      registeredGroups: () => ({
+        [MAIN_JID]: {
+          name: 'Main',
+          folder: 'telegram_main',
+          trigger: '@Claire',
+          added_at: '2024-01-01T00:00:00.000Z',
+          isMain: true,
+        },
+      }),
+    };
+
+    const overrideHandler: IpcHandler<{ ok: boolean }, void> = {
+      type: 'wire_x',
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
+      authorize: () => ({
+        target: 'target-x',
+        notifySummary: 'did x',
+        payloadForStaging: { type: 'wire_x' },
+        actionTypeOverride: 'audit_x',
+      }),
+      execute: () => undefined,
+    };
+    registerIpcHandler(overrideHandler);
+
+    await dispatch({ type: 'wire_x' });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].jid).toBe(MAIN_JID);
+    // firePostHocNotify formats text as:
+    //   `ℹ️ ${agentName} → ${actionType}: ${summary}${targetSuffix}`
+    // The override value MUST appear; the wire type MUST NOT.
+    expect(sent[0].text).toContain('audit_x');
+    expect(sent[0].text).not.toContain('wire_x');
+  });
+
   it('contract-violation audit row uses handler.type, not override (off-allowlist skipGate)', async () => {
     const violatingHandler: IpcHandler<{ ok: boolean }, void> = {
       type: 'wire_z',
