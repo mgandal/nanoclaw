@@ -49,6 +49,18 @@ export interface IpcHandlerContext {
   isMain: boolean;
   baseGroup: string;
   agentName: string | null;
+  /**
+   * Per-dispatch requestId for result-kind handlers (populated after the
+   * Rule 2 requestId validation block). `null` for notify-kind handlers
+   * (no requestId in flow) AND for result-kind handlers whose
+   * requestId failed validation (dispatcher returns before this is set).
+   *
+   * Batch 4 contract: handler logger calls inside `execute()` SHOULD
+   * include `requestId: ctx.requestId` so logs can be joined to
+   * `agent_actions` and the container-side poller. See
+   * docs/context-engineering/ipc-handler-contract.md Rule N.
+   */
+  requestId: string | null;
   registeredGroups: Record<string, RegisteredGroup>;
   deps: IpcDeps;
   /**
@@ -202,6 +214,7 @@ export function buildContext(
     isMain,
     baseGroup,
     agentName: agent,
+    requestId: null,
     registeredGroups: deps.registeredGroups(),
     deps,
     dataDir: dataDirOverride ?? DATA_DIR,
@@ -233,6 +246,12 @@ export async function dispatchIpcAction(
     }
     requestId = raw;
   }
+
+  // Batch 4: bind requestId to context so handlers can include it in
+  // logger calls per the new contract. Null for notify-kind handlers
+  // (where responseKind !== 'result' and the validation block above
+  // didn't run).
+  ctx.requestId = requestId;
 
   const input = handler.parse(data);
   if (input === null) {
