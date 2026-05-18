@@ -357,7 +357,13 @@ export async function dispatchIpcAction(
     executeThrew = true;
     throwMessage = err instanceof Error ? err.message : String(err);
     logger.error(
-      { err, type: handler.type, sourceGroup: ctx.sourceGroup },
+      {
+        err,
+        type: handler.type,
+        sourceGroup: ctx.sourceGroup,
+        requestId: ctx.requestId,
+        agentName: ctx.agentName,
+      },
       'IPC handler execute threw',
     );
   }

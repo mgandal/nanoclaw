@@ -362,4 +362,72 @@ describe('Batch 4 dispatcher drops', () => {
       expect(dropRows.c).toBe(0);
     });
   });
+
+  describe('catch path log enhancement (F-M)', () => {
+    it('T13: logger.error context on result-kind throw includes requestId', async () => {
+      const spy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => ({
+          target: 'tgt',
+          notifySummary: 'n',
+          payloadForStaging: { type: 'wire_z' },
+        }),
+        execute: async () => {
+          throw new Error('boom');
+        },
+      };
+      registerIpcHandler(handler);
+
+      await dispatch({ type: 'wire_z', requestId: 'abc123' });
+
+      // Find the 'IPC handler execute threw' call (other logger.error calls
+      // may exist from synthetic-row failures in other tests).
+      const calls = spy.mock.calls.filter(
+        (c) => c[1] === 'IPC handler execute threw',
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const ctxArg = calls[0][0] as Record<string, unknown>;
+      expect(ctxArg.requestId).toBe('abc123');
+    });
+
+    it('T14: logger.error context on throw includes agentName', async () => {
+      const spy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => ({
+          target: 'tgt',
+          notifySummary: 'n',
+          payloadForStaging: { type: 'wire_z' },
+        }),
+        execute: async () => {
+          throw new Error('boom');
+        },
+      };
+      registerIpcHandler(handler);
+
+      await dispatch({ type: 'wire_z', requestId: 'abc123' });
+
+      const calls = spy.mock.calls.filter(
+        (c) => c[1] === 'IPC handler execute threw',
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const ctxArg = calls[0][0] as Record<string, unknown>;
+      expect(ctxArg.agentName).toBe(agentName);
+    });
+  });
 });
