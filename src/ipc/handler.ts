@@ -264,8 +264,16 @@ export async function dispatchIpcAction(
   const input = handler.parse(data);
   if (input === null) {
     logger.warn(
-      { type: data.type, sourceGroup: ctx.sourceGroup },
+      { type: data.type, sourceGroup: ctx.sourceGroup, requestId },
       'IPC handler rejected input shape',
+    );
+    writeSyntheticAuditRow(
+      ctx,
+      data.type,
+      requestId,
+      'dispatch_drop_input',
+      'parse rejected',
+      'dropped_invalid_input',
     );
     return { handled: true };
   }

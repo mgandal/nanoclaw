@@ -245,4 +245,91 @@ describe('Batch 4 dispatcher drops', () => {
       );
     });
   });
+
+  describe('path C synthetic row (parse rejected)', () => {
+    const registerResultHandlerThatRejectsParse = () => {
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) => {
+          if (
+            typeof raw === 'object' &&
+            raw !== null &&
+            (raw as { badParse?: boolean }).badParse
+          ) {
+            return null;
+          }
+          return { ok: true };
+        },
+        authorize: () => ({
+          target: 'tgt',
+          notifySummary: 'n',
+          payloadForStaging: { type: 'wire_z' },
+        }),
+        execute: async () => ({ executed: true, result: { ok: true } }),
+      };
+      registerIpcHandler(handler);
+    };
+
+    const fetchDropRows = () =>
+      getDb()
+        .prepare(
+          'SELECT trust_level, summary, target, outcome FROM agent_actions WHERE agent_name = ?',
+        )
+        .all(agentName) as Array<{
+        trust_level: string;
+        summary: string;
+        target: string | null;
+        outcome: string;
+      }>;
+
+    it('T8: writes row with trust_level=dispatch_drop_input', async () => {
+      registerResultHandlerThatRejectsParse();
+      await dispatch({ type: 'wire_z', requestId: 'abc123', badParse: true });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].trust_level).toBe('dispatch_drop_input');
+    });
+
+    it('T9: writes row with outcome=dropped_invalid_input', async () => {
+      registerResultHandlerThatRejectsParse();
+      await dispatch({ type: 'wire_z', requestId: 'abc123', badParse: true });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].outcome).toBe('dropped_invalid_input');
+    });
+
+    it('T10: writes row with summary CONTAINING "req=abc123"', async () => {
+      registerResultHandlerThatRejectsParse();
+      await dispatch({ type: 'wire_z', requestId: 'abc123', badParse: true });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].summary).toContain('req=abc123');
+      expect(rows[0].summary).toContain('parse rejected');
+    });
+
+    it('T11: skips row write when ctx.agentName is null', async () => {
+      registerResultHandlerThatRejectsParse();
+      const errorSpy = vi
+        .spyOn(logger, 'error')
+        .mockImplementation(() => undefined);
+      await dispatch(
+        { type: 'wire_z', requestId: 'abc123', badParse: true },
+        SOURCE_GROUP,
+      );
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(0);
+      // Mutation pin: without this spy assertion, the test cannot distinguish
+      // guard-fired from guard-removed-but-DB-rejected. The catch block fires
+      // logger.error on NOT NULL constraint failure; asserting NOT-called proves
+      // the guard prevented the write rather than the DB rejecting it.
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Failed to write synthetic drop audit row',
+      );
+    });
+  });
 });
