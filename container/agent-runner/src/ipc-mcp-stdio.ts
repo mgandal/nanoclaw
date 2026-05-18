@@ -756,7 +756,11 @@ async function waitForIpcResult(
     await new Promise(resolve => setTimeout(resolve, pollInterval));
     elapsed += pollInterval;
   }
-  return { success: false, message: 'Request timed out' };
+  return {
+    success: false,
+    message:
+      "Request timed out (host may have dropped — query agent_actions WHERE outcome LIKE 'dropped_%' AND agent_name=<agent> ORDER BY created_at DESC)",
+  };
 }
 
 async function waitForBrowserResult(
@@ -782,7 +786,7 @@ Inputs:
   - skill_inventory: installed container skills.
   - state_freshness: last-modified timestamps of state files (current.md, goals.md, etc.).
 
-Returns: JSON string with {success, data} shape. Times out at 30s; on timeout returns {success:false, message:"Request timed out"}.`,
+Returns: JSON string with {success, data} shape. Times out at 30s; on timeout returns {success:false, message:"Request timed out (host may have dropped — query agent_actions...)"}.`,
   {
     queryType: z
       .enum([
@@ -1241,7 +1245,11 @@ async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ su
     await new Promise(resolve => setTimeout(resolve, pollInterval));
     elapsed += pollInterval;
   }
-  return { success: false, message: 'Request timed out' };
+  return {
+    success: false,
+    message:
+      "Request timed out (host may have dropped — query agent_actions WHERE outcome LIKE 'dropped_%' AND agent_name=<agent> ORDER BY created_at DESC)",
+  };
 }
 
 if (isMain) {
@@ -1389,7 +1397,11 @@ async function waitForImessageResult(requestId: string, maxWait = 30000): Promis
     await new Promise(resolve => setTimeout(resolve, pollInterval));
     elapsed += pollInterval;
   }
-  return { success: false, message: 'Request timed out' };
+  return {
+    success: false,
+    message:
+      "Request timed out (host may have dropped — query agent_actions WHERE outcome LIKE 'dropped_%' AND agent_name=<agent> ORDER BY created_at DESC)",
+  };
 }
 
 if (isMain) {
