@@ -83,7 +83,29 @@ export function analyzePromotions(
   for (const [key, groupRows] of groups) {
     const [agent, action] = key.split('::');
 
-    const sorted = groupRows
+    // Batch 4 F-A defense-in-depth: drop rows whose trust_level isn't part of
+    // the LADDER. These are synthetic dispatcher-drop rows (path B/C) that
+    // must not poison promotion analysis. The SQL caller at run-analyzer.ts:87
+    // also filters at the source; this is the second line of defense for any
+    // future caller that uses analyzePromotions without the SQL filter.
+    const filteredGroupRows = groupRows.filter((r) =>
+      LADDER.includes(r.trust_level as TrustLevel),
+    );
+    const droppedCount = groupRows.length - filteredGroupRows.length;
+    if (droppedCount > 0) {
+      // F-N: visible signal that guard fired (vs dead code)
+      console.warn(
+        JSON.stringify({
+          level: 'warn',
+          msg: 'analyzer guard filtered non-LADDER rows',
+          agent_name: groupRows[0]?.agent_name,
+          action_type: action,
+          filtered: droppedCount,
+        }),
+      );
+    }
+
+    const sorted = filteredGroupRows
       .slice()
       .sort(
         (a, b) =>
@@ -98,7 +120,9 @@ export function analyzePromotions(
 
     if (!levelAtMostCeiling(proposedLevel, ceilings[action])) continue;
 
-    const atLevel = groupRows.filter((r) => r.trust_level === currentLevel);
+    const atLevel = filteredGroupRows.filter(
+      (r) => r.trust_level === currentLevel,
+    );
     const sampleSize = atLevel.length;
     if (sampleSize < minActions) continue;
 

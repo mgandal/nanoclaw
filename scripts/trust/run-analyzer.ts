@@ -82,9 +82,14 @@ function loadRows(dbPath: string): ActionRow[] {
   }
   const db = new Database(dbPath, { readonly: true });
   try {
+    // Batch 4 F-A: filter synthetic dispatcher-drop rows at the source.
+    // Trust levels outside the LADDER (ask/draft/notify/autonomous) are
+    // synthetic audit-only rows (e.g., 'dispatch_drop_input' from
+    // writeSyntheticAuditRow in src/ipc/handler.ts) that must not poison promotion
+    // analysis. analyzePromotions also filters defensively as belt-and-braces.
     return db
       .prepare(
-        'SELECT agent_name, action_type, trust_level, outcome, created_at FROM agent_actions',
+        "SELECT agent_name, action_type, trust_level, outcome, created_at FROM agent_actions WHERE trust_level IN ('ask','draft','notify','autonomous')",
       )
       .all() as ActionRow[];
   } finally {

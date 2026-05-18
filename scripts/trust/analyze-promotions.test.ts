@@ -187,4 +187,51 @@ describe('analyzePromotions', () => {
     // sample size = 30 rows at current level (draft), 100% approved
     expect(proposals[0].sampleSize).toBe(30);
   });
+
+  describe('Batch 4: synthetic-row filter (F-A defense-in-depth)', () => {
+    it('filters rows with non-LADDER trust_level before promotion analysis', () => {
+      // Strengthened from plan's literal version: use 'draft' (not 'autonomous')
+      // so that WITH the filter, a real candidate (draft -> notify) emerges and
+      // we can assert currentLevel === 'draft'. WITHOUT the filter, the synthetic
+      // 'dispatch_drop_input' rows become the most recent (newer timestamps),
+      // nextTrustLevel returns null, and proposals.length === 0. Two distinct
+      // outcomes — no tautology.
+      const nowTs = Date.UTC(2026, 4, 17);
+      const rows: ActionRow[] = [];
+      for (let i = 0; i < 30; i++) {
+        rows.push({
+          agent_name: 'einstein',
+          action_type: 'slack_dm_read',
+          trust_level: 'draft',
+          outcome: 'completed',
+          created_at: new Date(nowTs - (60 + i) * 60_000).toISOString(),
+        });
+      }
+      for (let i = 0; i < 30; i++) {
+        rows.push({
+          agent_name: 'einstein',
+          action_type: 'slack_dm_read',
+          trust_level: 'dispatch_drop_input',
+          outcome: 'dropped_invalid_input',
+          created_at: new Date(nowTs - i * 60_000).toISOString(),
+        });
+      }
+      const proposals = analyzePromotions(
+        rows,
+        {},
+        {
+          windowDays: 30,
+          minActions: 30,
+          minApprovalRate: 0.95,
+          now: nowTs,
+        },
+      );
+      // WITH filter: synthetic rows dropped, draft (30 rows, 100% approved) → notify proposal
+      // WITHOUT filter: synthetic row is most recent, nextTrustLevel(synthetic) === null → no proposal
+      expect(proposals).toHaveLength(1);
+      expect(proposals[0].currentLevel).toBe('draft');
+      expect(proposals[0].proposedLevel).toBe('notify');
+      expect(proposals[0].sampleSize).toBe(30);
+    });
+  });
 });
