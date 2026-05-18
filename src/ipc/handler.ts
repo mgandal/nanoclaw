@@ -417,3 +417,54 @@ function writeResultFile(
     );
   }
 }
+
+/**
+ * Write a synthetic `agent_actions` row for a pre-execute dispatcher drop
+ * (Batch 4 paths B + C). Used when an agent caller's IPC is rejected
+ * before `handler.execute()` runs — without this row, the caller leaves
+ * zero forensic trail in the canonical audit table.
+ *
+ * Non-agent callers (`ctx.agentName === null`) skip the write, matching
+ * the existing `NON_AGENT_DECISION` convention at trust-gate.ts:27-32 —
+ * non-agent calls never write audit rows on any path.
+ *
+ * `target` is omitted because `AgentActionInput.target` is `target?: string`
+ * (optional, NOT nullable) and `insertAgentAction` at db.ts:1416 coerces
+ * falsy values to SQL NULL via `action.target || null`.
+ *
+ * Contrast: the contract-violation row at handler.ts:281-303 *does* set
+ * target because the gate auth provides one; here the drop happens before
+ * authorization runs, so no target exists to pass.
+ *
+ * Failures are logged-and-continued (not propagated) — a DB hiccup must
+ * not crash the IPC watcher and take down all in-flight dispatches.
+ * Primary discipline = drop the bad call; forensic write is best-effort.
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- wired by Task 5/6 in same Batch 4 commit
+function writeSyntheticAuditRow(
+  ctx: IpcHandlerContext,
+  type: string,
+  requestId: string | null,
+  trust_level: 'dispatch_drop_input',
+  summary: string,
+  outcome: 'dropped_invalid_requestId' | 'dropped_invalid_input',
+): void {
+  if (!ctx.agentName) return;
+  try {
+    insertAgentAction({
+      agent_name: ctx.agentName,
+      group_folder: ctx.baseGroup,
+      action_type: type,
+      trust_level,
+      summary: requestId
+        ? `${summary} (req=${requestId.slice(0, 64)})`
+        : summary,
+      outcome,
+    });
+  } catch (err) {
+    logger.error(
+      { err, type, requestId },
+      'Failed to write synthetic drop audit row',
+    );
+  }
+}
