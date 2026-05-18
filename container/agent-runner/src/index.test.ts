@@ -693,3 +693,64 @@ exit 7
   });
 });
 
+// ─── Honcho syncMessages wiring (regression for empty-sessions bug 2026-05-18) ─
+
+describe('Honcho syncMessages wiring', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, 'index.ts'),
+    'utf-8',
+  );
+
+  it('captures rawUserPrompt before honchoSession.injectContext mutates it', () => {
+    const rawCaptureIdx = source.indexOf('const rawUserPrompt = prompt;');
+    const injectCallIdx = source.indexOf('honchoSession.injectContext(prompt)');
+    expect(rawCaptureIdx).toBeGreaterThan(-1);
+    expect(injectCallIdx).toBeGreaterThan(-1);
+    expect(rawCaptureIdx).toBeLessThan(injectCallIdx);
+  });
+
+  it('calls honchoSession.syncMessages with rawUserPrompt, not the injected prompt', () => {
+    expect(source).toMatch(
+      /honchoSession\s*\n?\s*\.syncMessages\(\s*rawUserPrompt\s*,\s*queryResult\.assistantText\s*\)/,
+    );
+    expect(source).not.toMatch(
+      /\.syncMessages\(\s*prompt\s*,/,
+    );
+  });
+
+  it('syncs only when assistantText is present (success-gated)', () => {
+    expect(source).toMatch(
+      /honchoSession\?\.isReady\(\)\s*&&\s*queryResult\.assistantText/,
+    );
+  });
+
+  it('skips [SYSTEM]-prefixed prompts (post-compaction self-prompts) from Honcho', () => {
+    // The post-compaction memory-extraction prompt at index.ts ~1252 begins
+    // with "[SYSTEM] Your conversation context was just compacted..." and is
+    // synthesized by the host, not the user. It must not be stored as a user
+    // turn in Honcho.
+    expect(source).toMatch(
+      /!rawUserPrompt\.startsWith\(\s*['"]\[SYSTEM\]['"]\s*\)/,
+    );
+  });
+
+  it('runQuery returns assistantText alongside session/uuid fields', () => {
+    expect(source).toMatch(/assistantText\?:\s*string;/);
+    expect(source).toMatch(/assistantText:\s*lastSuccessAssistantText/);
+  });
+
+  it('captures lastSuccessAssistantText before the crystallize-offer suffix is appended', () => {
+    const captureIdx = source.indexOf(
+      'lastSuccessAssistantText = textResult;',
+    );
+    // Anchor on the call site (textResult = appendCrystallizeOffer(textResult, ...))
+    // — not the function definition near the top of the file.
+    const appendOfferCallIdx = source.indexOf(
+      'appendCrystallizeOffer(textResult',
+    );
+    expect(captureIdx).toBeGreaterThan(-1);
+    expect(appendOfferCallIdx).toBeGreaterThan(-1);
+    expect(captureIdx).toBeLessThan(appendOfferCallIdx);
+  });
+});
+

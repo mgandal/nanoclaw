@@ -663,6 +663,7 @@ async function runQuery(
   newSessionId?: string;
   lastAssistantUuid?: string;
   closedDuringQuery: boolean;
+  assistantText?: string;
 }> {
   const stream = new MessageStream();
   stream.push(prompt, containerInput.images);
@@ -690,6 +691,7 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  let lastSuccessAssistantText: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
   // Per-turn tool calls for the Phase 3 implicit-crystallize heuristic.
@@ -895,6 +897,11 @@ async function runQuery(
       // wire them. Only fires for successful results — error paths skip.
       const isSuccess =
         (message as { subtype?: string }).subtype === 'success';
+      if (isSuccess && textResult) {
+        // Last result wins: handles future SDK streams where subagent results
+        // may interleave; we want the outer-loop final result for Honcho sync.
+        lastSuccessAssistantText = textResult;
+      }
       if (
         isSuccess &&
         textResult &&
@@ -922,7 +929,12 @@ async function runQuery(
   log(
     `Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`,
   );
-  return { newSessionId, lastAssistantUuid, closedDuringQuery };
+  return {
+    newSessionId,
+    lastAssistantUuid,
+    closedDuringQuery,
+    assistantText: lastSuccessAssistantText,
+  };
 }
 
 interface ScriptResult {
@@ -1192,6 +1204,15 @@ async function main(): Promise<void> {
         `Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`,
       );
 
+      // Capture the raw user prompt before Honcho injection so we sync the
+      // actual user turn (not the context-enriched version) to Honcho.
+      // This sits above injectContext (which prepends a <memory-context>
+      // fence) and below the pending-IPC-drain (so concatenated follow-ups
+      // are included). Scheduled-task '[SCHEDULED TASK ...]' wrapping is
+      // benign here because honchoSession is null for scheduled tasks
+      // (gate at the HonchoSession init site).
+      const rawUserPrompt = prompt;
+
       // Inject Honcho context into prompt (if available)
       if (honchoSession?.isReady()) {
         prompt = honchoSession.injectContext(prompt);
@@ -1218,6 +1239,28 @@ async function main(): Promise<void> {
         honchoSession.updateSessionId(queryResult.newSessionId).catch((err) => {
           log(`Honcho session update failed: ${err instanceof Error ? err.message : String(err)}`);
         });
+      }
+
+      // Persist the user/assistant turn into Honcho. Fire-and-forget — the
+      // method already swallows errors and dedups by content hash. Skip
+      // [SYSTEM]-prefixed prompts (post-compaction memory-extraction self-
+      // prompts at lines ~1252-1260) so the mgandal peer's memory isn't
+      // polluted with system instructions. Fire-and-forget can technically
+      // produce out-of-order Honcho writes if turn N's network is slow and
+      // turn N+1 starts before sync(N) finishes; the deriver reconstructs
+      // turn pairing from peer alternation so reordering is tolerable.
+      if (
+        honchoSession?.isReady() &&
+        queryResult.assistantText &&
+        !rawUserPrompt.startsWith('[SYSTEM]')
+      ) {
+        honchoSession
+          .syncMessages(rawUserPrompt, queryResult.assistantText)
+          .catch((err) => {
+            log(
+              `Honcho syncMessages failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
       }
 
       // If _close was consumed during the query, exit immediately.
