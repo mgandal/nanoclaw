@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { DATA_DIR } from '../../config.js';
 import { IpcDeps } from '../../ipc.js';
+import { logger } from '../../logger.js';
 import {
   _resetHandlersForTests,
   buildContext,
@@ -367,6 +368,32 @@ describe('slack_dm_read handler', () => {
       expect(rows[0].outcome).toBe('allowed');
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logger.info call includes requestId in context (Batch 4 Rule N)', async () => {
+    const spy = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    try {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [] }),
+      });
+
+      await dispatch({
+        type: 'slack_dm_read',
+        requestId: 'req-xyz',
+        channel: 'D123',
+      });
+
+      const calls = spy.mock.calls.filter(
+        (c) => c[1] === 'slack_dm_read IPC handled',
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const ctxArg = calls[0][0] as Record<string, unknown>;
+      expect(ctxArg.requestId).toBe('req-xyz');
+    } finally {
+      spy.mockRestore();
     }
   });
 

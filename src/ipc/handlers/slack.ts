@@ -74,7 +74,11 @@ export const slackDmReadHandler: IpcHandler<SlackDmReadInput, ExecuteResult> = {
     const result = (await response.json()) as Record<string, unknown>;
 
     logger.info(
-      { sourceGroup: ctx.sourceGroup, channel: input.channel },
+      {
+        sourceGroup: ctx.sourceGroup,
+        channel: input.channel,
+        requestId: ctx.requestId,
+      },
       'slack_dm_read IPC handled',
     );
 
