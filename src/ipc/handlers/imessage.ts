@@ -65,7 +65,7 @@ export const imessageSearchHandler: IpcHandler<SearchInput, ExecuteResult> = {
   authorize(_input, ctx) {
     if (!ctx.isMain) {
       logger.warn(
-        { sourceGroup: ctx.sourceGroup },
+        { sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
         'Non-main iMessage IPC attempt blocked',
       );
       return null;
@@ -123,7 +123,7 @@ export const imessageReadHandler: IpcHandler<ReadInput, ExecuteResult> = {
   authorize(_input, ctx) {
     if (!ctx.isMain) {
       logger.warn(
-        { sourceGroup: ctx.sourceGroup },
+        { sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
         'Non-main iMessage IPC attempt blocked',
       );
       return null;
@@ -184,7 +184,7 @@ export const imessageSendHandler: IpcHandler<SendInput, ExecuteResult> = {
   authorize(input, ctx) {
     if (!ctx.isMain) {
       logger.warn(
-        { sourceGroup: ctx.sourceGroup },
+        { sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
         'Non-main iMessage IPC attempt blocked',
       );
       return null;
@@ -240,7 +240,7 @@ export const imessageListContactsHandler: IpcHandler<
   authorize(_input, ctx) {
     if (!ctx.isMain) {
       logger.warn(
-        { sourceGroup: ctx.sourceGroup },
+        { sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
         'Non-main iMessage IPC attempt blocked',
       );
       return null;

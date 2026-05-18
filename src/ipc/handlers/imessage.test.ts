@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { _initTestDatabase, setRegisteredGroup } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
+import { logger } from '../../logger.js';
 import {
   _resetHandlersForTests,
   buildContext,
@@ -183,6 +184,26 @@ describe('imessage_* cluster handlers', () => {
     expect(
       fs.existsSync(path.join(dataDir, 'ipc', MAIN_GROUP, 'imessage_results')),
     ).toBe(false);
+  });
+
+  it('logger.warn calls include requestId in context (Batch 4 Rule N pattern-pin)', async () => {
+    const spy = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    // Non-main callers hit the authorize() warn in all 4 handlers. Pick
+    // one (imessage_search) — the pin is "at least one of the 4
+    // logger.warn calls includes requestId".
+    await dispatch(
+      {
+        type: 'imessage_search',
+        requestId: 'req-warn-pin',
+        query: 'x',
+      },
+      false,
+    );
+    const callsWithRequestId = spy.mock.calls.filter(
+      (c) => (c[0] as Record<string, unknown>).requestId !== undefined,
+    );
+    expect(callsWithRequestId.length).toBeGreaterThanOrEqual(1);
+    spy.mockRestore();
   });
 
   it('reads skip the gate for non-agent callers (Rule 4 skipGate)', async () => {
