@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { DATA_DIR } from '../../config.js';
 import {
@@ -11,6 +11,7 @@ import {
   setRegisteredGroup,
 } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
+import { logger } from '../../logger.js';
 import {
   _resetHandlersForTests,
   buildContext,
@@ -240,6 +241,29 @@ describe('dashboardQueryHandler', () => {
       expect(rows[0].outcome).toBe('allowed');
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('logger.info call includes requestId in context (Batch 4 Rule N)', async () => {
+    const spy = vi.spyOn(logger, 'info').mockImplementation(() => undefined);
+    try {
+      await dispatch(
+        {
+          type: 'dashboard_query',
+          requestId: 'req-xyz',
+          queryType: 'state_freshness',
+        },
+        true,
+      );
+
+      const calls = spy.mock.calls.filter(
+        (c) => c[1] === 'dashboard IPC handled',
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      const ctxArg = calls[0][0] as Record<string, unknown>;
+      expect(ctxArg.requestId).toBe('req-xyz');
+    } finally {
+      spy.mockRestore();
     }
   });
 

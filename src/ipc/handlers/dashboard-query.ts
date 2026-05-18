@@ -93,7 +93,11 @@ export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
       ctx.isMain,
     );
     logger.info(
-      { queryType: input.queryType, sourceGroup: ctx.sourceGroup },
+      {
+        queryType: input.queryType,
+        sourceGroup: ctx.sourceGroup,
+        requestId: ctx.requestId,
+      },
       'dashboard IPC handled',
     );
     return { executed: true, result };
