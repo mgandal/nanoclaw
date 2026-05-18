@@ -332,4 +332,34 @@ describe('Batch 4 dispatcher drops', () => {
       );
     });
   });
+
+  describe('path D invariant pin (F-I — authorize null preserves Rule 3 silent deny)', () => {
+    it('T12: authorize-null with agent caller writes ZERO synthetic rows', async () => {
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => null, // polite-no per Rule 3
+        execute: async () => ({ executed: true, result: { ok: true } }),
+      };
+      registerIpcHandler(handler);
+
+      await dispatch({ type: 'wire_z', requestId: 'abc123' });
+
+      // Strong assertion: ZERO drop rows for this agent. The agent_actions
+      // table may have other rows from gate writes on other tests (shared
+      // _initTestDatabase across files) but filter by unique agent_name +
+      // outcome LIKE 'dropped_%'.
+      const dropRows = getDb()
+        .prepare(
+          "SELECT COUNT(*) as c FROM agent_actions WHERE agent_name = ? AND outcome LIKE 'dropped_%'",
+        )
+        .get(agentName) as { c: number };
+      expect(dropRows.c).toBe(0);
+    });
+  });
 });
