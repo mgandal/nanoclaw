@@ -430,4 +430,56 @@ describe('Batch 4 dispatcher drops', () => {
       expect(ctxArg.agentName).toBe(agentName);
     });
   });
+
+  describe('F-O induction discipline', () => {
+    it('T15: bare sourceGroup (no compound-key separator) produces ctx.agentName=null AND helper short-circuits', async () => {
+      // Direct buildContext call: pass bare 'telegram_aud' (no '--<agent>').
+      // parseCompoundKey returns { group: 'telegram_aud', agent: null }.
+      const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+      expect(ctx.agentName).toBeNull();
+
+      // Confirm the helper's guard fires: dispatch a path-B call with this
+      // ctx and assert zero rows.
+      const errorSpy = vi
+        .spyOn(logger, 'error')
+        .mockImplementation(() => undefined);
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => ({
+          target: 'tgt',
+          notifySummary: 'n',
+          payloadForStaging: { type: 'wire_z' },
+        }),
+        execute: async () => ({ executed: true, result: { ok: true } }),
+      };
+      registerIpcHandler(handler);
+
+      await dispatchIpcAction(
+        { type: 'wire_z', requestId: '!!bad!!' },
+        ctx,
+      );
+
+      // No rows at all (path B fired, but helper short-circuited).
+      // We can't query by agent_name (it's null), so count all rows in fresh
+      // _initTestDatabase scope.
+      const allRows = getDb()
+        .prepare("SELECT COUNT(*) as c FROM agent_actions WHERE outcome LIKE 'dropped_%'")
+        .get() as { c: number };
+      expect(allRows.c).toBe(0);
+      // Mutation pin: the agent_actions.agent_name NOT NULL constraint means
+      // removing the guard would still produce zero rows (insertAgentAction
+      // throws, caught by helper's try/catch). Without this spy assertion T15
+      // is tautological. Mirrors T7/T11 pattern.
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Failed to write synthetic drop audit row',
+      );
+    });
+  });
 });
