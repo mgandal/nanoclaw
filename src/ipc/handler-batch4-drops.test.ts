@@ -105,5 +105,60 @@ describe('Batch 4 dispatcher drops', () => {
       expect(capturedCtx).not.toBeNull();
       expect(capturedCtx!.requestId).toBe('abc123');
     });
+
+    it('T2: leaves ctx.requestId null for notify-kind handler', async () => {
+      let capturedCtx: IpcHandlerContext | null = null;
+      const handler: IpcHandler<{ ok: boolean }, void> = {
+        type: 'wire_z',
+        // No responseKind → defaults to 'notify'
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: (_input, ctx) => {
+          capturedCtx = ctx;
+          return {
+            target: 'tgt',
+            notifySummary: 'n',
+            payloadForStaging: { type: 'wire_z' },
+          };
+        },
+        execute: () => undefined,
+      };
+      registerIpcHandler(handler);
+
+      await dispatch({ type: 'wire_z', requestId: 'abc123' }); // requestId ignored for notify
+
+      expect(capturedCtx).not.toBeNull();
+      expect(capturedCtx!.requestId).toBeNull();
+    });
+
+    it('T3: leaves ctx.requestId null on malformed-requestId rejection', async () => {
+      let authorizeCalled = false;
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => {
+          authorizeCalled = true;
+          return null;
+        },
+        execute: async () => ({ executed: true, result: { ok: true } }),
+      };
+      registerIpcHandler(handler);
+
+      const result = await dispatch({ type: 'wire_z', requestId: '!!malformed!!' });
+
+      // Validation failed before authorize ran, so authorize was never called
+      // and ctx.requestId was never set. We can't capture ctx here (authorize
+      // didn't run), but the production code MUST not set ctx.requestId on
+      // the dispatcher path until AFTER validation passes.
+      // { handled: true } pins that the dispatcher took the malformed-requestId
+      // reject branch (handler.ts:245), not the handler-not-found branch.
+      expect(result).toEqual({ handled: true });
+      expect(authorizeCalled).toBe(false);
+    });
   });
 });
