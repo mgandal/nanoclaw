@@ -194,12 +194,16 @@ Example:
 ```ts
 async execute(input, ctx) {
   logger.info(
-    { requestId: ctx.requestId, sourceGroup: ctx.sourceGroup, channel: input.channel },
+    { sourceGroup: ctx.sourceGroup, channel: input.channel, requestId: ctx.requestId },
     'slack_dm_read handler invoked',
   );
   // ... rest of handler ...
 }
 ```
+
+(Field ordering is not normative — existing handlers place `requestId`
+last to minimize churn on existing log-shape consumers. New handlers may
+choose either order.)
 
 **Doc-enforced only (F-F).** No ESLint rule enforces this; future
 batches may add one. Reviewers must catch omissions in code review.
@@ -215,6 +219,12 @@ constraint exists to prevent a future regression.
 still be set (for result-kind calls), but `agent_actions` rows are not
 written (synthetic or otherwise). Log lines remain useful for debugging
 host-side test fixtures.
+
+**For notify-kind handlers:** `ctx.requestId` is ALWAYS `null` (the
+dispatcher only populates it on the result-kind code path — see
+`handler.ts` Rule 2 validation). Adopting Rule 7 in notify-kind handlers
+is harmless but information-free; field will serialize as `null`.
+Reviewers should not flag notify-kind handlers for missing `requestId`.
 
 ## Authoring checklist
 

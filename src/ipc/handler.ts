@@ -454,9 +454,10 @@ function writeResultFile(
  * (optional, NOT nullable) and `insertAgentAction` at db.ts:1416 coerces
  * falsy values to SQL NULL via `action.target || null`.
  *
- * Contrast: the contract-violation row at handler.ts:281-303 *does* set
- * target because the gate auth provides one; here the drop happens before
- * authorization runs, so no target exists to pass.
+ * Contrast: the contract-violation row written in the SKIP_GATE_ALLOWLIST
+ * enforcement block (search for `denied_contract_violation` in this file)
+ * *does* set target because the gate auth provides one; here the drop
+ * happens before authorization runs, so no target exists to pass.
  *
  * Failures are logged-and-continued (not propagated) — a DB hiccup must
  * not crash the IPC watcher and take down all in-flight dispatches.
