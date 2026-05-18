@@ -180,6 +180,42 @@ This replaces the per-call `import('.claude/skills/x-integration/host.js')`
 dynamic-import in the if-ladder. The skill repo and the nanoclaw repo are
 co-versioned by this contract; breaking changes require coordinated PRs.
 
+### Rule 7: Handler logger calls SHOULD include `requestId: ctx.requestId`
+
+After Batch 4 (commit-range `651b7803..HEAD`), the dispatcher
+populates `ctx.requestId: string | null` on `IpcHandlerContext` after the
+Rule 2 requestId validation block. Handler `logger.*` calls inside
+`execute()` SHOULD include `requestId: ctx.requestId` so that operators
+can join `nanoclaw.log` lines to `agent_actions` rows (and to the
+in-container poller via the shared requestId).
+
+Example:
+
+```ts
+async execute(input, ctx) {
+  logger.info(
+    { requestId: ctx.requestId, sourceGroup: ctx.sourceGroup, channel: input.channel },
+    'slack_dm_read handler invoked',
+  );
+  // ... rest of handler ...
+}
+```
+
+**Doc-enforced only (F-F).** No ESLint rule enforces this; future
+batches may add one. Reviewers must catch omissions in code review.
+
+**Mutation-timing constraint (F-E).** `ctx.requestId` is mutated by the
+dispatcher between requestId validation and `parse()`. Handlers MUST NOT
+capture `ctx` in `parse()` closures via module-level state — `parse()`
+runs AFTER the mutation, but a reference held across multiple dispatches
+would see ever-changing values. Current handlers do not capture; this
+constraint exists to prevent a future regression.
+
+**For non-agent callers (`ctx.agentName === null`):** `requestId` may
+still be set (for result-kind calls), but `agent_actions` rows are not
+written (synthetic or otherwise). Log lines remain useful for debugging
+host-side test fixtures.
+
 ## Authoring checklist
 
 When adding a new IPC action:
@@ -205,6 +241,7 @@ When adding a new IPC action:
    for `'result'` kinds.
 6. Register in `src/ipc/handlers/index.ts` (core) or your skill's
    `registerHandlers()` (Rule 6).
+   - [ ] Inside `execute()`, all `logger.*` calls include `requestId: ctx.requestId` (Rule 7)
 7. Write a focused test at `src/ipc/handlers/{type}.test.ts`. Cover: parse
    rejection, authorize denial, gate behaviour (or `skipGate` allowlisting),
    execute side effect, result-file write for `'result'` kinds.
