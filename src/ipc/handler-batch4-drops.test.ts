@@ -3,9 +3,10 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, setRegisteredGroup } from '../db.js';
+import { _initTestDatabase, getDb, setRegisteredGroup } from '../db.js';
 import { DATA_DIR } from '../config.js';
 import { IpcDeps } from '../ipc.js';
+import { logger } from '../logger.js';
 import {
   _resetHandlersForTests,
   buildContext,
@@ -149,7 +150,10 @@ describe('Batch 4 dispatcher drops', () => {
       };
       registerIpcHandler(handler);
 
-      const result = await dispatch({ type: 'wire_z', requestId: '!!malformed!!' });
+      const result = await dispatch({
+        type: 'wire_z',
+        requestId: '!!malformed!!',
+      });
 
       // Validation failed before authorize ran, so authorize was never called
       // and ctx.requestId was never set. We can't capture ctx here (authorize
@@ -159,6 +163,86 @@ describe('Batch 4 dispatcher drops', () => {
       // reject branch (handler.ts:245), not the handler-not-found branch.
       expect(result).toEqual({ handled: true });
       expect(authorizeCalled).toBe(false);
+    });
+  });
+
+  describe('path B synthetic row (malformed requestId)', () => {
+    const registerResultHandler = () => {
+      const handler: IpcHandler<
+        { ok: boolean },
+        { executed: true; result: { ok: boolean } }
+      > = {
+        type: 'wire_z',
+        responseKind: 'result',
+        parse: (raw) =>
+          typeof raw === 'object' && raw !== null ? { ok: true } : null,
+        authorize: () => ({
+          target: 'tgt',
+          notifySummary: 'n',
+          payloadForStaging: { type: 'wire_z' },
+        }),
+        execute: async () => ({ executed: true, result: { ok: true } }),
+      };
+      registerIpcHandler(handler);
+    };
+
+    const fetchDropRows = () =>
+      getDb()
+        .prepare(
+          'SELECT trust_level, summary, target, outcome FROM agent_actions WHERE agent_name = ?',
+        )
+        .all(agentName) as Array<{
+        trust_level: string;
+        summary: string;
+        target: string | null;
+        outcome: string;
+      }>;
+
+    it('T4: writes row with trust_level=dispatch_drop_input', async () => {
+      registerResultHandler();
+      await dispatch({ type: 'wire_z', requestId: '!!bad!!' });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].trust_level).toBe('dispatch_drop_input');
+    });
+
+    it('T5: writes row with outcome=dropped_invalid_requestId', async () => {
+      registerResultHandler();
+      await dispatch({ type: 'wire_z', requestId: '!!bad!!' });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].outcome).toBe('dropped_invalid_requestId');
+    });
+
+    it('T6: writes row with summary "malformed requestId" (NO req= substring)', async () => {
+      registerResultHandler();
+      await dispatch({ type: 'wire_z', requestId: '!!bad!!' });
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].summary).toBe('malformed requestId');
+      expect(rows[0].summary).not.toContain('req=');
+    });
+
+    it('T7: skips row write when ctx.agentName is null', async () => {
+      registerResultHandler();
+      const errorSpy = vi
+        .spyOn(logger, 'error')
+        .mockImplementation(() => undefined);
+      // Bare sourceGroup (no compound-key separator) → parseCompoundKey
+      // returns {group: 'telegram_aud', agent: null}. F-O induction.
+      await dispatch({ type: 'wire_z', requestId: '!!bad!!' }, SOURCE_GROUP);
+      const rows = fetchDropRows();
+      expect(rows).toHaveLength(0);
+      // Mutation pin: if the agentName guard is removed, insertAgentAction
+      // would throw a NOT NULL constraint and the helper's catch block would
+      // log 'Failed to write synthetic drop audit row'. Asserting this DOESN'T
+      // happen makes the test actually distinguish guard-fired from
+      // guard-removed-but-DB-rejected. Without this, both paths produce 0 rows
+      // and the test cannot detect the mutation.
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Failed to write synthetic drop audit row',
+      );
     });
   });
 });

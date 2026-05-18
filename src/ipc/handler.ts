@@ -242,6 +242,14 @@ export async function dispatchIpcAction(
         { type: data.type, sourceGroup: ctx.sourceGroup, requestId: raw },
         'IPC handler rejected: missing or malformed requestId for result-kind',
       );
+      writeSyntheticAuditRow(
+        ctx,
+        data.type,
+        null,
+        'dispatch_drop_input',
+        'malformed requestId',
+        'dropped_invalid_requestId',
+      );
       return { handled: true };
     }
     requestId = raw;
@@ -440,7 +448,6 @@ function writeResultFile(
  * not crash the IPC watcher and take down all in-flight dispatches.
  * Primary discipline = drop the bad call; forensic write is best-effort.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- wired by Task 5/6 in same Batch 4 commit
 function writeSyntheticAuditRow(
   ctx: IpcHandlerContext,
   type: string,
