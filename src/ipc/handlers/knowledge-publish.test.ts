@@ -6,7 +6,9 @@ import os from 'os';
 // ---------- mocks ----------
 
 // Mock child_process at the module level (ESM-safe pattern).
-const mockExecFile = vi.fn();
+// vi.hoisted ensures mockExecFile is initialized BEFORE the SUT module's
+// import-time side effects (the I3 startup probe calls execFile() at import).
+const { mockExecFile } = vi.hoisted(() => ({ mockExecFile: vi.fn() }));
 vi.mock('child_process', async () => {
   const actual =
     await vi.importActual<typeof import('child_process')>('child_process');
@@ -115,10 +117,20 @@ describe('knowledgePublishHandler.execute fires QMD update', () => {
       tags: [],
       confidence: 8,
     });
-    await knowledgePublishHandler.execute!(input as any, buildCtx());
-    expect(mockExecFile).toHaveBeenCalled();
-    const call = mockExecFile.mock.calls[0];
-    expect(call[1]).toEqual(['update', 'agent-knowledge']);
+    await knowledgePublishHandler.execute!(
+      input as any,
+      buildCtx({ dataDir: tmpDir }),
+    );
+    // I3 startup probe also calls execFile once; find the publish-side call
+    // by matching args rather than asserting on call[0].
+    const updateCall = mockExecFile.mock.calls.find(
+      (c) =>
+        Array.isArray(c[1]) &&
+        c[1].length === 2 &&
+        c[1][0] === 'update' &&
+        c[1][1] === 'agent-knowledge',
+    );
+    expect(updateCall).toBeDefined();
   });
 
   it('QMD update subprocess failure is non-fatal (logger.warn, no throw)', async () => {
@@ -146,7 +158,10 @@ describe('knowledgePublishHandler.execute fires QMD update', () => {
     });
     // Should NOT throw despite the subprocess error
     await expect(
-      knowledgePublishHandler.execute!(input as any, buildCtx()),
+      knowledgePublishHandler.execute!(
+        input as any,
+        buildCtx({ dataDir: tmpDir }),
+      ),
     ).resolves.toBeUndefined();
   });
 });

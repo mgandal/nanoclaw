@@ -475,10 +475,20 @@ describe('postHocNotify dispatcher behavior', () => {
     // Pins that SKIP_GATE_ALLOWLIST honors skipGate when the wire type is
     // 'knowledge_search'. Regression guard: a future removal from the
     // allowlist (Phase 1.2 K-Task 5) would fail this test.
+    //
+    // I2 (round-2 hardening): stub is responseKind:'result' + resultsDirName
+    // so we exercise the dispatcher's result-kind path — including the Rule 2
+    // pre-parse requestId validation at handler.ts:282-300. A previous version
+    // defaulted to notify-kind, leaving that path uncovered.
     let executed = false;
 
-    const handler: IpcHandler<{ ok: boolean }, void> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: { success: true; message: string } }
+    > = {
       type: 'knowledge_search', // ON SKIP_GATE_ALLOWLIST per Phase 1.2 K-Task 5
+      responseKind: 'result',
+      resultsDirName: 'knowledge_results',
       parse: (raw) =>
         typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
@@ -489,12 +499,16 @@ describe('postHocNotify dispatcher behavior', () => {
       }),
       execute: () => {
         executed = true;
-        return undefined;
+        return {
+          executed: true as const,
+          result: { success: true as const, message: 'stub' },
+        };
       },
     };
     registerIpcHandler(handler);
 
-    await dispatch({ type: 'knowledge_search' });
+    // requestId required for result-kind handlers (dispatcher Rule 2).
+    await dispatch({ type: 'knowledge_search', requestId: 'req-test-9' });
 
     expect(executed).toBe(true);
 
@@ -503,7 +517,9 @@ describe('postHocNotify dispatcher behavior', () => {
         'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
       )
       .all(agentName) as { action_type: string; outcome: string }[];
-    expect(rows.map((r) => r.outcome)).not.toContain('denied_contract_violation');
+    expect(rows.map((r) => r.outcome)).not.toContain(
+      'denied_contract_violation',
+    );
   });
 
   // ---- Test 10: off-allowlist control (parallel to Test 9) ----

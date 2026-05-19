@@ -1,7 +1,6 @@
 import { execFile } from 'child_process';
 import path from 'path';
 
-import { DATA_DIR } from '../../config.js';
 import { logger } from '../../logger.js';
 import type { IpcHandler } from '../handler.js';
 
@@ -22,7 +21,9 @@ interface Input {
   confidence: number;
 }
 
-const KNOWLEDGE_DIR = path.join(DATA_DIR, 'agent-knowledge');
+// AUDIT_TARGET stays module-level — it's a constant string used in the audit
+// row's `target` column, NOT a filesystem path. The actual knowledge directory
+// is derived from ctx.dataDir at call time (see execute()).
 const AUDIT_TARGET = 'agent-knowledge';
 
 // Verified path on this host: /usr/local/bin/qmd is a stable shim that
@@ -32,6 +33,45 @@ const AUDIT_TARGET = 'agent-knowledge';
 // (round-1 amendment §3.5). If the path differs on the host, update this
 // constant.
 const QMD_BIN = '/usr/local/bin/qmd';
+
+// Once-per-process startup probe. Runs at module-import time (when the
+// dispatcher first imports the handler registry). If QMD_BIN is rotten
+// (e.g. fnm node version upgrade broke the shim), this surfaces loudly
+// at startup via logger.error rather than silently per-publish via
+// logger.warn. Non-blocking — uses execFile callback, not execFileSync,
+// so a slow probe doesn't delay handler registration.
+let qmdProbeFired = false;
+function probeQmdBinaryOnce(): void {
+  if (qmdProbeFired) return;
+  qmdProbeFired = true;
+  execFile(
+    QMD_BIN,
+    ['--version'],
+    {
+      timeout: 2_000,
+      env: {
+        PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH ?? ''}`,
+        HOME: process.env.HOME ?? '/Users/mgandal',
+      },
+    },
+    (err, stdout) => {
+      if (err) {
+        logger.error(
+          { err, qmdBin: QMD_BIN },
+          'QMD_BIN probe failed at startup — knowledge_publish background ' +
+            'qmd update calls will silently fail. Check fnm node version, ' +
+            'shim wrapper at /usr/local/bin/qmd, or reinstall @tobilu/qmd.',
+        );
+      } else {
+        logger.info(
+          { qmdBin: QMD_BIN, version: stdout.trim().slice(0, 50) },
+          'QMD_BIN probe ok at startup',
+        );
+      }
+    },
+  );
+}
+probeQmdBinaryOnce();
 
 export const knowledgePublishHandler: IpcHandler<Input> = {
   type: 'knowledge_publish',
@@ -81,7 +121,12 @@ export const knowledgePublishHandler: IpcHandler<Input> = {
 
   async execute(input, ctx) {
     const { publishKnowledge } = await import('../../knowledge.js');
-    const filePath = publishKnowledge(input, ctx.sourceGroup, KNOWLEDGE_DIR);
+    // Derive knowledgeDir from ctx.dataDir (not module-frozen DATA_DIR) so that
+    // tests with dataDir overrides don't pollute production data/agent-knowledge/.
+    // The 4-hour qmd update sync would otherwise index test fixtures into the
+    // BM25 corpus and surface them to live agent queries.
+    const knowledgeDir = path.join(ctx.dataDir, 'agent-knowledge');
+    const filePath = publishKnowledge(input, ctx.sourceGroup, knowledgeDir);
     logger.info(
       { sourceGroup: ctx.sourceGroup, topic: input.topic, filePath },
       'Knowledge entry published',
