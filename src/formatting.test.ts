@@ -650,8 +650,7 @@ describe('formatOutbound + channel.sendMessage pattern (audit regression guard)'
 
   it('strips <internal> blocks before transforming (agent reasoning never reaches channel)', async () => {
     const ch = makeMockChannel('telegram', ['tg:1']);
-    const raw =
-      '<internal>weighing options...</internal>**Result:** ship it';
+    const raw = '<internal>weighing options...</internal>**Result:** ship it';
     const formatted = formatOutbound(raw, ch.name as ChannelType);
     if (formatted) await ch.sendMessage('tg:1', formatted);
 
