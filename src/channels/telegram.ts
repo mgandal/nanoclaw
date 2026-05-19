@@ -16,6 +16,7 @@ import {
   classifySendError,
   trackTransientFailure,
 } from '../send-failure-tracker.js';
+import { parseTextStyles } from '../text-styles.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -397,20 +398,21 @@ export async function sendPoolMessage(
   const api = poolApis[idx];
   try {
     const numericId = chatId.replace(/^tg:/, '');
+    const formatted = parseTextStyles(text, 'telegram');
     const MAX_LENGTH = 4096;
-    if (text.length <= MAX_LENGTH) {
-      await sendTelegramMessage(api, numericId, text);
+    if (formatted.length <= MAX_LENGTH) {
+      await sendTelegramMessage(api, numericId, formatted);
     } else {
-      for (let i = 0; i < text.length; i += MAX_LENGTH) {
+      for (let i = 0; i < formatted.length; i += MAX_LENGTH) {
         await sendTelegramMessage(
           api,
           numericId,
-          text.slice(i, i + MAX_LENGTH),
+          formatted.slice(i, i + MAX_LENGTH),
         );
       }
     }
     logger.info(
-      { chatId, sender, poolIndex: idx, length: text.length },
+      { chatId, sender, poolIndex: idx, length: formatted.length },
       'Pool message sent',
     );
     return true;
@@ -458,8 +460,22 @@ export interface TelegramChannelOpts {
 
 /**
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
- * Claude's output naturally matches Telegram's Markdown v1 format:
- *   *bold*, _italic_, `code`, ```code blocks```, [links](url)
+ *
+ * Callers MUST pass text that is already normalized to Telegram Markdown v1:
+ *   *bold*, _italic_, `code`, ```code blocks```, [text](url)
+ *
+ * Normalization happens upstream via `parseTextStyles(text, 'telegram')` —
+ * either at the call site through `formatOutbound()` (see src/router.ts and
+ * the two dispatch loops in src/index.ts) or inside this channel for paths
+ * whose callers don't wrap (`sendPoolMessage`, `sendFile`). See
+ * docs/REQUIREMENTS.md → "Outbound text formatting" for the one-transform
+ * invariant. Do NOT add a transform call here without removing every upstream
+ * call — parseTextStyles is non-idempotent.
+ *
+ * TODO(future): migrate to MarkdownV2 for native strikethrough/spoiler/underline.
+ *   v2 requires escaping _ * [ ] ( ) ~ > # + - = | { } . ! in literal text and
+ *   URL escape inside [text](url). parseTextStyles would need a v2 target plus
+ *   an escaper applied to non-formatted spans. See docs/REQUIREMENTS.md.
  */
 async function sendTelegramMessage(
   api: { sendMessage: Api['sendMessage'] },
@@ -1073,9 +1089,12 @@ export class TelegramChannel implements Channel {
     try {
       const chatId = jid.replace(/^tg:/, '');
       const inputFile = new InputFile(filePath);
+      const formattedCaption = caption
+        ? parseTextStyles(caption, 'telegram')
+        : undefined;
       await this.bot.api.sendDocument(chatId, inputFile, {
-        caption,
-        parse_mode: caption ? 'Markdown' : undefined,
+        caption: formattedCaption,
+        parse_mode: formattedCaption ? 'Markdown' : undefined,
       });
       logger.info({ jid, filePath }, 'Telegram file sent');
     } catch (err) {

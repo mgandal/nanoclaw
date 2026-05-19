@@ -615,6 +615,66 @@ describe('formatOutbound — channel-aware', () => {
 import { routeOutbound, findChannel } from './router.js';
 import { Channel } from './types.js';
 
+// ---------------------------------------------------------------------------
+// Regression guard for the bypass-fix audit (2026-05-19).
+//
+// Six call sites in src/index.ts that used to call channel.sendMessage(jid, text)
+// directly now wrap with formatOutbound(text, channel.name as ChannelType).
+// We can't easily unit-test those exact call sites without booting the full
+// message loop, but we CAN lock in the runtime contract: when a caller follows
+// the documented pattern, raw Claude markdown arrives at the channel transformed.
+//
+// If any of those wraps gets removed, the pattern would still work in isolation
+// here — but the in-channel transforms (sendPoolMessage, sendFile) are guarded
+// by tests in src/channels/telegram.test.ts. Together they cover both halves of
+// the one-transform invariant documented in docs/REQUIREMENTS.md.
+// ---------------------------------------------------------------------------
+
+describe('formatOutbound + channel.sendMessage pattern (audit regression guard)', () => {
+  it('agent streaming reply pattern: raw Claude markdown → telegram-v1 at channel', async () => {
+    const ch = makeMockChannel('telegram', ['tg:1']);
+    const raw =
+      '## Project Apollo\n\n**Status:** *on track*\n\nNext: review PR #42';
+    const formatted = formatOutbound(raw, ch.name as ChannelType);
+    if (formatted) await ch.sendMessage('tg:1', formatted);
+
+    const sent = (ch as Channel & { _sent: { jid: string; text: string }[] })
+      ._sent;
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toContain('*Project Apollo*');
+    expect(sent[0].text).toContain('*Status:*');
+    expect(sent[0].text).toContain('_on track_');
+    expect(sent[0].text).not.toContain('**');
+    expect(sent[0].text).not.toContain('## ');
+  });
+
+  it('strips <internal> blocks before transforming (agent reasoning never reaches channel)', async () => {
+    const ch = makeMockChannel('telegram', ['tg:1']);
+    const raw =
+      '<internal>weighing options...</internal>**Result:** ship it';
+    const formatted = formatOutbound(raw, ch.name as ChannelType);
+    if (formatted) await ch.sendMessage('tg:1', formatted);
+
+    const sent = (ch as Channel & { _sent: { jid: string; text: string }[] })
+      ._sent;
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toBe('*Result:* ship it');
+    expect(sent[0].text).not.toContain('<internal>');
+    expect(sent[0].text).not.toContain('weighing options');
+  });
+
+  it('empty payload (all-internal) is suppressed, no send occurs', async () => {
+    const ch = makeMockChannel('telegram', ['tg:1']);
+    const raw = '<internal>private thought, no user-visible reply</internal>';
+    const formatted = formatOutbound(raw, ch.name as ChannelType);
+    if (formatted) await ch.sendMessage('tg:1', formatted);
+
+    const sent = (ch as Channel & { _sent: { jid: string; text: string }[] })
+      ._sent;
+    expect(sent).toHaveLength(0);
+  });
+});
+
 function makeMockChannel(
   name: string,
   ownedJids: string[],

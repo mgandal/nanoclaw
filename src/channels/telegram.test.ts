@@ -1163,6 +1163,81 @@ describe('pool pinning', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Telegram v1 markdown transform — ensures every send path that bypasses
+// formatOutbound still ships Telegram-compatible markdown.
+// Catches regressions like "agent ships **bold** raw → parse fails → plain
+// text fallback ships literal asterisks".
+// ---------------------------------------------------------------------------
+
+describe('telegram v1 markdown transform', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    botRef.poolApiInstances.length = 0;
+    _resetPoolStateForTests();
+  });
+
+  it('sendPoolMessage transforms **bold** → *bold* and headings → bold', async () => {
+    await initBotPool(['t1']);
+    const raw = '## Project Apollo\n**Status:** *on track*';
+    await sendPoolMessageFn('tg:12345', raw, 'Claire', 'g');
+    const sent = getBot('t1').sendMessage.mock.calls[0][1] as string;
+    expect(sent).toContain('*Project Apollo*');
+    expect(sent).toContain('*Status:*');
+    expect(sent).toContain('_on track_');
+    expect(sent).not.toContain('**');
+    expect(sent).not.toContain('## ');
+  });
+
+  it('TelegramChannel.sendFile transforms caption markdown', async () => {
+    const opts = createTestOpts();
+    const channel = new TelegramChannel('test-token', opts);
+    await channel.connect();
+
+    await channel.sendFile('tg:12345', '/tmp/file.pdf', '**Report:** *Q4*');
+
+    expect(botRef.apiMock.sendDocument).toHaveBeenCalledTimes(1);
+    const opts2 = botRef.apiMock.sendDocument.mock.calls[0][2] as {
+      caption?: string;
+      parse_mode?: string;
+    };
+    expect(opts2.caption).toBe('*Report:* _Q4_');
+    expect(opts2.parse_mode).toBe('Markdown');
+  });
+
+  it('TelegramChannel.sendFile sends no caption (and no parse_mode) when none given', async () => {
+    const opts = createTestOpts();
+    const channel = new TelegramChannel('test-token', opts);
+    await channel.connect();
+
+    await channel.sendFile('tg:12345', '/tmp/file.pdf');
+
+    const opts2 = botRef.apiMock.sendDocument.mock.calls[0][2] as {
+      caption?: string;
+      parse_mode?: string;
+    };
+    expect(opts2.caption).toBeUndefined();
+    expect(opts2.parse_mode).toBeUndefined();
+  });
+
+  it('TelegramChannel.sendMessage does NOT re-transform (boundary is callers via formatOutbound)', async () => {
+    // This guards against double-transform regressions: if we ever push the
+    // transform into TelegramChannel.sendMessage, _italic_ markers would be
+    // corrupted because parseTextStyles is not idempotent.
+    const opts = createTestOpts();
+    const channel = new TelegramChannel('test-token', opts);
+    await channel.connect();
+
+    await channel.sendMessage('tg:12345', '*already-v1-bold*');
+
+    expect(botRef.apiMock.sendMessage).toHaveBeenCalledWith(
+      '12345',
+      '*already-v1-bold*',
+      expect.objectContaining({ parse_mode: 'Markdown' }),
+    );
+  });
+});
+
 describe('getPoolBotForPersona', () => {
   beforeEach(() => {
     botRef.poolApiInstances.length = 0;

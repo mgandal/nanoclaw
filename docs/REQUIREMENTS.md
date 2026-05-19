@@ -132,6 +132,14 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
 - Messages stored in SQLite, polled by router
 - Channels self-register at startup — unconfigured channels are skipped with a warning
 
+#### Outbound text formatting
+- Claude's native Markdown is transformed per-channel by `parseTextStyles()` in `src/text-styles.ts` and applied via `formatOutbound()` in `src/router.ts`.
+- Telegram ships **Markdown v1** (`parse_mode: 'Markdown'`): `*bold*`, `_italic_`, `` `code` ``, ```` ```fences``` ````, `[text](url)`. Headings and tables are folded into bold / monospace blocks. **MarkdownV2 is not used today** — a future migration would need:
+  - An escaper for `_ * [ ] ( ) ~ > # + - = | { } . !` in literal text
+  - URL escaping inside `[text](url)`
+  - A v2 target in `parseTextStyles` and updates to citation/bullet helpers
+- All outbound text MUST pass through `formatOutbound` (or `parseTextStyles` directly inside a channel) exactly once. Double-transform corrupts `_italic_` markers — see `sendPoolMessage`/`TelegramChannel.sendFile` for the two cases where the transform lives inside the channel rather than at the call site.
+
 ### Scheduler
 - Built-in scheduler runs on the host, spawns containers for task execution
 - Custom `nanoclaw` MCP server (inside container) provides scheduling tools

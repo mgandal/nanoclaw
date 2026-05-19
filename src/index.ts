@@ -385,7 +385,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           registeredGroups[jid] = updatedGroup;
         },
       });
-      await channel.sendMessage(chatJid, reply);
+      const formattedReply = formatOutbound(reply, channel.name as ChannelType);
+      if (formattedReply) await channel.sendMessage(chatJid, formattedReply);
       lastAgentSeq[chatJid] = msg.seq;
       saveState();
       return true;
@@ -404,7 +405,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       deleteSession(group.folder);
       lastAgentSeq[chatJid] = missedMessages[missedMessages.length - 1].seq;
       saveState();
-      await channel.sendMessage(chatJid, 'Session cleared. Starting fresh.');
+      const newFormatted = formatOutbound(
+        'Session cleared. Starting fresh.',
+        channel.name as ChannelType,
+      );
+      if (newFormatted) await channel.sendMessage(chatJid, newFormatted);
       logger.info({ group: group.name }, 'Session reset via /new');
       return true;
     }
@@ -419,7 +424,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     triggerPattern: getTriggerPattern(group.trigger),
     timezone: TIMEZONE,
     deps: {
-      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      sendMessage: (text) => {
+        const formatted = formatOutbound(text, channel.name as ChannelType);
+        return formatted
+          ? channel.sendMessage(chatJid, formatted)
+          : Promise.resolve();
+      },
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
       runAgent: (prompt, onOutput) =>
@@ -551,7 +561,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               'Suppressing streaming output — IPC send_message already delivered to this chat',
             );
           } else {
-            await channel.sendMessage(chatJid, text);
+            const formatted = formatOutbound(text, channel.name as ChannelType);
+            if (formatted) await channel.sendMessage(chatJid, formatted);
           }
           outputSentToUser = true;
         }
@@ -1026,8 +1037,11 @@ async function sendSystemAlert(
         const opsCh = findChannel(channels, opsJid);
         if (opsCh) {
           try {
-            await opsCh.sendMessage(opsJid, text);
-            return;
+            const opsText = formatOutbound(text, opsCh.name as ChannelType);
+            if (opsText) {
+              await opsCh.sendMessage(opsJid, opsText);
+              return;
+            }
           } catch {
             // fall through
           }
@@ -1042,8 +1056,11 @@ async function sendSystemAlert(
         const tgCh = findChannel(channels, tgMainJid);
         if (tgCh) {
           try {
-            await tgCh.sendMessage(tgMainJid, text);
-            return;
+            const tgText = formatOutbound(text, tgCh.name as ChannelType);
+            if (tgText) {
+              await tgCh.sendMessage(tgMainJid, tgText);
+              return;
+            }
           } catch {
             // fall through
           }
@@ -1055,8 +1072,11 @@ async function sendSystemAlert(
       const slackCh = findChannel(channels, slackJid);
       if (slackCh) {
         try {
-          await slackCh.sendMessage(slackJid, text);
-          return;
+          const slackText = formatOutbound(text, slackCh.name as ChannelType);
+          if (slackText) {
+            await slackCh.sendMessage(slackJid, slackText);
+            return;
+          }
         } catch {
           // fall through
         }
@@ -1649,6 +1669,10 @@ async function main(): Promise<void> {
     const channel = findChannel(channels, chatJid);
     if (!channel) return;
 
+    const sendFormatted = async (raw: string) => {
+      const formatted = formatOutbound(raw, channel.name as ChannelType);
+      if (formatted) await channel.sendMessage(chatJid, formatted);
+    };
     if (command === '/remote-control') {
       const result = await startRemoteControl(
         msg.sender,
@@ -1656,19 +1680,16 @@ async function main(): Promise<void> {
         process.cwd(),
       );
       if (result.ok) {
-        await channel.sendMessage(chatJid, result.url);
+        await sendFormatted(result.url);
       } else {
-        await channel.sendMessage(
-          chatJid,
-          `Remote Control failed: ${result.error}`,
-        );
+        await sendFormatted(`Remote Control failed: ${result.error}`);
       }
     } else {
       const result = stopRemoteControl();
       if (result.ok) {
-        await channel.sendMessage(chatJid, 'Remote Control session ended.');
+        await sendFormatted('Remote Control session ended.');
       } else {
-        await channel.sendMessage(chatJid, result.error);
+        await sendFormatted(result.error);
       }
     }
   }
