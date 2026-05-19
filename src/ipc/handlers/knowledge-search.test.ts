@@ -196,6 +196,26 @@ describe('knowledgeSearchHandler.execute', () => {
     expect((result as any).result.message).toContain('-32000');
   });
 
+  it('ROUND-2 IMPORTANT #2 — bare envelope (no result, no error) → {success:false}, NOT silent {success:true,""}', async () => {
+    // Symmetric closure to the json.error guard. A malformed MCP response
+    // with neither `result` nor `error` (e.g., {"jsonrpc":"2.0","id":1})
+    // would otherwise silently fall through: json.result is undefined, the
+    // optional chain collapses to '', caller sees {success:true, results:''}.
+    // CRITICAL pin: this test must NOT regress the existing `{result:{}}`
+    // test at line 134-144, which represents a legitimate empty search
+    // (json.result is truthy, just has empty content).
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ jsonrpc: '2.0', id: 1 }),
+    } as any);
+    const input = knowledgeSearchHandler.parse({ query: 'q' })!;
+    const result = await knowledgeSearchHandler.execute(input, buildCtx());
+    expect((result as any).executed).toBe(true);
+    expect((result as any).result.success).toBe(false);
+    expect((result as any).result.message).toContain('malformed envelope');
+  });
+
   it('IMPORTANT #4 — AbortError (timeout) → "Knowledge search timed out", not opaque "operation was aborted"', async () => {
     // AbortSignal.timeout() throws a DOMException with name='AbortError'.
     // skill_search differentiates this in its catch (skills.ts:166-181) so

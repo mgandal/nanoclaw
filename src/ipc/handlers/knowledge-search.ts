@@ -114,6 +114,18 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
             (json.error.code !== undefined ? ` (code ${json.error.code})` : ''),
         );
       }
+      // ROUND-2 IMPORTANT #2: bare-envelope guard. The json.error guard above
+      // catches structured MCP errors, but a malformed envelope with neither
+      // `result` nor `error` (e.g., {"jsonrpc":"2.0","id":1}) would still
+      // silently fall through: json.result is undefined, the optional chain
+      // collapses to '', and the caller sees {success:true, results:''}.
+      // Symmetric closure to §4.2 + the json.error guard. Note: `{result:{}}`
+      // is intentionally NOT bare (json.result is truthy, just empty content)
+      // — that's a legitimate empty search and the test at
+      // knowledge-search.test.ts:134-144 pins that behavior.
+      if (!json.result) {
+        throw new Error('QMD returned malformed envelope (no result, no error)');
+      }
       const rawText = json.result?.content?.[0]?.text ?? '';
       logger.info(
         {
@@ -131,13 +143,17 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
       // Mirror skills.ts:166-181 so timeouts ("The operation was aborted") get
       // a self-explanatory message and the catch log carries requestId for
       // correlation with the agent-side IPC trace (feedback_ipc_log_requestid_shrink).
+      // ROUND-2 IMPORTANT #1: deliberately omit input.query from warn-level
+      // log — queries can contain PII (LAB-claw, CLINIC-claw, COACH-claw
+      // groups handle medical/clinical/personal data). The truncated query
+      // already lives in agent_actions.auditSummary (set at line 35) for
+      // forensic correlation; requestId joins this log to that row.
       const isTimeout =
         err instanceof DOMException && err.name === 'AbortError';
       logger.warn(
         {
           err,
           sourceGroup: ctx.sourceGroup,
-          query: input.query,
           requestId: ctx.requestId,
         },
         'knowledge_search QMD fetch failed',
