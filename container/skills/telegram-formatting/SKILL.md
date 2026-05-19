@@ -1,82 +1,60 @@
 ---
 name: telegram-formatting
-description: Format messages for Telegram using Markdown v1 syntax. Use when responding to Telegram channels (folder starts with "telegram_" or JID begins with "tg:"). Critical for digests, link-heavy replies, and any output that includes URLs or citations.
+description: Format messages for Telegram. NanoClaw preprocesses standard Markdown before sending — write standard Markdown, the host converts to Telegram syntax automatically.
 ---
 
-# Telegram Message Formatting (Markdown v1)
+# Telegram Message Formatting
 
-Telegram renders messages with `parse_mode: 'Markdown'` (v1, not MarkdownV2).
-Get this wrong and the user sees raw asterisks, broken citations, or bare `[N]`
-tokens with no clickable URL — every one of those has been a real complaint.
+## How it works
 
-## How to detect Telegram context
+NanoClaw runs `parseTextStyles(text, 'telegram')` on every outbound message **before** sending. This means:
 
-Check your group folder name or workspace path:
-- Folder starts with `telegram_` (e.g. `telegram_claire`, `telegram_lab-claw`)
-- Or JID begins with `tg:` (e.g. `tg:-1003892106437`)
+- Write **standard Markdown** — the host converts it to Telegram syntax
+- Do NOT write Telegram native syntax (`*single*` for bold) — you would be double-encoding
 
-## Formatting reference
+### Preprocessor mapping
 
-### Text styles
+| You write (standard Markdown) | Host sends to Telegram | Renders as |
+|-------------------------------|------------------------|------------|
+| `**text**`                    | `*text*`               | **bold**   |
+| `_text_` or `*text*`          | `_text_`               | _italic_   |
+| `[text](url)`                 | `[text](url)`          | clickable link |
+| `## Heading`                  | `*Heading*`            | bold       |
+| `` `code` ``                  | `` `code` ``           | inline code |
 
-| Style       | Syntax                | Notes                              |
-|-------------|-----------------------|------------------------------------|
-| Bold        | `*text*`              | Single asterisk, not double        |
-| Italic      | `_text_`              | Single underscore                  |
-| Inline code | `` `text` ``          | Backticks                          |
-| Code block  | ` ```text``` `        | Triple backticks, can include lang |
-| Link        | `[text](https://url)` | Native — Telegram makes it clickable |
+**Critical:** Single `*asterisks*` → _italic_, not bold. Always use `**double asterisks**` for bold.
 
-### Lists
+## Text styles reference
 
-Plain Markdown bullets render fine. Telegram does not have rich list semantics,
-so use `-` or `*` and keep them tight (see "Tight bullets" below).
+| Style       | What you write        | Notes                                               |
+|-------------|-----------------------|-----------------------------------------------------|
+| Bold        | `**text**`            | Double asterisk — preprocessor converts to Telegram bold |
+| Italic      | `_text_`              | Single underscore                                   |
+| Inline code | `` `text` ``          | Backticks                                           |
+| Code block  | ` ```text``` `        | Triple backticks, can include lang                  |
+| Link        | `[text](https://url)` | Pass-through — Telegram renders as clickable        |
 
-### Quotes
-
-Telegram Markdown v1 has no native blockquote — `>` lines render as literal
-`>` text. Use `_italic_` for emphasis on quoted material instead.
-
-## Critical rules (these are the bugs the user has flagged)
+## Critical rules
 
 ### 1. Always include the URL when one exists
 
-If you have a URL for a fact, citation, story, or link target, render it as a
-clickable Markdown link:
-
 GOOD: `[K-Dense scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills)`
 
-BAD:  `K-Dense scientific-agent-skills` (no URL — user has to search)
-BAD:  `[1]` followed by a URL on a separate line — looks like a stray bracket
-
-This applies to digest items, news summaries, paper references, and any tool/repo mention.
+BAD:  `K-Dense scientific-agent-skills` (no URL)
+BAD:  `[1]` followed by a URL on a separate line
 
 ### 2. Never emit bare `[N]` citation tokens followed by URLs
 
-Perplexity-style citations like:
+The host parser auto-rewraps `[N] Title  https://URL` into `*[N]* [Title](https://URL)` only if the URL is on the same line. If your citation has the URL on a separate line, the parser cannot recover the link.
 
-```
-[1] Project Title https://github.com/foo/bar
-[2] Other Title https://example.com
-```
-
-…must be rewritten as inline links before sending. The host parser will
-auto-rewrap a line of the form `[N] Title  https://URL` into
-`*[N]* [Title](https://URL)` for you, but only if the entire line follows that
-exact shape (digit-bracket → text → whitespace → URL → end-of-line). If your
-citation has the URL on a separate line, the parser cannot recover the link,
-and the user sees a useless `[1]` orphan. **Always put the URL on the same
-line as the `[N]` token.**
+**Always put the URL on the same line as the `[N]` token.**
 
 ### 3. Tight bullets — no blank lines between list items
-
-Digests and news summaries should render as a tight block:
 
 GOOD:
 ```
 - Story one — [link](https://a.com)
 - Story two — [link](https://b.com)
-- Story three — [link](https://c.com)
 ```
 
 BAD:
@@ -84,60 +62,32 @@ BAD:
 - Story one
 
 - Story two
-
-- Story three
 ```
-
-The host parser will collapse the blank lines for you, but it is still simpler
-and more reliable to emit a tight list in the first place.
 
 ### 4. No `#` / `##` headings
 
-Telegram does not render Markdown headings. The host parser converts them to
-`*bold*` for you, but it is cleaner to skip the `#` entirely and just use
-`*Section title*` for headers.
+Use `**Section title**` instead. The preprocessor converts `##` to bold, but it is cleaner to write it directly.
 
 ### 5. No tables
 
-Telegram has no table support. The host parser folds GFM tables into a
-fixed-width fenced code block, but tables read poorly in chat. Prefer a
-bullet list with `*Label:* value` per line.
-
-### 6. Bold and italic use single markers (not double)
-
-Use `*bold*` and `_italic_`. Never `**double-asterisk bold**` — that survives
-the parser as a literal `**` if anything trips up the regex.
+No table support in Telegram. Use bullets with `**Label:** value` per line instead.
 
 ## Example: a digest message
 
 ```
-*r/LocalLLaMA Daily Digest*
-
-- *Apple M3 Ultra benchmarks* — [thread](https://reddit.com/r/LocalLLaMA/...)
-- *DeepSeek V3 release notes* — [thread](https://reddit.com/r/LocalLLaMA/...)
-- *llama.cpp Metal speedups* — [thread](https://reddit.com/r/LocalLLaMA/...)
-
-*Sources*
-*[1]* [r/LocalLLaMA frontpage](https://reddit.com/r/LocalLLaMA)
-*[2]* [Hacker News thread](https://news.ycombinator.com/item?id=12345)
+**r/LocalLLaMA — 2026-05-19**
+• **[Apple M3 Ultra benchmarks](https://reddit.com/r/LocalLLaMA/...)** (↑1234)
+  Key finding from comments.
+• **[DeepSeek V3 release notes](https://reddit.com/r/LocalLLaMA/...)** (↑987)
+  What changed and why it matters.
 ```
 
 ## Quick checklist before sending to Telegram
 
-1. Every fact with a known URL has `[text](url)` — no orphan `[N]` markers.
-2. Bullet lists are tight (no blank lines between items).
-3. No `#` headings — `*bold*` instead.
-4. No tables — bullets with `*Label:* value`.
-5. Bold uses single `*`, italic uses single `_`.
+1. Bold uses `**double asterisks**` — never `*single*`.
+2. Every fact with a known URL has `[text](url)` — no orphan `[N]` markers.
+3. Bullet lists are tight (no blank lines between items).
+4. No `#` headings — `**bold**` instead.
+5. No tables — bullets with `**Label:** value`.
 6. Code blocks use triple backticks; inline code uses single backticks.
 
-## Notes for model-driven behavior (not enforced by the parser)
-
-These are habits the parser cannot fix automatically — the model has to do
-the right thing:
-
-- Pulling URLs from tool output and weaving them into prose with `[text](url)`.
-- Choosing concise link text (use the headline or repo name, not "click here").
-- Putting each Perplexity citation's URL on the same line as the `[N]` token.
-- For digests: prioritize the topics the user has asked about (e.g., MacBook
-  Pro ARM threads in r/LocalLLaMA digests).
