@@ -215,6 +215,11 @@ interface SkillInvokedInput {
 
 export const skillInvokedHandler: IpcHandler<SkillInvokedInput, void> = {
   type: 'skill_invoked',
+  // Explicit 'notify' (not omitted) makes the contract intent clear to
+  // future readers. DO NOT change to 'result' — the dispatcher would
+  // synthesize a {success:true} file alongside the SKILL.md mutation,
+  // surprising downstream consumers. See JSDoc above for full rationale.
+  responseKind: 'notify',
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;

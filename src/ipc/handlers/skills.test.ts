@@ -1036,6 +1036,18 @@ describe('crystallize_skill handler', () => {
         );
         // Override was refused — denyTmp must stay empty.
         expect(fs.readdirSync(denyTmp)).toEqual([]);
+        // Positive proof the env-gate routed to production AGENTS_DIR
+        // (rather than silently no-op'ing). Without this, a future bug
+        // that disables the entire execute path would pass test 19
+        // by virtue of denyTmp staying empty for the wrong reason.
+        const productionFile = path.join(
+          negAgentDir,
+          'skills',
+          'crystallized',
+          'skill-neg',
+          'SKILL.md',
+        );
+        expect(fs.existsSync(productionFile)).toBe(true);
       } finally {
         fs.rmSync(denyTmp, { recursive: true, force: true });
       }
