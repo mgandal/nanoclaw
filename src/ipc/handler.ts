@@ -326,7 +326,11 @@ export async function dispatchIpcAction(
   // allowlist. Either attribution is correct; we prefer the narrower.
   if (auth.postHocNotify === true && auth.skipGate === true) {
     logger.error(
-      { type: handler.type, sourceGroup: ctx.sourceGroup, agentName: ctx.agentName },
+      {
+        type: handler.type,
+        sourceGroup: ctx.sourceGroup,
+        agentName: ctx.agentName,
+      },
       'IPC handler combined postHocNotify with skipGate — contract violation',
     );
     if (ctx.agentName) {

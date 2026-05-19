@@ -532,7 +532,9 @@ describe('slack_dm handler', () => {
       user_id: 'U1',
       user_email: 'a@b.com',
     });
-    expect(slackDmHandler.parse({ text: 42, user_id: 1, user_email: true })).toEqual({
+    expect(
+      slackDmHandler.parse({ text: 42, user_id: 1, user_email: true }),
+    ).toEqual({
       text: undefined,
       user_id: undefined,
       user_email: undefined,
@@ -553,7 +555,12 @@ describe('slack_dm handler', () => {
   });
 
   it('authorize returns IpcAuthorization with literal notifySummary including 120-char slice', () => {
-    const ctx = buildContext(`${SOURCE_GROUP}--some-agent`, false, deps, dataDir);
+    const ctx = buildContext(
+      `${SOURCE_GROUP}--some-agent`,
+      false,
+      deps,
+      dataDir,
+    );
     const auth = slackDmHandler.authorize(
       {
         text: 'x'.repeat(200),
@@ -714,7 +721,13 @@ describe('slack_dm handler', () => {
     expect(readResult(SOURCE_GROUP, 'req-ok')).not.toBeNull();
     expect(
       fs.existsSync(
-        path.join(dataDir, 'ipc', SOURCE_GROUP, 'slack_dm_results', 'req-ok.json'),
+        path.join(
+          dataDir,
+          'ipc',
+          SOURCE_GROUP,
+          'slack_dm_results',
+          'req-ok.json',
+        ),
       ),
     ).toBe(false);
   });
@@ -747,7 +760,14 @@ describe('slack_dm handler', () => {
       );
 
       expect(
-        fs.existsSync(path.join(dataDir, 'ipc', `${SOURCE_GROUP}--${agentName}`, 'slack_results')),
+        fs.existsSync(
+          path.join(
+            dataDir,
+            'ipc',
+            `${SOURCE_GROUP}--${agentName}`,
+            'slack_results',
+          ),
+        ),
       ).toBe(false);
 
       const rows = getDb()
@@ -882,7 +902,9 @@ describe('slack_dm handler', () => {
         `${SOURCE_GROUP}--${agentName}`,
       );
 
-      expect(readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-notify')).not.toBeNull();
+      expect(
+        readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-notify'),
+      ).not.toBeNull();
 
       const rows = getDb()
         .prepare(
@@ -959,7 +981,9 @@ describe('slack_dm handler', () => {
         `${SOURCE_GROUP}--${agentName}`,
       );
 
-      expect(readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-auto')).not.toBeNull();
+      expect(
+        readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-auto'),
+      ).not.toBeNull();
 
       const rows = getDb()
         .prepare(
@@ -996,7 +1020,9 @@ describe('slack_dm handler', () => {
         `${SOURCE_GROUP}--${agentName}`,
       );
 
-      expect(readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-ask')).toBeNull();
+      expect(
+        readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-ask'),
+      ).toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
 
       const rows = getDb()

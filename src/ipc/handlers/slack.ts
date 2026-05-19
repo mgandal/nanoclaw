@@ -138,7 +138,10 @@ interface SlackDmInput {
 
 export const slackDmHandler: IpcHandler<
   SlackDmInput,
-  { executed: true; result: { success: boolean; message: string; data?: unknown } }
+  {
+    executed: true;
+    result: { success: boolean; message: string; data?: unknown };
+  }
 > = {
   type: 'slack_dm',
   responseKind: 'result',

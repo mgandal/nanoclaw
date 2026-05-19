@@ -1,13 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-} from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../db.js';
 import { DATA_DIR } from '../config.js';
@@ -129,11 +123,15 @@ describe('postHocNotify dispatcher behavior', () => {
       'actions:\n  audit_x: notify\n',
     );
 
-    const handler: IpcHandler<{ ok: boolean }, { executed: true; result: unknown }> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: unknown }
+    > = {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -141,7 +139,10 @@ describe('postHocNotify dispatcher behavior', () => {
         actionTypeOverride: 'audit_x',
         postHocNotify: true,
       }),
-      execute: () => ({ executed: true, result: { success: true, message: 'ok' } }),
+      execute: () => ({
+        executed: true,
+        result: { success: true, message: 'ok' },
+      }),
     };
     registerIpcHandler(handler);
 
@@ -163,11 +164,15 @@ describe('postHocNotify dispatcher behavior', () => {
       'actions:\n  audit_x: autonomous\n',
     );
 
-    const handler: IpcHandler<{ ok: boolean }, { executed: true; result: unknown }> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: unknown }
+    > = {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -193,11 +198,15 @@ describe('postHocNotify dispatcher behavior', () => {
       'actions:\n  audit_x: notify\n',
     );
 
-    const handler: IpcHandler<{ ok: boolean }, { executed: true; result: unknown }> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: unknown }
+    > = {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -205,7 +214,10 @@ describe('postHocNotify dispatcher behavior', () => {
         actionTypeOverride: 'audit_x',
         postHocNotify: true,
       }),
-      execute: () => ({ executed: true, result: { success: false, message: 'bridge 500' } }),
+      execute: () => ({
+        executed: true,
+        result: { success: false, message: 'bridge 500' },
+      }),
     };
     registerIpcHandler(handler);
 
@@ -223,11 +235,15 @@ describe('postHocNotify dispatcher behavior', () => {
       'actions:\n  audit_x: notify\n',
     );
 
-    const handler: IpcHandler<{ ok: boolean }, { executed: true; result: unknown }> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: unknown }
+    > = {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -262,11 +278,15 @@ describe('postHocNotify dispatcher behavior', () => {
       fileExistedAtSpyEntry = fs.existsSync(resultFile('req-5'));
     };
 
-    const handler: IpcHandler<{ ok: boolean }, { executed: true; result: unknown }> = {
+    const handler: IpcHandler<
+      { ok: boolean },
+      { executed: true; result: unknown }
+    > = {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -295,7 +315,8 @@ describe('postHocNotify dispatcher behavior', () => {
       type: 'wire_x',
       responseKind: 'result',
       resultsDirName: 'wire_x_results',
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
@@ -334,7 +355,8 @@ describe('postHocNotify dispatcher behavior', () => {
       // No responseKind — notify-kind. We do NOT actually want the
       // result-kind path to run; we want to prove the loud-deny fires
       // BEFORE the dispatcher reaches either branch.
-      parse: (raw) => (typeof raw === 'object' && raw !== null ? { ok: true } : null),
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
       authorize: () => ({
         target: 'target-x',
         notifySummary: 'did x',
