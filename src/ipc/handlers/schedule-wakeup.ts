@@ -64,6 +64,14 @@ export const scheduleWakeupHandler: IpcHandler<Input, ExecuteResult> = {
     let fireAt: string | null = null;
     if (hasFireAt) {
       if (typeof r.fire_at !== 'string') return null;
+      // Reject UTC ('Z'/'z') or timezone offset ('+HH:MM'/'-HH:MM') suffixes —
+      // fire_at must be a local-time ISO string. Mirrors the MCP tool's
+      // client-side check at container/agent-runner/src/ipc-mcp-stdio.ts:438
+      // so direct payload writes bypassing the MCP cannot get UTC parsing
+      // by accident.
+      if (/[Zz]$/.test(r.fire_at) || /[+-]\d{2}:\d{2}$/.test(r.fire_at)) {
+        return null;
+      }
       fireAt = r.fire_at;
     }
 
@@ -262,15 +270,29 @@ export const scheduleWakeupHandler: IpcHandler<Input, ExecuteResult> = {
     const deltaMinutes = Math.round(
       (new Date(input.precomputedNextRun!).getTime() - Date.now()) / 60_000,
     );
-    insertAgentAction({
-      agent_name: ctx.agentName!,
-      group_folder: ctx.baseGroup,
-      action_type: 'schedule_wakeup',
-      trust_level: 'skipGate',
-      summary: `wakeup ${input.wakeupId} in ${deltaMinutes}min: ${input.prompt.slice(0, 100)}`,
-      target: input.wakeupId,
-      outcome: 'allowed',
-    });
+    try {
+      insertAgentAction({
+        agent_name: ctx.agentName!,
+        group_folder: ctx.baseGroup,
+        action_type: 'schedule_wakeup',
+        trust_level: 'skipGate',
+        summary: `wakeup ${input.wakeupId} in ${deltaMinutes}min: ${input.prompt.slice(0, 100)}`,
+        target: input.wakeupId,
+        outcome: 'allowed',
+      });
+    } catch (auditErr) {
+      // Audit-row write failed AFTER successful INSERT. The wakeup row exists
+      // and will fire normally; only the forensic trail is missing. Log loud
+      // so we can find these in production. Do NOT rethrow — the user-visible
+      // outcome is success.
+      logger.warn(
+        {
+          wakeupId: input.wakeupId,
+          err: auditErr instanceof Error ? auditErr.message : String(auditErr),
+        },
+        'schedule_wakeup: audit-row write failed AFTER successful INSERT — forensic trail missing for this wakeup',
+      );
+    }
 
     logger.info(
       {

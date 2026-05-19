@@ -103,6 +103,30 @@ describe('scheduleWakeupHandler.parse', () => {
     ).toBeNull();
   });
 
+  it('returns null when fire_at has Z or timezone-offset suffix (must be local time)', () => {
+    expect(
+      scheduleWakeupHandler.parse({
+        wakeupId: 'wu-1-abc',
+        prompt: 'p',
+        fire_at: '2026-05-20T09:00:00Z',
+      }),
+    ).toBeNull();
+    expect(
+      scheduleWakeupHandler.parse({
+        wakeupId: 'wu-1-abc',
+        prompt: 'p',
+        fire_at: '2026-05-20T09:00:00+05:00',
+      }),
+    ).toBeNull();
+    expect(
+      scheduleWakeupHandler.parse({
+        wakeupId: 'wu-1-abc',
+        prompt: 'p',
+        fire_at: '2026-05-20T09:00:00-08:00',
+      }),
+    ).toBeNull();
+  });
+
   it('returns valid input with defaults for minimal payload', () => {
     const result = scheduleWakeupHandler.parse({
       wakeupId: 'wu-1-abc',
@@ -463,5 +487,62 @@ describe('scheduleWakeupHandler integration (via dispatchIpcAction)', () => {
     const audits = getAuditRows();
     expect(audits).toHaveLength(1);
     expect(audits[0].outcome).toBe('denied_rate_limit');
+  });
+
+  it('rate limit enforced through compound-key roundtrip (11 dispatches, 11th denied)', async () => {
+    // Regression guard: the existing rate-limit test (above) seeds rows via
+    // createWakeupTask directly, which bypasses parseCompoundKey. If that
+    // parser ever returns a different agent_name than what's stored, the
+    // rate cap silently fails. This test drives all 11 wakeups through
+    // dispatchIpcAction so creation AND counting use the same identity path.
+    const ctx = buildContext(
+      `telegram_claire--${agentName}`,
+      true,
+      deps,
+      dataDir,
+    );
+
+    // Dispatch 10 valid wakeups — all should land.
+    for (let i = 0; i < 10; i++) {
+      const result = await dispatchIpcAction(
+        {
+          type: 'schedule_wakeup',
+          wakeupId: `wu-roundtrip-${i}`,
+          prompt: 'p',
+          delay_minutes: 30,
+        },
+        ctx,
+      );
+      expect(result.handled).toBe(true);
+    }
+
+    // Confirm we're at the cap.
+    const placedRows = _getTestDb()
+      .prepare(
+        "SELECT COUNT(*) AS cnt FROM scheduled_tasks WHERE kind='agent_wakeup' AND group_folder=? AND agent_name=?",
+      )
+      .get('telegram_claire', agentName) as { cnt: number };
+    expect(placedRows.cnt).toBe(10);
+
+    // The 11th should be denied.
+    const result = await dispatchIpcAction(
+      {
+        type: 'schedule_wakeup',
+        wakeupId: 'wu-roundtrip-11',
+        prompt: 'p',
+        delay_minutes: 30,
+      },
+      ctx,
+    );
+    expect(result.handled).toBe(true);
+    expect(getTaskById('wu-roundtrip-11')).toBeUndefined();
+
+    // Find the denied row in agent_actions.
+    const deniedRow = _getTestDb()
+      .prepare(
+        "SELECT outcome FROM agent_actions WHERE action_type='schedule_wakeup' AND target=?",
+      )
+      .get('wu-roundtrip-11') as { outcome: string } | undefined;
+    expect(deniedRow?.outcome).toBe('denied_rate_limit');
   });
 });
