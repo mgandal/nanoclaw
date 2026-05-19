@@ -365,7 +365,8 @@ export const saveSkillHandler: IpcHandler<
     const r = raw as Record<string, unknown>;
     return {
       skillName: typeof r.skillName === 'string' ? r.skillName : undefined,
-      skillContent: typeof r.skillContent === 'string' ? r.skillContent : undefined,
+      skillContent:
+        typeof r.skillContent === 'string' ? r.skillContent : undefined,
     };
   },
 
@@ -435,11 +436,20 @@ export const saveSkillHandler: IpcHandler<
     }
 
     try {
-      const skillDir = path.join(process.cwd(), 'container', 'skills', input.skillName);
+      const skillDir = path.join(
+        process.cwd(),
+        'container',
+        'skills',
+        input.skillName,
+      );
       fs.mkdirSync(skillDir, { recursive: true });
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), input.skillContent);
       logger.info(
-        { skillName: input.skillName, sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
+        {
+          skillName: input.skillName,
+          sourceGroup: ctx.sourceGroup,
+          requestId: ctx.requestId,
+        },
         'Container skill saved permanently via IPC',
       );
       return {
@@ -502,8 +512,10 @@ export const crystallizeSkillHandler: IpcHandler<
     return {
       agent: typeof r.agent === 'string' ? r.agent : undefined,
       name: typeof r.name === 'string' ? r.name : undefined,
-      description: typeof r.description === 'string' ? r.description : undefined,
-      source_task: typeof r.source_task === 'string' ? r.source_task : undefined,
+      description:
+        typeof r.description === 'string' ? r.description : undefined,
+      source_task:
+        typeof r.source_task === 'string' ? r.source_task : undefined,
       body: typeof r.body === 'string' ? r.body : undefined,
       confidence: typeof r.confidence === 'number' ? r.confidence : NaN,
       agentsRoot: typeof r.agentsRoot === 'string' ? r.agentsRoot : undefined,
@@ -549,7 +561,10 @@ export const crystallizeSkillHandler: IpcHandler<
       );
       return {
         executed: true,
-        result: { success: false, message: 'Invalid crystallize_skill payload.' },
+        result: {
+          success: false,
+          message: 'Invalid crystallize_skill payload.',
+        },
       };
     }
 
@@ -587,7 +602,10 @@ export const crystallizeSkillHandler: IpcHandler<
         '---',
         '',
       ].join('\n');
-      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), frontmatter + input.body);
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        frontmatter + input.body,
+      );
 
       const logLine =
         JSON.stringify({

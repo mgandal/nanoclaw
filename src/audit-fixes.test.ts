@@ -365,22 +365,13 @@ describe('Gmail credentials mount', () => {
 });
 
 // ─────────────────────────────────────────────────
-// 14. save_skill IPC must require isMain
+// 14. save_skill IPC must require isMain — MIGRATED (Batch 2G Task 11)
 // ─────────────────────────────────────────────────
-describe('save_skill IPC authorization', () => {
-  it('FIX: save_skill handler must check isMain before processing', () => {
-    const source = fs.readFileSync(
-      path.join(process.cwd(), 'src/ipc.ts'),
-      'utf-8',
-    );
-    // The save_skill block must contain an isMain check
-    const saveSkillBlock = source.slice(
-      source.indexOf("data.type === 'save_skill'"),
-      source.indexOf("data.type === 'save_skill'") + 300,
-    );
-    expect(saveSkillBlock).toContain('isMain');
-  });
-});
+// The save_skill handler moved from src/ipc.ts (legacy if-ladder) to
+// src/ipc/handlers/skills.ts (registry handler with skipGate: true).
+// The isMain check now lives at src/ipc/handlers/skills.ts (saveSkillHandler
+// + crystallizeSkillHandler each `if (!ctx.isMain) return null`). Behavior
+// coverage moved to src/ipc/handlers/skills.test.ts.
 
 // ─────────────────────────────────────────────────
 // 15. MessageStream race condition fix

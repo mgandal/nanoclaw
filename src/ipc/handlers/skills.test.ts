@@ -558,7 +558,10 @@ describe('save_skill handler', () => {
       `${requestId}.json`,
     );
     if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<
+      string,
+      unknown
+    >;
   };
 
   it('1. parse returns null for non-object input', () => {
@@ -570,7 +573,9 @@ describe('save_skill handler', () => {
     expect(
       saveSkillHandler.parse({ skillName: 'foo', skillContent: 'body' }),
     ).toEqual({ skillName: 'foo', skillContent: 'body' });
-    expect(saveSkillHandler.parse({ skillName: 42, skillContent: true })).toEqual({
+    expect(
+      saveSkillHandler.parse({ skillName: 42, skillContent: true }),
+    ).toEqual({
       skillName: undefined,
       skillContent: undefined,
     });
@@ -696,9 +701,17 @@ describe('save_skill handler', () => {
       executed: true,
       result: { success: true, message: 'Skill "my-skill" saved permanently.' },
     });
-    const file = path.join(cwdTmp, 'container', 'skills', 'my-skill', 'SKILL.md');
+    const file = path.join(
+      cwdTmp,
+      'container',
+      'skills',
+      'my-skill',
+      'SKILL.md',
+    );
     expect(fs.existsSync(file)).toBe(true);
-    expect(fs.readFileSync(file, 'utf-8')).toBe('---\nname: my-skill\n---\nbody');
+    expect(fs.readFileSync(file, 'utf-8')).toBe(
+      '---\nname: my-skill\n---\nbody',
+    );
   });
 
   it('11. integration: agent main caller writes SKILL.md, no audit row, no pending_actions (preserve-bypass)', async () => {
@@ -757,14 +770,21 @@ describe('save_skill handler', () => {
       false,
     );
 
-    const skillResultsDir = path.join(dataDir, 'ipc', SOURCE_GROUP, 'skill_results');
+    const skillResultsDir = path.join(
+      dataDir,
+      'ipc',
+      SOURCE_GROUP,
+      'skill_results',
+    );
     const entries = fs.existsSync(skillResultsDir)
       ? fs.readdirSync(skillResultsDir)
       : [];
     expect(entries).toEqual([]);
 
     expect(
-      fs.existsSync(path.join(cwdTmp, 'container', 'skills', 'should-not-save')),
+      fs.existsSync(
+        path.join(cwdTmp, 'container', 'skills', 'should-not-save'),
+      ),
     ).toBe(false);
   });
 });
@@ -809,7 +829,9 @@ describe('crystallize_skill handler', () => {
     };
 
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crystallize-test-'));
-    agentsTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'crystallize-agents-'));
+    agentsTmpRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'crystallize-agents-'),
+    );
   });
 
   afterEach(() => {
@@ -926,7 +948,10 @@ describe('crystallize_skill handler', () => {
     const r = crystallizeSkillHandler.execute(input, ctx);
     expect(r).toMatchObject({
       executed: true,
-      result: { success: true, message: 'Crystallized skill "skill1" saved for agent1.' },
+      result: {
+        success: true,
+        message: 'Crystallized skill "skill1" saved for agent1.',
+      },
     });
 
     const file = path.join(
@@ -966,7 +991,9 @@ describe('crystallize_skill handler', () => {
   });
 
   it('18. agentsRoot positive: vitest env honors override → writes land in tmpdir', () => {
-    expect(process.env.VITEST === 'true' || process.env.NODE_ENV === 'test').toBe(true);
+    expect(
+      process.env.VITEST === 'true' || process.env.NODE_ENV === 'test',
+    ).toBe(true);
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     crystallizeSkillHandler.execute(
       {
@@ -982,7 +1009,14 @@ describe('crystallize_skill handler', () => {
     );
     expect(
       fs.existsSync(
-        path.join(agentsTmpRoot, 'agent-pos', 'skills', 'crystallized', 'skill-pos', 'SKILL.md'),
+        path.join(
+          agentsTmpRoot,
+          'agent-pos',
+          'skills',
+          'crystallized',
+          'skill-pos',
+          'SKILL.md',
+        ),
       ),
     ).toBe(true);
   });
@@ -999,7 +1033,9 @@ describe('crystallize_skill handler', () => {
       delete process.env.VITEST;
       process.env.NODE_ENV = 'production';
       const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
-      const denyTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crystallize-deny-'));
+      const denyTmp = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'crystallize-deny-'),
+      );
       try {
         crystallizeSkillHandler.execute(
           {
@@ -1066,9 +1102,18 @@ describe('crystallize_skill handler', () => {
   });
 
   it('21. integration: non-main dispatch silently blocks, no SKILL.md written, no result file', async () => {
-    await dispatch(validInput({ agent: 'crystal-target-nonmain' }), SOURCE_GROUP, false);
+    await dispatch(
+      validInput({ agent: 'crystal-target-nonmain' }),
+      SOURCE_GROUP,
+      false,
+    );
 
-    const skillResultsDir = path.join(dataDir, 'ipc', SOURCE_GROUP, 'skill_results');
+    const skillResultsDir = path.join(
+      dataDir,
+      'ipc',
+      SOURCE_GROUP,
+      'skill_results',
+    );
     const entries = fs.existsSync(skillResultsDir)
       ? fs.readdirSync(skillResultsDir)
       : [];
