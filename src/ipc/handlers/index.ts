@@ -11,7 +11,12 @@ import {
 import { kgQueryHandler } from './kg-query.js';
 import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 import { slackDmReadHandler, slackDmHandler } from './slack.js';
-import { skillSearchHandler, skillInvokedHandler } from './skills.js';
+import {
+  skillSearchHandler,
+  skillInvokedHandler,
+  saveSkillHandler,
+  crystallizeSkillHandler,
+} from './skills.js';
 import {
   taskAddHandler,
   taskCloseHandler,
@@ -63,6 +68,8 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(slackDmHandler);
   registerIpcHandler(skillSearchHandler);
   registerIpcHandler(skillInvokedHandler);
+  registerIpcHandler(saveSkillHandler);
+  registerIpcHandler(crystallizeSkillHandler);
   registered = true;
 }
 

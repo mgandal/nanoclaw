@@ -18,7 +18,7 @@ import { gateAndStage, fireNotifyIfRequested } from './trust-gate.js';
  * the addition. Mutating actions must go through the gate; the dispatcher
  * rejects `skipGate: true` from off-allowlist handlers.
  */
-const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
+export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   // Read-only
   'dashboard_query',
   'kg_query',
