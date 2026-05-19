@@ -954,22 +954,11 @@ export async function processTaskIpc(
       // above (dispatchIpcAction).
       // imessage_* migrated to src/ipc/handlers/imessage.ts — dispatched
       // via the IpcHandler registry above (dispatchIpcAction).
-      // slack_dm_read migrated to src/ipc/handlers/slack.ts — dispatched
-      // via the IpcHandler registry above (dispatchIpcAction). slack_dm
-      // remains in the if-ladder below pending Batch 2F.1 (contract
-      // widening for post-hoc-notify-after-result hybrids).
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        data.type === 'slack_dm'
-      ) {
-        handled = await handleSlackDmIpc(
-          data as Record<string, unknown>,
-          sourceGroup,
-          isMain,
-          { registeredGroups, deps },
-        );
-      }
+      // slack_dm_read AND slack_dm migrated to src/ipc/handlers/slack.ts —
+      // both dispatched via the IpcHandler registry above
+      // (dispatchIpcAction). slack_dm uses postHocNotify: true (added in
+      // Batch 2F.1) to fire a Telegram notify after the result file is
+      // written.
       if (
         !handled &&
         typeof data.type === 'string' &&
@@ -1068,129 +1057,6 @@ export async function processTaskIpc(
         logger.warn({ type: data.type }, 'Unknown IPC task type');
       }
     }
-  }
-}
-
-export async function handleSlackDmIpc(
-  data: Record<string, unknown>,
-  sourceGroup: string,
-  _isMain: boolean,
-  notifyContext?: {
-    registeredGroups: Record<string, { isMain?: boolean; name?: string }>;
-    deps: { sendMessage: (jid: string, text: string) => Promise<void> | void };
-  },
-): Promise<boolean> {
-  // Trust enforcement: extract agent name from compound key. Uses the
-  // shared checkTrustAndStage helper so draft/ask levels stage in
-  // pending_actions (C13 task 13), matching the send_message contract.
-  const baseKey = fsPathToCompoundKey(sourceGroup);
-  const { group: baseGroupFolder, agent: agentName } =
-    parseCompoundKey(baseKey);
-  let slackNotify = false;
-  if (agentName) {
-    const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
-    const decision = checkTrustAndStage({
-      agentName,
-      groupFolder: baseGroupFolder,
-      actionType: 'send_slack_dm',
-      summary: (data.text as string) || '',
-      target: (data.user_email as string) || (data.user_id as string) || '',
-      payloadForStaging: {
-        type: 'slack_dm',
-        requestId: data.requestId,
-        text: data.text,
-        user_id: data.user_id,
-        user_email: data.user_email,
-      },
-      trust,
-    });
-    if (!decision.allowed) return true;
-    slackNotify = decision.notify;
-  }
-
-  const requestId = data.requestId as string | undefined;
-  if (!requestId || !/^[A-Za-z0-9_-]{1,64}$/.test(requestId)) {
-    logger.warn({ data }, 'slack_dm IPC invalid requestId');
-    return true;
-  }
-
-  const resultsDir = path.join(DATA_DIR, 'ipc', sourceGroup, 'slack_results');
-  fs.mkdirSync(resultsDir, { recursive: true });
-
-  const writeResult = (result: {
-    success: boolean;
-    message: string;
-    data?: unknown;
-  }) => {
-    const resultFile = path.join(resultsDir, `${requestId}.json`);
-    const tmpFile = `${resultFile}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(result));
-    fs.renameSync(tmpFile, resultFile);
-  };
-
-  try {
-    const userId = data.user_id as string | undefined;
-    const userEmail = data.user_email as string | undefined;
-    const text = data.text as string | undefined;
-
-    if (!text || (!userId && !userEmail)) {
-      writeResult({
-        success: false,
-        message:
-          'Missing required parameters: text and either user_id or user_email',
-      });
-      return true;
-    }
-
-    const body: Record<string, string> = { text };
-    if (userId) body.user_id = userId;
-    if (userEmail) body.user_email = userEmail;
-
-    const response = await fetch('http://127.0.0.1:19876/slack/dm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    const result = (await response.json()) as Record<string, unknown>;
-
-    if (response.ok) {
-      writeResult({
-        success: true,
-        message: (result.message as string) || 'Slack DM sent',
-        data: result,
-      });
-      if (notifyContext) {
-        await firePostHocNotify({
-          notify: slackNotify,
-          agentName: agentName || null,
-          actionType: 'send_slack_dm',
-          summary: `Slack DM → ${userEmail || userId || '?'}: ${(text || '').slice(0, 120)}`,
-          target: userEmail || userId,
-          registeredGroups: notifyContext.registeredGroups,
-          deps: notifyContext.deps,
-        });
-      }
-    } else {
-      writeResult({
-        success: false,
-        message:
-          (result.error as string) || `Bridge returned ${response.status}`,
-      });
-    }
-
-    logger.info(
-      { requestId, sourceGroup, userId, userEmail },
-      'slack_dm IPC handled',
-    );
-    return true;
-  } catch (err) {
-    logger.error({ err, requestId }, 'slack_dm IPC error');
-    writeResult({
-      success: false,
-      message: `Error: ${err instanceof Error ? err.message : String(err)}`,
-    });
-    return true;
   }
 }
 

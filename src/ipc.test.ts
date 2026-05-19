@@ -17,7 +17,6 @@ import {
   processTaskIpc,
   processIpcMessage,
   deliverSendMessage,
-  handleSlackDmIpc,
   isSenderAllowedForPool,
   isSendFileExtensionAllowed,
   scanIpcGroupFolders,
@@ -3643,107 +3642,12 @@ describe('deploy_mini_app trust enforcement (C13)', () => {
   });
 });
 
-// --- C13: send_slack_dm trust enforcement for agent callers ---
-
-describe('send_slack_dm trust enforcement (C13)', () => {
-  const TEST_AGENT = 'c13-slack-agent';
-  let agentDir: string;
-  let fetchSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    agentDir = path.join(DATA_DIR, 'agents', TEST_AGENT);
-    fs.mkdirSync(agentDir, { recursive: true });
-    // Bridge call happens over localhost — stub fetch so we can both observe
-    // it and avoid any real network hit during tests.
-    fetchSpy = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ message: 'sent' }),
-    });
-    vi.stubGlobal('fetch', fetchSpy);
-  });
-
-  afterEach(() => {
-    fs.rmSync(agentDir, { recursive: true, force: true });
-    vi.unstubAllGlobals();
-  });
-
-  const slackData = {
-    type: 'slack_dm',
-    requestId: 'req-slack-c13-1',
-    text: 'hello',
-    user_email: 'peer@example.com',
-  };
-
-  it('delivers immediately when trust.yaml says autonomous', async () => {
-    fs.writeFileSync(
-      path.join(agentDir, 'trust.yaml'),
-      'actions:\n  send_slack_dm: autonomous\n',
-    );
-
-    await handleSlackDmIpc(
-      slackData as unknown as Record<string, unknown>,
-      `telegram_other--${TEST_AGENT}`,
-      false,
-    );
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('stages for approval when trust.yaml says draft', async () => {
-    const { listPendingActions } = await import('./db.js');
-    fs.writeFileSync(
-      path.join(agentDir, 'trust.yaml'),
-      'actions:\n  send_slack_dm: draft\n',
-    );
-
-    await handleSlackDmIpc(
-      slackData as unknown as Record<string, unknown>,
-      `telegram_other--${TEST_AGENT}`,
-      false,
-    );
-
-    expect(fetchSpy).not.toHaveBeenCalled();
-
-    const pending = listPendingActions({ groupFolder: 'telegram_other' });
-    expect(pending).toHaveLength(1);
-    expect(pending[0].action_type).toBe('send_slack_dm');
-    expect(pending[0].agent_name).toBe(TEST_AGENT);
-
-    const payload = JSON.parse(pending[0].payload_json);
-    expect(payload.text).toBe('hello');
-    expect(payload.user_email).toBe('peer@example.com');
-    expect(payload.requestId).toBe('req-slack-c13-1');
-  });
-
-  it('stages on ask (no policy listed, unknown default)', async () => {
-    const { listPendingActions } = await import('./db.js');
-    fs.writeFileSync(
-      path.join(agentDir, 'trust.yaml'),
-      'actions:\n  send_message: notify\n',
-    );
-
-    await handleSlackDmIpc(
-      slackData as unknown as Record<string, unknown>,
-      `telegram_other--${TEST_AGENT}`,
-      false,
-    );
-
-    expect(fetchSpy).not.toHaveBeenCalled();
-    const pending = listPendingActions({ groupFolder: 'telegram_other' });
-    expect(pending).toHaveLength(1);
-    expect(pending[0].action_type).toBe('send_slack_dm');
-  });
-
-  it('bypasses trust for non-agent (main-group) callers', async () => {
-    await handleSlackDmIpc(
-      slackData as unknown as Record<string, unknown>,
-      'telegram_main',
-      true,
-    );
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-  });
-});
+// C13: send_slack_dm trust enforcement moved to src/ipc/handlers/slack.test.ts
+// (autonomous → 'agent + send_slack_dm:autonomous + bridge 200 ...',
+//  draft  → covered by trust-enforcement's checkTrustAndStage tests,
+//  ask    → 'agent + send_slack_dm:ask → no file, audit row outcome=staged',
+//  non-agent main → 'non-agent caller dispatches to bridge with no audit row
+//   and no notify (replaces C13 non-agent test)').
 
 // --- C13: write_agent_state trust enforcement for agent callers ---
 
