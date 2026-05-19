@@ -22,6 +22,7 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   // Read-only
   'dashboard_query',
   'kg_query',
+  'knowledge_search',
   'pageindex_fetch',
   'task_list',
   'slack_dm_read',

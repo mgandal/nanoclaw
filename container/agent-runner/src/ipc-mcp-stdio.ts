@@ -819,8 +819,9 @@ Returns: "Group <name> registered. It will start receiving messages immediately.
 
 const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
 const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
-const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
 const KG_RESULTS_DIR = path.join(IPC_DIR, 'kg_results');
+const KNOWLEDGE_RESULTS_DIR = path.join(IPC_DIR, 'knowledge_results');
+const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
 const TASK_RESULTS_DIR = path.join(IPC_DIR, 'task_results');
 
 async function waitForIpcResult(
@@ -1939,32 +1940,47 @@ Returns: "Published knowledge: <topic>". BM25 search is available within ~30 sec
   },
 );
 
-// knowledge_search — search the shared knowledge base
+// knowledge_search — REAL handler (replaces the prior redirect-stub).
 server.tool(
   'knowledge_search',
-  `Helper that returns an instruction for how to search the shared knowledge base via qmd. Does NOT perform the search itself.
+  `Search the shared cross-group knowledge base for findings published by any agent.
 
-Use when: you want a reminder of the correct qmd invocation for the agent-knowledge collection.
-Prefer calling qmd directly when: you already know the qmd query interface — this tool only reformats your query into a qmd call.
+Use when: you need to know what any agent has previously discovered about a topic — across all groups, all agents. Returns structured findings with their source, confidence rating, publishing agent, and date.
 
-Inputs: query (required), from_agent (optional filter), topic (optional filter).
+Do not use for:
+- Searching the general document vault (use mcp__qmd__query with collection "vault").
+- Searching your own agent memory (read /workspace/agents/{you}/memory.md directly).
+- Real-time coordination with another agent (use publish_to_bus).
+- Searching emails, calendar, or notes (use Gmail MCP, calendar tools, or Apple Notes MCP).
 
-Returns: text instructing which qmd call to make next. You must then call qmd to get actual results.`,
+Inputs:
+- query: natural language description of what you want to know. Example: "chromatin accessibility APA TF binding".
+- max_results: results to return (default 5, max 20). Increase for exploratory searches.
+
+Returns: JSON from QMD with matching findings including topic, body, evidence, confidence, agent provenance, and date. Returns { success: false, message } if QMD is unreachable. 15-second timeout.`,
   {
-    query: z.string().describe('Semantic search query'),
-    from_agent: z.string().optional().describe('Restrict to findings published by this agent'),
-    topic: z.string().optional().describe('Restrict to findings with this topic'),
+    query: z.string().describe('Natural language query — what do you want to know?'),
+    max_results: z.number().int().min(1).max(20).optional().describe('Results to return (default 5, max 20)'),
   },
   async (args) => {
-    return {
-      content: [{
-        type: 'text' as const,
-        text:
-          `To search shared knowledge, use the qmd tool with collection "agent-knowledge" and query: "${args.query}". ` +
-          (args.from_agent ? `Filter by agent: ${args.from_agent}. ` : '') +
-          (args.topic ? `Filter by topic: ${args.topic}.` : ''),
-      }],
-    };
+    const requestId = `ks-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'knowledge_search',
+      query: args.query,
+      max_results: args.max_results ?? 5,
+      requestId,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+    const result = await waitForIpcResult(KNOWLEDGE_RESULTS_DIR, requestId, 15_000);
+    if (!result || !(result as { success?: boolean }).success) {
+      const msg =
+        (result as { message?: string })?.message ??
+        'No matching findings (or QMD unavailable).';
+      return { content: [{ type: 'text' as const, text: msg }], isError: true };
+    }
+    const resultsText = (result as { results?: string }).results ?? '[]';
+    return { content: [{ type: 'text' as const, text: resultsText }] };
   },
 );
 

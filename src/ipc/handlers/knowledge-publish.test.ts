@@ -19,7 +19,9 @@ vi.mock('child_process', async () => {
 import { knowledgePublishHandler } from './knowledge-publish.js';
 import type { IpcHandlerContext } from '../handler.js';
 
-function buildCtx(overrides: Partial<IpcHandlerContext> = {}): IpcHandlerContext {
+function buildCtx(
+  overrides: Partial<IpcHandlerContext> = {},
+): IpcHandlerContext {
   return {
     sourceGroup: 'telegram_claire',
     isMain: true,
@@ -38,35 +40,54 @@ function buildCtx(overrides: Partial<IpcHandlerContext> = {}): IpcHandlerContext
 describe('knowledgePublishHandler.parse with confidence', () => {
   it('extracts confidence: 7 from raw payload', () => {
     const result = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 7,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 7,
     });
     expect((result as any).confidence).toBe(7);
   });
 
   it('defaults confidence to 5 when field is missing', () => {
     const result = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [],
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
     });
     expect((result as any).confidence).toBe(5);
   });
 
   it('normalizes confidence: 0 to 5 (out-of-range)', () => {
     const result = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 0,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 0,
     });
     expect((result as any).confidence).toBe(5);
   });
 
   it('normalizes confidence: 11 to 5 (out-of-range)', () => {
     const result = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 11,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 11,
     });
     expect((result as any).confidence).toBe(5);
   });
 
   it('normalizes confidence: 7.5 to 5 (non-integer)', () => {
     const result = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 7.5,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 7.5,
     });
     expect((result as any).confidence).toBe(5);
   });
@@ -88,7 +109,11 @@ describe('knowledgePublishHandler.execute fires QMD update', () => {
 
   it('execute fires execFile(qmd update agent-knowledge) after publishKnowledge completes', async () => {
     const input = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 8,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 8,
     });
     await knowledgePublishHandler.execute!(input as any, buildCtx());
     expect(mockExecFile).toHaveBeenCalled();
@@ -113,7 +138,11 @@ describe('knowledgePublishHandler.execute fires QMD update', () => {
       },
     );
     const input = knowledgePublishHandler.parse({
-      topic: 't', finding: 'f', evidence: 'e', tags: [], confidence: 8,
+      topic: 't',
+      finding: 'f',
+      evidence: 'e',
+      tags: [],
+      confidence: 8,
     });
     // Should NOT throw despite the subprocess error
     await expect(

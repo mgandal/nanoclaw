@@ -24,6 +24,7 @@ import {
   taskReopenHandler,
 } from './tasks.js';
 import { knowledgePublishHandler } from './knowledge-publish.js';
+import { knowledgeSearchHandler } from './knowledge-search.js';
 import { pauseTaskHandler } from './pause-task.js';
 import { publishToBusHandler } from './publish-to-bus.js';
 import { refreshGroupsHandler } from './refresh-groups.js';
@@ -49,6 +50,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(registerGroupHandler);
   registerIpcHandler(publishToBusHandler);
   registerIpcHandler(knowledgePublishHandler);
+  registerIpcHandler(knowledgeSearchHandler);
   registerIpcHandler(writeAgentMemoryHandler);
   registerIpcHandler(writeAgentStateHandler);
   registerIpcHandler(dashboardQueryHandler);

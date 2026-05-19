@@ -468,4 +468,80 @@ describe('postHocNotify dispatcher behavior', () => {
     expect(rows[0].action_type).toBe('wire_off_allowlist');
     expect(rows[0].outcome).toBe('denied_contract_violation');
   });
+
+  // ---- Test 9: knowledge_search-style on-allowlist skipGate → execute runs ----
+
+  it('9. knowledge_search on-allowlist with skipGate → execute runs, no denied_contract_violation', async () => {
+    // Pins that SKIP_GATE_ALLOWLIST honors skipGate when the wire type is
+    // 'knowledge_search'. Regression guard: a future removal from the
+    // allowlist (Phase 1.2 K-Task 5) would fail this test.
+    let executed = false;
+
+    const handler: IpcHandler<{ ok: boolean }, void> = {
+      type: 'knowledge_search', // ON SKIP_GATE_ALLOWLIST per Phase 1.2 K-Task 5
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
+      authorize: () => ({
+        target: 'agent-knowledge',
+        notifySummary: 'knowledge_search stub',
+        payloadForStaging: { type: 'knowledge_search' },
+        skipGate: true,
+      }),
+      execute: () => {
+        executed = true;
+        return undefined;
+      },
+    };
+    registerIpcHandler(handler);
+
+    await dispatch({ type: 'knowledge_search' });
+
+    expect(executed).toBe(true);
+
+    const rows = getDb()
+      .prepare(
+        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
+      )
+      .all(agentName) as { action_type: string; outcome: string }[];
+    expect(rows.map((r) => r.outcome)).not.toContain('denied_contract_violation');
+  });
+
+  // ---- Test 10: off-allowlist control (parallel to Test 9) ----
+
+  it('10. off-allowlist handler with skipGate (wire_off_allow_v2) → denied_contract_violation', async () => {
+    // Parallel control for Test 9 — confirms the allowlist gate actually
+    // fires when the wire type is not listed. Use 'wire_off_allow_v2' to
+    // avoid colliding with the existing Test 8 stub identifier.
+    let executed = false;
+
+    const handler: IpcHandler<{ ok: boolean }, void> = {
+      type: 'wire_off_allow_v2',
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
+      authorize: () => ({
+        target: 'target-off-v2',
+        notifySummary: 'should never fire',
+        payloadForStaging: { type: 'wire_off_allow_v2' },
+        skipGate: true,
+      }),
+      execute: () => {
+        executed = true;
+        return undefined;
+      },
+    };
+    registerIpcHandler(handler);
+
+    await dispatch({ type: 'wire_off_allow_v2' });
+
+    expect(executed).toBe(false);
+
+    const rows = getDb()
+      .prepare(
+        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
+      )
+      .all(agentName) as { action_type: string; outcome: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action_type).toBe('wire_off_allow_v2');
+    expect(rows[0].outcome).toBe('denied_contract_violation');
+  });
 });

@@ -112,7 +112,13 @@ describe('publishKnowledge', () => {
 
   it('writes confidence: 8 to frontmatter when entry has confidence: 8', () => {
     const filePath = publishKnowledge(
-      { topic: 'test', finding: 'X', evidence: 'manual', tags: ['t'], confidence: 8 },
+      {
+        topic: 'test',
+        finding: 'X',
+        evidence: 'manual',
+        tags: ['t'],
+        confidence: 8,
+      },
       'telegram_claire',
       tmpDir,
     );
