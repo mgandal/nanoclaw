@@ -202,7 +202,10 @@ describe('knowledgeSearchHandler.execute', () => {
     // the agent gets a self-explanatory message and can choose to back off.
     // Without differentiation, err.message is "The operation was aborted",
     // which is indistinguishable from a non-timeout abort.
-    const abortErr = new DOMException('The operation was aborted', 'AbortError');
+    const abortErr = new DOMException(
+      'The operation was aborted',
+      'AbortError',
+    );
     fetchSpy.mockRejectedValueOnce(abortErr);
     const input = knowledgeSearchHandler.parse({ query: 'q' })!;
     const result = await knowledgeSearchHandler.execute(input, buildCtx());
