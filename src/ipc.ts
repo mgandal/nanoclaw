@@ -923,8 +923,6 @@ export async function processTaskIpc(
   );
   if (result.handled) return;
 
-  const registeredGroups = deps.registeredGroups();
-
   switch (data.type) {
     // schedule_task / pause_task / resume_task / cancel_task / update_task
     // migrated to src/ipc/handlers/ — dispatched above.
