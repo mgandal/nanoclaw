@@ -123,6 +123,20 @@ Dispatch order is fixed:
    audit types to match — the override is a one-way bridge for existing
    mismatches, not a design escape hatch.
 
+   The dispatcher also honors `auth.postHocNotify` (Batch 2F.1) on
+   `responseKind: 'result'` handlers. When set, the dispatcher fires
+   `fireNotifyIfRequested` AFTER `writeResultFile`, gated on five AND'd
+   conditions: `postHocNotify === true`, no throw from execute, `executed`
+   is true, `decision` is non-null, and the handler's result payload is
+   `{success: true, ...}` (checked via `isSuccessPayload`). The notify
+   additionally AND's with `decision.notify` and `agentName` inside
+   `fireNotifyIfRequested`, so autonomous trust and non-agent callers
+   are silent automatically. `slack_dm` is THE canonical case (hybrid:
+   structured result file for the in-container agent AND user-facing
+   Telegram notify). Combining `postHocNotify` with `skipGate` is a
+   contract violation and produces a `denied_contract_violation` audit
+   row (parallel to the off-allowlist `skipGate` check).
+
 ### Rule 4 — `skipGate: true` is allowlisted
 
 A handler may declare `skipGate: true` in its authorization only when it is
@@ -247,6 +261,12 @@ When adding a new IPC action:
      exists only to preserve legacy `trust.yaml` keys during migration.
      If you find yourself wanting it for a new action, rename the wire
      type to match instead.
+   - Do not set `postHocNotify` for a brand-new handler. The flag exists
+     to bridge legacy hybrid handlers (`slack_dm`) that surface BOTH a
+     structured result AND a user-facing notification. New handlers
+     should be one or the other. If you genuinely need both, your spec
+     must justify it — and you must NOT combine `postHocNotify` with
+     `skipGate` (contract violation, dispatcher loudly denies).
 5. Write `execute(input, ctx)`. Side effects only. Return the result payload
    for `'result'` kinds.
 6. Register in `src/ipc/handlers/index.ts` (core) or your skill's

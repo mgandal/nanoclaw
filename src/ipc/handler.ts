@@ -120,6 +120,39 @@ export interface IpcAuthorization {
    * handler contract. Read-only actions only.
    */
   skipGate?: true;
+  /**
+   * On `responseKind: 'result'` handlers, fire a post-hoc Telegram notify
+   * after the result file is written. The notify fires only when ALL of:
+   *   1. `auth.postHocNotify === true` (this flag)
+   *   2. `executeThrew === false` (execute did not throw)
+   *   3. `executed === true` (handler did not bail with `{executed: false}`)
+   *   4. `decision !== null` (handler did not skipGate)
+   *   5. `isSuccessPayload(resultPayload)` (the handler returned
+   *      `{success: true, ...}` in its result payload — i.e. the side
+   *      effect actually succeeded; a bridge 4xx/5xx that returns
+   *      `{success: false}` skips the notify)
+   *
+   * The notify additionally AND's with `decision.notify` and
+   * `input.agentName` inside `fireNotifyIfRequested` (trust-gate.ts:61).
+   * Net effect: autonomous trust = silent; non-agent callers = silent;
+   * bridge failure = silent.
+   *
+   * Legitimate use: legacy hybrid handlers that both surface a structured
+   * result to the in-container agent (via result file) AND notify the user
+   * out-of-band (via Telegram). `slack_dm` is the canonical case. New
+   * handlers should choose one or the other if possible.
+   *
+   * Combining `postHocNotify` with `skipGate` is a contract violation —
+   * the dispatcher loudly denies and writes a `denied_contract_violation`
+   * audit row (parallel to the off-allowlist skipGate check above).
+   *
+   * Has no effect on `responseKind: 'notify'` handlers — those already
+   * fire `fireNotifyIfRequested` via the dispatcher's existing notify
+   * branch (the postHocNotify code path is nested inside
+   * `if (responseKind === 'result')`, so it cannot run for notify-kind
+   * handlers).
+   */
+  postHocNotify?: true;
 }
 
 /**
@@ -281,6 +314,42 @@ export async function dispatchIpcAction(
   const auth = handler.authorize(input, ctx);
   if (auth === null) return { handled: true };
 
+  // Batch 2F.1: postHocNotify + skipGate is a contract violation. The
+  // skipGate path returns `decision === null`, which would block the
+  // postHocNotify branch silently. We make the violation loud, matching
+  // the existing off-allowlist skipGate precedent below. This guards
+  // against a future handler accidentally combining the two flags.
+  //
+  // Precedence: this check fires BEFORE the off-allowlist skipGate
+  // check at line ~356. A handler with BOTH violations is attributed
+  // here (the more specific intent foot-gun) rather than as off-
+  // allowlist. Either attribution is correct; we prefer the narrower.
+  if (auth.postHocNotify === true && auth.skipGate === true) {
+    logger.error(
+      { type: handler.type, sourceGroup: ctx.sourceGroup, agentName: ctx.agentName },
+      'IPC handler combined postHocNotify with skipGate — contract violation',
+    );
+    if (ctx.agentName) {
+      try {
+        insertAgentAction({
+          agent_name: ctx.agentName,
+          group_folder: ctx.baseGroup,
+          action_type: handler.type,
+          trust_level: 'contract_violation',
+          summary: `postHocNotify + skipGate (target=${auth.target.slice(0, 100)})`,
+          target: auth.auditTarget ?? auth.target,
+          outcome: 'denied_contract_violation',
+        });
+      } catch (err) {
+        logger.error(
+          { err, type: handler.type },
+          'Failed to write postHocNotify+skipGate contract-violation audit row',
+        );
+      }
+    }
+    return { handled: true };
+  }
+
   // Rule 4: skipGate is honored only for allowlisted types. An off-allowlist
   // handler declaring skipGate is a contract violation. We deny + log AND
   // write a forensic audit row so the violation surfaces in agent_actions
@@ -387,6 +456,33 @@ export async function dispatchIpcAction(
       requestId!,
       filePayload,
     );
+
+    // Batch 2F.1: postHocNotify for hybrid handlers (slack_dm). Fires
+    // AFTER the result file write so the in-container agent sees the
+    // file before the user receives the Telegram notify. The 5 AND'd
+    // guards collectively express: opt-in, no throw, no bail, gate ran
+    // (not skipGate), bridge reported real success.
+    //
+    // fireNotifyIfRequested internally AND's with decision.notify and
+    // input.agentName (trust-gate.ts:61), so autonomous trust and
+    // non-agent callers are silent without needing dispatcher-side
+    // checks for those conditions.
+    if (
+      auth.postHocNotify &&
+      !executeThrew &&
+      executed &&
+      decision !== null &&
+      isSuccessPayload(resultPayload)
+    ) {
+      await fireNotifyIfRequested(decision, {
+        agentName: ctx.agentName,
+        actionType: auditActionType,
+        summary: auth.notifySummary,
+        target: auth.target,
+        registeredGroups: ctx.registeredGroups,
+        deps: ctx.deps,
+      });
+    }
   } else if (executed && decision !== null) {
     // Notify path (existing behaviour). decision is null only for skipGate
     // calls, which are read-only and on the allowlist — by construction they
@@ -438,6 +534,26 @@ function writeResultFile(
       'Failed to write IPC result file',
     );
   }
+}
+
+/**
+ * True iff `payload` is a `{ success: true, ... }` object shape.
+ *
+ * Used by the dispatcher's postHocNotify branch to gate the post-write
+ * Telegram notify on whether the handler's `execute` reported the side
+ * effect as successful. A bridge 4xx/5xx returns `{success: false}` and
+ * must not produce a notify (legacy semantics for slack_dm).
+ *
+ * Narrow on purpose: only the literal boolean `true` qualifies. A handler
+ * that returns `{success: 'true'}` (string) or `{success: 1}` (number)
+ * will fail the check. See spec Risks table.
+ */
+export function isSuccessPayload(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { success?: unknown }).success === true
+  );
 }
 
 /**
