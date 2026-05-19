@@ -1,9 +1,28 @@
 # Phase 2: Long-Lived In-Container Agent + Idle Ticks — Architecture
 
-**Status:** Architecture sketch, feasibility review
+**Status:** SHELVED 2026-05-19 — economics insufficient at corrected cost. Do NOT plan-write or implement.
 **Author:** Claude Sonnet 4.6
-**Date:** 2026-05-19
+**Date:** 2026-05-19 (spec); shelved same day after round-1 peer review
 **Prerequisite reading:** Phase 1 (`schedule_self_wakeup`), Proactive Claire design (`docs/superpowers/specs/2026-04-18-proactive-claire-design.md`)
+
+---
+
+## SHELVE RATIONALE (2026-05-19)
+
+This architecture is preserved as a documented investigation, not an active proposal. Round-1 peer review found two Critical issues that invalidate the recommendation:
+
+1. **Cost model wrong by ~14x for the no-op case.** Spec §6 claimed no-op cost was $0.003/tick. Actual: the agent must read 8-20K input tokens (system prompt + session context + tick message) before it can respond ".", so even no-op ticks cost $0.024-0.047 each. Corrected monthly cost at the spec's recommended throttles is ~$50-60/month, not $12/month. To hit $12 the throttles would need a 4x reduction (CLAIRE 1 tick/day, others 1/day total), at which point the feature has so little signal it's barely doing anything.
+
+2. **Runaway-loop mitigation cites a function with incompatible semantics.** §7.1 relies on `hasRecentIpcSend()` at `src/ipc.ts:172` to enforce a 20-minute cooldown after the agent sends a message. The function exists but expires after 60 seconds AND is cleared on every turn boundary (`clearIpcSend` at `src/index.ts:565` on `status === 'success'`). It cannot enforce a 20-minute cooldown — the named primary mitigation does not work as described.
+
+**Decision (mgandal, 2026-05-19):** Shelve entirely. At $50-60/month for ambient proactivity on one group with unproven value, when Phase 1.1 (`schedule_wakeup`) already provides agent-initiated future-thinking at near-zero marginal cost AND the existing watcher fleet (Gmail, calendar, vault-delta, thread-silence, task-outcome, intraday Slack) already fires proactive triggers on real external events — idle ticks are genuinely incremental. The architect's own §10 acknowledged: "trains the user to ignore proactive messages rather than value them" is the failure mode. The corrected cost makes that risk much harder to justify.
+
+**Reusable findings (do NOT discard):**
+- §1 forensics: container already polls IPC every 500ms in `waitForIpcMessage()` and stays alive up to 30 minutes between turns. Documented `src/config.ts:92` IDLE_TIMEOUT, hard-kill formula at `container-runner.ts:924`, etc. This characterization of NanoClaw's container lifecycle is correct and useful for future work.
+- §2 resource budget: per-container 200-350MB estimate is unverified but the 12-group always-on math (3GB+ RSS) and 8-slot concurrency limit are real constraints.
+- §3 Option (c) (session-scoped ticks reusing existing IPC inbox) is structurally simpler than always-on containers and would be the right approach IF the cost economics ever change (e.g., Sonnet cost drops 10x, or a local-model tick handler becomes viable).
+
+**Reconsider if:** Sonnet input pricing drops by 5x+, or a local-model tick handler ships that costs essentially nothing per no-op, or user reports demonstrable proactivity gaps that explicit `schedule_wakeup` cannot fill.
 
 ---
 
