@@ -549,21 +549,6 @@ describe('save_skill handler', () => {
     );
   };
 
-  const readResult = (sourceGroup: string, requestId: string) => {
-    const file = path.join(
-      dataDir,
-      'ipc',
-      sourceGroup,
-      'skill_results',
-      `${requestId}.json`,
-    );
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<
-      string,
-      unknown
-    >;
-  };
-
   it('1. parse returns null for non-object input', () => {
     expect(saveSkillHandler.parse(null)).toBeNull();
     expect(saveSkillHandler.parse(42)).toBeNull();
