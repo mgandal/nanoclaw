@@ -86,6 +86,10 @@ export const skillSearchHandler: IpcHandler<
 
   async execute(input, ctx) {
     if (!input.query) {
+      logger.warn(
+        { sourceGroup: ctx.sourceGroup, requestId: ctx.requestId },
+        'skill_search IPC rejected: missing query parameter',
+      );
       return {
         executed: true,
         result: { success: false, message: 'Missing query parameter' },
@@ -131,13 +135,31 @@ export const skillSearchHandler: IpcHandler<
       }
 
       const parsed = JSON.parse(rawText) as {
-        results: Array<{
+        results?: Array<{
           file: string;
           title: string;
           score: number;
           snippet: string;
         }>;
       };
+
+      if (!Array.isArray(parsed.results)) {
+        logger.warn(
+          {
+            sourceGroup: ctx.sourceGroup,
+            requestId: ctx.requestId,
+            parsedKeys: Object.keys(parsed),
+          },
+          'skill_search IPC: QMD returned 200 with malformed results array',
+        );
+        return {
+          executed: true,
+          result: {
+            success: false,
+            message: 'QMD returned malformed results array',
+          },
+        };
+      }
 
       const formatted = parsed.results
         .map(
@@ -543,34 +565,58 @@ export const crystallizeSkillHandler: IpcHandler<
   execute(input, ctx) {
     const agentRe = /^[a-z0-9][a-z0-9_-]{0,63}$/;
     const skillNameRe = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/;
-    if (
-      !input.agent ||
-      !agentRe.test(input.agent) ||
-      !input.name ||
-      !skillNameRe.test(input.name) ||
-      !input.description ||
-      !input.body ||
-      !input.source_task ||
-      !Number.isFinite(input.confidence) ||
-      input.confidence < 1 ||
-      input.confidence > 10
-    ) {
+
+    // Per-field validation with first-error-wins ordering (M1 fix). Order
+    // mirrors the legacy OR-chain at ipc.ts:1218; do not reorder without
+    // updating tests 16a–16g which pin each message individually.
+    const reject = (
+      message: string,
+    ): { executed: true; result: { success: boolean; message: string } } => {
       logger.warn(
         {
           agent: input.agent,
           name: input.name,
           sourceGroup: ctx.sourceGroup,
+          requestId: ctx.requestId,
           confidence: input.confidence,
+          failedField: message,
         },
         'crystallize_skill IPC rejected: invalid payload',
       );
       return {
         executed: true,
-        result: {
-          success: false,
-          message: 'Invalid crystallize_skill payload.',
-        },
+        result: { success: false, message },
       };
+    };
+
+    if (!input.agent || !agentRe.test(input.agent)) {
+      return reject(
+        'Invalid agent identifier. Use lowercase letters, numbers, underscores, or hyphens (1-64 chars).',
+      );
+    }
+    if (!input.name || !skillNameRe.test(input.name)) {
+      return reject(
+        'Invalid skill name. Use lowercase letters, numbers, and hyphens (2-64 chars).',
+      );
+    }
+    if (!input.description) {
+      return reject('Missing required field: description.');
+    }
+    if (!input.source_task) {
+      return reject('Missing required field: source_task.');
+    }
+    if (!input.body) {
+      return reject('Missing required field: body.');
+    }
+    if (!Number.isFinite(input.confidence)) {
+      return reject(
+        'Invalid confidence. Must be a finite number between 1 and 10.',
+      );
+    }
+    if (input.confidence < 1 || input.confidence > 10) {
+      return reject(
+        'Invalid confidence. Must be a finite number between 1 and 10.',
+      );
     }
 
     // Env-gate the agentsRoot test seam (R2 Critical 2). DO NOT remove —

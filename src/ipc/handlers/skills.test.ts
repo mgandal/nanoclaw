@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { DATA_DIR } from '../../config.js';
 import { IpcDeps } from '../../ipc.js';
+import { logger } from '../../logger.js';
 import {
   _resetHandlersForTests,
   buildContext,
@@ -125,6 +126,26 @@ describe('skill_search handler', () => {
     });
   });
 
+  it('25b. execute missing query emits logger.warn with sourceGroup + requestId (M2 observability fix)', async () => {
+    const spy = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    try {
+      const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+      await skillSearchHandler.execute({ query: undefined }, ctx);
+      const missingQueryCalls = spy.mock.calls.filter((c) => {
+        const msg = c[1];
+        return (
+          typeof msg === 'string' && msg.includes('missing query parameter')
+        );
+      });
+      expect(missingQueryCalls).toHaveLength(1);
+      const callCtx = missingQueryCalls[0][0] as Record<string, unknown>;
+      expect(callCtx.sourceGroup).toBe(SOURCE_GROUP);
+      expect(callCtx.requestId).toBe(ctx.requestId);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('26. execute happy path formats title/score/snippet from QMD results', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -198,6 +219,35 @@ describe('skill_search handler', () => {
       result: { success: false, message: 'QMD unavailable: ECONNREFUSED' },
     });
   });
+
+  it.each([
+    ['results missing', { foo: 'bar' }],
+    ['results null', { results: null }],
+    ['results string', { results: 'not-an-array' }],
+    ['results object', { results: { 0: 'x' } }],
+  ])(
+    '29b. execute malformed QMD results (%s) returns malformed-results message, NOT QMD-unavailable (L1 defensive fix)',
+    async (_label, parsedBody) => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          result: {
+            content: [{ text: JSON.stringify(parsedBody) }],
+          },
+        }),
+      });
+      const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+      const out = await skillSearchHandler.execute({ query: 'foo' }, ctx);
+      expect(out).toEqual({
+        executed: true,
+        result: {
+          success: false,
+          message: 'QMD returned malformed results array',
+        },
+      });
+    },
+  );
 
   it('30. integration: dispatcher catches response.json() rejection → writes failure file', async () => {
     fetchMock.mockResolvedValueOnce({
@@ -644,6 +694,43 @@ describe('save_skill handler', () => {
     });
   });
 
+  // Boundary coverage for the 65536-byte cap: pins that the comparison is
+  // strict (>), not loose (>=). Mutation guard — if anyone flips '>' to
+  // '>=', test 7a fails. Existing test 7 only pinned OVER-cap (65540).
+  it('7a. execute content at EXACTLY 64 KB cap succeeds (mutation-guard for boundary)', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const exactContent = 'a'.repeat(64 * 1024); // 1 byte × 65536 = 65536 bytes
+    expect(Buffer.byteLength(exactContent, 'utf-8')).toBe(65536);
+    const r = saveSkillHandler.execute(
+      { skillName: 'boundary-ok', skillContent: exactContent },
+      ctx,
+    );
+    expect(r).toMatchObject({
+      executed: true,
+      result: {
+        success: true,
+        message: 'Skill "boundary-ok" saved permanently.',
+      },
+    });
+  });
+
+  it('7b. execute content at 64 KB + 1 byte fails (mutation-guard for boundary)', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const overContent = 'a'.repeat(64 * 1024 + 1); // exactly one byte over
+    expect(Buffer.byteLength(overContent, 'utf-8')).toBe(65537);
+    const r = saveSkillHandler.execute(
+      { skillName: 'boundary-over', skillContent: overContent },
+      ctx,
+    );
+    expect(r).toEqual({
+      executed: true,
+      result: {
+        success: false,
+        message: `Skill content (65537 bytes) exceeds the ${64 * 1024}-byte cap.`,
+      },
+    });
+  });
+
   it('8. execute builtin overwrite attempt returns exact builtin message', () => {
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     const r = saveSkillHandler.execute(
@@ -901,7 +988,11 @@ describe('crystallize_skill handler', () => {
     expect(auth!.skipGate).toBe(true);
   });
 
-  it('16. execute invalid payload returns exact failure message', () => {
+  // Tests 16, 16b–16g pin per-field validation messages (M1 fix). Legacy
+  // collapsed all 7 failure paths to one generic message, leaving agents
+  // unable to self-correct. Each test isolates exactly one bad field and
+  // asserts the field-specific message text.
+  it('16. execute invalid agent identifier returns agent-specific message', () => {
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     const bad: CrystInput = {
       agent: 'BAD UPPER',
@@ -915,8 +1006,216 @@ describe('crystallize_skill handler', () => {
     const r = crystallizeSkillHandler.execute(bad, ctx);
     expect(r).toEqual({
       executed: true,
-      result: { success: false, message: 'Invalid crystallize_skill payload.' },
+      result: {
+        success: false,
+        message:
+          'Invalid agent identifier. Use lowercase letters, numbers, underscores, or hyphens (1-64 chars).',
+      },
     });
+  });
+
+  it('16b. execute invalid skill name returns name-specific message', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const bad: CrystInput = {
+      agent: 'agent1',
+      name: 'BAD NAME',
+      description: 'd',
+      source_task: 's',
+      body: 'b',
+      confidence: 5,
+      agentsRoot: agentsTmpRoot,
+    };
+    const r = crystallizeSkillHandler.execute(bad, ctx);
+    expect(r).toEqual({
+      executed: true,
+      result: {
+        success: false,
+        message:
+          'Invalid skill name. Use lowercase letters, numbers, and hyphens (2-64 chars).',
+      },
+    });
+  });
+
+  it('16c. execute missing description returns description-specific message', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const bad: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: undefined,
+      source_task: 's',
+      body: 'b',
+      confidence: 5,
+      agentsRoot: agentsTmpRoot,
+    };
+    const r = crystallizeSkillHandler.execute(bad, ctx);
+    expect(r).toEqual({
+      executed: true,
+      result: {
+        success: false,
+        message: 'Missing required field: description.',
+      },
+    });
+  });
+
+  it('16d. execute missing source_task returns source_task-specific message', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const bad: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: 'd',
+      source_task: undefined,
+      body: 'b',
+      confidence: 5,
+      agentsRoot: agentsTmpRoot,
+    };
+    const r = crystallizeSkillHandler.execute(bad, ctx);
+    expect(r).toEqual({
+      executed: true,
+      result: {
+        success: false,
+        message: 'Missing required field: source_task.',
+      },
+    });
+  });
+
+  it('16e. execute missing body returns body-specific message', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const bad: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: 'd',
+      source_task: 's',
+      body: undefined,
+      confidence: 5,
+      agentsRoot: agentsTmpRoot,
+    };
+    const r = crystallizeSkillHandler.execute(bad, ctx);
+    expect(r).toEqual({
+      executed: true,
+      result: { success: false, message: 'Missing required field: body.' },
+    });
+  });
+
+  it('16f. execute non-finite confidence returns confidence-type message', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const bad: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: 'd',
+      source_task: 's',
+      body: 'b',
+      confidence: NaN,
+      agentsRoot: agentsTmpRoot,
+    };
+    const r = crystallizeSkillHandler.execute(bad, ctx);
+    expect(r).toEqual({
+      executed: true,
+      result: {
+        success: false,
+        message:
+          'Invalid confidence. Must be a finite number between 1 and 10.',
+      },
+    });
+  });
+
+  it.each([
+    ['below range', 0],
+    ['above range', 11],
+  ])(
+    '16g. execute confidence out of range (%s) returns confidence-range message',
+    (_label, value) => {
+      const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+      const bad: CrystInput = {
+        agent: 'agent1',
+        name: 'skill1',
+        description: 'd',
+        source_task: 's',
+        body: 'b',
+        confidence: value,
+        agentsRoot: agentsTmpRoot,
+      };
+      const r = crystallizeSkillHandler.execute(bad, ctx);
+      expect(r).toEqual({
+        executed: true,
+        result: {
+          success: false,
+          message:
+            'Invalid confidence. Must be a finite number between 1 and 10.',
+        },
+      });
+    },
+  );
+
+  it('17b. idempotency: invoking twice with same agent/name overwrites SKILL.md AND appends second log.jsonl line', () => {
+    const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
+    const firstInput: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: 'first description',
+      source_task: 'first task',
+      body: '## First Body\n',
+      confidence: 5,
+      agentsRoot: agentsTmpRoot,
+    };
+    const secondInput: CrystInput = {
+      agent: 'agent1',
+      name: 'skill1',
+      description: 'second description',
+      source_task: 'second task',
+      body: '## Second Body\n',
+      confidence: 9,
+      agentsRoot: agentsTmpRoot,
+    };
+
+    // First invocation
+    const r1 = crystallizeSkillHandler.execute(firstInput, ctx);
+    expect(r1).toMatchObject({
+      executed: true,
+      result: { success: true },
+    });
+
+    // Second invocation — same agent + name, different content
+    const r2 = crystallizeSkillHandler.execute(secondInput, ctx);
+    expect(r2).toMatchObject({
+      executed: true,
+      result: { success: true },
+    });
+
+    // SKILL.md should reflect the SECOND invocation (overwrite, not append)
+    const file = path.join(
+      agentsTmpRoot,
+      'agent1',
+      'skills',
+      'crystallized',
+      'skill1',
+      'SKILL.md',
+    );
+    const content = fs.readFileSync(file, 'utf-8');
+    expect(content).toContain('description: "second description"');
+    expect(content).toContain('confidence: 9');
+    expect(content).toContain('## Second Body');
+    expect(content).not.toContain('first description');
+    expect(content).not.toContain('## First Body');
+
+    // log.jsonl should have TWO lines (append-only audit trail)
+    const logFile = path.join(
+      agentsTmpRoot,
+      'agent1',
+      'skills',
+      'crystallized',
+      'log.jsonl',
+    );
+    const lines = fs
+      .readFileSync(logFile, 'utf-8')
+      .split('\n')
+      .filter((l) => l.length > 0);
+    expect(lines).toHaveLength(2);
+    const parsed1 = JSON.parse(lines[0]);
+    const parsed2 = JSON.parse(lines[1]);
+    expect(parsed1.source_task).toBe('first task');
+    expect(parsed1.confidence).toBe(5);
+    expect(parsed2.source_task).toBe('second task');
+    expect(parsed2.confidence).toBe(9);
   });
 
   it('17. execute happy path writes SKILL.md AND appends log.jsonl with literal key set', () => {
@@ -1121,7 +1420,7 @@ describe('crystallize_skill handler', () => {
     ).toBe(false);
   });
 
-  it('22. path-traversal: agent regex rejects "../etc" → invalid payload', () => {
+  it('22. path-traversal: agent regex rejects "../etc" → invalid agent message', () => {
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     const r = crystallizeSkillHandler.execute(
       {
@@ -1137,7 +1436,11 @@ describe('crystallize_skill handler', () => {
     );
     expect(r).toEqual({
       executed: true,
-      result: { success: false, message: 'Invalid crystallize_skill payload.' },
+      result: {
+        success: false,
+        message:
+          'Invalid agent identifier. Use lowercase letters, numbers, underscores, or hyphens (1-64 chars).',
+      },
     });
     expect(fs.existsSync(path.join(agentsTmpRoot, '..', 'etc'))).toBe(false);
   });
