@@ -170,4 +170,46 @@ describe('knowledgeSearchHandler.execute', () => {
       'agent-knowledge',
     ]);
   });
+
+  it('IMPORTANT #2 — HTTP 200 with JSON-RPC error body → {success:false}, NOT silent {success:true,results:""}', async () => {
+    // Sibling silent-false-success class to the response.ok bug, one envelope
+    // layer deeper. QMD can return 200 with {"jsonrpc":"2.0","error":{...}}
+    // for collection-not-found, malformed args, MCP server exceptions, etc.
+    // Without the json.error check, json.result is undefined and the optional
+    // chain collapses to '', producing {success:true, results:""} — caller
+    // cannot distinguish from "no findings". This test pins the guard.
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32000, message: 'collection not found' },
+      }),
+    } as any);
+    const input = knowledgeSearchHandler.parse({ query: 'q' })!;
+    const result = await knowledgeSearchHandler.execute(input, buildCtx());
+    expect((result as any).executed).toBe(true);
+    expect((result as any).result.success).toBe(false);
+    expect((result as any).result.message).toContain('QMD MCP error');
+    expect((result as any).result.message).toContain('collection not found');
+    expect((result as any).result.message).toContain('-32000');
+  });
+
+  it('IMPORTANT #4 — AbortError (timeout) → "Knowledge search timed out", not opaque "operation was aborted"', async () => {
+    // AbortSignal.timeout() throws a DOMException with name='AbortError'.
+    // skill_search differentiates this in its catch (skills.ts:166-181) so
+    // the agent gets a self-explanatory message and can choose to back off.
+    // Without differentiation, err.message is "The operation was aborted",
+    // which is indistinguishable from a non-timeout abort.
+    const abortErr = new DOMException('The operation was aborted', 'AbortError');
+    fetchSpy.mockRejectedValueOnce(abortErr);
+    const input = knowledgeSearchHandler.parse({ query: 'q' })!;
+    const result = await knowledgeSearchHandler.execute(input, buildCtx());
+    expect((result as any).executed).toBe(true);
+    expect((result as any).result.success).toBe(false);
+    expect((result as any).result.message).toBe(
+      'Knowledge search timed out (15s)',
+    );
+  });
 });

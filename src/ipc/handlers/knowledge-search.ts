@@ -33,7 +33,12 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
     return {
       target: 'agent-knowledge',
       auditSummary: input.query.slice(0, 100),
-      notifySummary: `searched knowledge: ${input.query.slice(0, 80)}`,
+      // result-kind handlers without postHocNotify never reach the notify
+      // branch in dispatcher (handler.ts:501-513 gates on responseKind!=='result'),
+      // so this field is unreachable today. Setting '' anyway to avoid leaking
+      // the agent's query if someone later adds postHocNotify: true without
+      // re-auditing this field — matches the sibling skill_search at skills.ts:81.
+      notifySummary: '',
       payloadForStaging: {
         type: 'knowledge_search',
         query: input.query,
@@ -92,7 +97,23 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
 
       const json = (await response.json()) as {
         result?: { content?: Array<{ text?: string }> };
+        error?: { code?: number; message?: string };
       };
+      // JSON-RPC ERROR ENVELOPE (Important #2): the response.ok guard above
+      // only catches HTTP-layer failures. QMD's MCP server can return HTTP 200
+      // with a structured JSON-RPC error body like
+      //   {"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"..."}}
+      // for collection-not-found, malformed args, internal exceptions, etc.
+      // Without this check, json.result is undefined, the optional chain
+      // collapses to '', and the caller sees {success:true, results:''} —
+      // indistinguishable from "no results found". Same silent-false-success
+      // class as §4.2, one envelope layer deeper.
+      if (json.error) {
+        throw new Error(
+          `QMD MCP error: ${json.error.message ?? 'unknown'}` +
+            (json.error.code !== undefined ? ` (code ${json.error.code})` : ''),
+        );
+      }
       const rawText = json.result?.content?.[0]?.text ?? '';
       logger.info(
         {
@@ -107,12 +128,31 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
         result: { success: true, results: rawText, query: input.query },
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // Mirror skills.ts:166-181 so timeouts ("The operation was aborted") get
+      // a self-explanatory message and the catch log carries requestId for
+      // correlation with the agent-side IPC trace (feedback_ipc_log_requestid_shrink).
+      const isTimeout =
+        err instanceof DOMException && err.name === 'AbortError';
       logger.warn(
-        { err, sourceGroup: ctx.sourceGroup, query: input.query },
+        {
+          err,
+          sourceGroup: ctx.sourceGroup,
+          query: input.query,
+          requestId: ctx.requestId,
+        },
         'knowledge_search QMD fetch failed',
       );
-      return { executed: true, result: { success: false, message } };
+      return {
+        executed: true,
+        result: {
+          success: false,
+          message: isTimeout
+            ? 'Knowledge search timed out (15s)'
+            : err instanceof Error
+              ? err.message
+              : String(err),
+        },
+      };
     }
   },
 };
