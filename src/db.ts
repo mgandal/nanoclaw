@@ -226,6 +226,10 @@ function createSchema(database: Database): void {
   );
   addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN script TEXT`);
   addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN agent_name TEXT`);
+  // Discriminates self-wakeup rows from operator-created scheduled_tasks.
+  // 'agent_wakeup' set by createWakeupTask; NULL for legacy/operator rows.
+  // Phase 1.1 self-wakeup feature — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md
+  addColumn(`ALTER TABLE scheduled_tasks ADD COLUMN kind TEXT DEFAULT NULL`);
   addColumn(`ALTER TABLE sessions ADD COLUMN last_used TEXT`);
   addColumn(`ALTER TABLE sessions ADD COLUMN created_at TEXT`);
   addColumn(`ALTER TABLE registered_groups ADD COLUMN permitted_senders TEXT`);
@@ -671,6 +675,72 @@ export function createTask(
     task.status,
     task.created_at,
   );
+}
+
+/**
+ * Insert an agent self-wakeup row into scheduled_tasks. Discriminates from
+ * operator-created tasks via kind='agent_wakeup'. Bypasses validateTaskSchedule
+ * (which only guards interval schedules anyway — once schedules pass through
+ * regardless). The `script` field is FORCED to NULL: setting it would cause
+ * runGuardScript to execute the prompt text as /bin/bash -c at fire time
+ * (see [script-field-dual-contract-footgun] memory note).
+ *
+ * Caller (scheduleWakeupHandler.authorize) is responsible for:
+ *   - next_run within [now+5min, now+7d]
+ *   - rate limit (≤ 10 active wakeups per group+agent) is satisfied
+ *
+ * Phase 1.1 — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md
+ */
+export function createWakeupTask(task: {
+  id: string;
+  group_folder: string;
+  chat_jid: string;
+  prompt: string;
+  agent_name: string;
+  context_mode: 'group' | 'isolated';
+  next_run: string;
+  created_at: string;
+}): void {
+  db.prepare(
+    `INSERT INTO scheduled_tasks
+       (id, group_folder, chat_jid, prompt, script, agent_name,
+        schedule_type, schedule_value, context_mode, next_run, status,
+        kind, created_at)
+     VALUES (?, ?, ?, ?, NULL, ?, 'once', ?, ?, ?, 'active', 'agent_wakeup', ?)`,
+  ).run(
+    task.id,
+    task.group_folder,
+    task.chat_jid,
+    task.prompt,
+    task.agent_name,
+    // For once-tasks, schedule_value and next_run hold the same timestamp.
+    // Both bindings must update together if the once-task semantics change.
+    task.next_run, // → schedule_value column
+    task.context_mode,
+    task.next_run, // → next_run column
+    task.created_at,
+  );
+}
+
+/**
+ * Count active and running wakeup rows for a (group_folder, agent_name) pair.
+ * Used by scheduleWakeupHandler.authorize() for the 10-wakeup rate limit.
+ * Excludes 'completed' (fired) and 'paused' rows.
+ */
+export function countActiveWakeups(
+  groupFolder: string,
+  agentName: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM scheduled_tasks
+     WHERE kind = 'agent_wakeup'
+       AND group_folder = ?
+       AND agent_name = ?
+       AND status IN ('active', 'running')`,
+    )
+    .get(groupFolder, agentName) as { cnt: number };
+  return row.cnt;
 }
 
 export function getTaskById(id: string): ScheduledTask | undefined {

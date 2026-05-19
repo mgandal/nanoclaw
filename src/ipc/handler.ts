@@ -40,6 +40,16 @@ const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   'task_close',
   'task_reopen',
   'pageindex_index',
+  // TODO: gate save_skill / crystallize_skill (currently preserve-bypass
+  // per Batch 2G; trust.yaml has 9 dormant save_skill: draft entries on
+  // claire/freud/simon/coo/einstein/steve/marvin/vincent/warren that this
+  // gate-bypass keeps inactive).
+  'save_skill',
+  'crystallize_skill',
+  // Self-directed agent wakeup. Rate-limited (10/agent/group) in
+  // scheduleWakeupHandler.authorize; handler writes its own audit row.
+  // Phase 1.1 — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md
+  'schedule_wakeup',
 ]);
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

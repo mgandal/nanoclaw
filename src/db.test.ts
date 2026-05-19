@@ -4,7 +4,9 @@ import {
   _initTestDatabase,
   _closeDatabase,
   _getTestDb,
+  countActiveWakeups,
   createTask,
+  createWakeupTask,
   deleteSession,
   deleteTask,
   getAllChats,
@@ -2818,5 +2820,154 @@ describe('pending_actions CRUD', () => {
     expect(
       listPendingActions({ groupFolder: 'g', status: 'rejected' }),
     ).toHaveLength(1);
+  });
+});
+
+describe('scheduled_tasks.kind column', () => {
+  it('kind column exists on scheduled_tasks', () => {
+    const db = _getTestDb();
+    const row = db
+      .prepare('PRAGMA table_info(scheduled_tasks)')
+      .all() as Array<{ name: string }>;
+    const columnNames = row.map((r) => r.name);
+    expect(columnNames).toContain('kind');
+  });
+});
+
+describe('createWakeupTask', () => {
+  it('inserts row with kind=agent_wakeup, script=NULL, schedule_type=once', () => {
+    const now = new Date().toISOString();
+    const next = new Date(Date.now() + 10 * 60_000).toISOString();
+    createWakeupTask({
+      id: 'wu-test-001',
+      group_folder: 'telegram_claire',
+      chat_jid: '8475020901',
+      prompt: 'check inbox in 10 min',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+    const row = getTaskById('wu-test-001');
+    expect(row).toBeDefined();
+    expect(row?.kind).toBe('agent_wakeup');
+    expect(row?.script).toBeNull();
+    expect(row?.schedule_type).toBe('once');
+    expect(row?.status).toBe('active');
+    expect(row?.next_run).toBe(next);
+    expect(row?.context_mode).toBe('isolated');
+  });
+
+  it('succeeds with next_run only 5 minutes away (no validateTaskSchedule guard)', () => {
+    // validateTaskSchedule rejects interval-type schedules <30min but does NOT
+    // run for once-type schedules. createWakeupTask bypasses it entirely either
+    // way — explicit defense in depth.
+    const next = new Date(Date.now() + 5 * 60_000).toISOString();
+    expect(() => {
+      createWakeupTask({
+        id: 'wu-test-002',
+        group_folder: 'telegram_claire',
+        chat_jid: '8475020901',
+        prompt: 'short wakeup',
+        agent_name: 'claire',
+        context_mode: 'isolated',
+        next_run: next,
+        created_at: new Date().toISOString(),
+      });
+    }).not.toThrow();
+    // Verify the INSERT actually happened (round-trip check) — without this,
+    // the .not.toThrow() above could pass on a silently-failed INSERT.
+    const row = getTaskById('wu-test-002');
+    expect(row).toBeDefined();
+    expect(row?.next_run).toBe(next);
+  });
+});
+
+describe('countActiveWakeups', () => {
+  it('returns the correct count: counts active+running, excludes completed+paused, scoped by (group, agent)', () => {
+    const db = _getTestDb();
+    const now = new Date().toISOString();
+    const next = new Date(Date.now() + 10 * 60_000).toISOString();
+
+    // Insert: 2 active for (claire, claire) — count target
+    createWakeupTask({
+      id: 'wu-a1',
+      group_folder: 'telegram_claire',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+    createWakeupTask({
+      id: 'wu-a2',
+      group_folder: 'telegram_claire',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+
+    // 1 completed for (claire, claire) — should NOT count
+    createWakeupTask({
+      id: 'wu-completed',
+      group_folder: 'telegram_claire',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+    db.prepare("UPDATE scheduled_tasks SET status='completed' WHERE id=?").run(
+      'wu-completed',
+    );
+
+    // 1 paused for (claire, claire) — should NOT count
+    createWakeupTask({
+      id: 'wu-paused',
+      group_folder: 'telegram_claire',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+    db.prepare("UPDATE scheduled_tasks SET status='paused' WHERE id=?").run(
+      'wu-paused',
+    );
+
+    // 1 active for (claire, simon) — different agent, should NOT count
+    createWakeupTask({
+      id: 'wu-other-agent',
+      group_folder: 'telegram_claire',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'simon',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+
+    // 1 active for (lab-claw, claire) — different group, should NOT count
+    createWakeupTask({
+      id: 'wu-other-group',
+      group_folder: 'telegram_lab-claw',
+      chat_jid: 'j',
+      prompt: 'p',
+      agent_name: 'claire',
+      context_mode: 'isolated',
+      next_run: next,
+      created_at: now,
+    });
+
+    expect(countActiveWakeups('telegram_claire', 'claire')).toBe(2);
+    expect(countActiveWakeups('telegram_claire', 'simon')).toBe(1);
+    expect(countActiveWakeups('telegram_lab-claw', 'claire')).toBe(1);
+    expect(countActiveWakeups('telegram_claire', 'nobody')).toBe(0);
   });
 });

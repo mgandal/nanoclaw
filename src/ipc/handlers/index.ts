@@ -25,6 +25,7 @@ import { refreshGroupsHandler } from './refresh-groups.js';
 import { registerGroupHandler } from './register-group.js';
 import { resumeTaskHandler } from './resume-task.js';
 import { scheduleTaskHandler } from './schedule-task.js';
+import { scheduleWakeupHandler } from './schedule-wakeup.js';
 import { updateTaskHandler } from './update-task.js';
 import { writeAgentMemoryHandler } from './write-agent-memory.js';
 import { writeAgentStateHandler } from './write-agent-state.js';
@@ -34,6 +35,7 @@ let registered = false;
 export function registerBuiltinHandlers(): void {
   if (registered) return;
   registerIpcHandler(scheduleTaskHandler);
+  registerIpcHandler(scheduleWakeupHandler);
   registerIpcHandler(pauseTaskHandler);
   registerIpcHandler(resumeTaskHandler);
   registerIpcHandler(cancelTaskHandler);

@@ -386,4 +386,86 @@ describe('postHocNotify dispatcher behavior', () => {
     expect(rows[0].action_type).toBe('wire_x');
     expect(rows[0].outcome).toBe('denied_contract_violation');
   });
+
+  // ---- Test 7: schedule_wakeup-style on-allowlist skipGate → execute runs ----
+
+  it('7. on-allowlist handler with skipGate → execute runs, no denied_contract_violation', async () => {
+    // Pins that SKIP_GATE_ALLOWLIST honors skipGate when the wire type is on
+    // the list. This is the on-allowlist control: a handler whose type IS
+    // 'schedule_wakeup' (allowlisted) and uses skipGate:true should execute
+    // normally and produce NO denied_contract_violation row.
+    let executed = false;
+
+    const handler: IpcHandler<{ ok: boolean }, void> = {
+      type: 'schedule_wakeup', // ON SKIP_GATE_ALLOWLIST per src/ipc/handler.ts
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
+      authorize: () => ({
+        target: 'wu-stub',
+        notifySummary: 'wakeup stub',
+        payloadForStaging: { type: 'schedule_wakeup' },
+        skipGate: true,
+      }),
+      execute: () => {
+        executed = true;
+        return undefined;
+      },
+    };
+    registerIpcHandler(handler);
+
+    await dispatch({ type: 'schedule_wakeup' });
+
+    expect(executed).toBe(true);
+
+    const rows = getDb()
+      .prepare(
+        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
+      )
+      .all(agentName) as { action_type: string; outcome: string }[];
+    // No denied_contract_violation row — the allowlist honored skipGate.
+    expect(rows.map((r) => r.outcome)).not.toContain(
+      'denied_contract_violation',
+    );
+  });
+
+  // ---- Test 8: off-allowlist skipGate → denied_contract_violation ----
+
+  it('8. off-allowlist handler with skipGate → denied_contract_violation, no execute', async () => {
+    // Pins the off-allowlist branch of the skipGate check at handler.ts:292-321.
+    // wire_off_allowlist is NOT on SKIP_GATE_ALLOWLIST; the dispatcher must
+    // refuse skipGate, write denied_contract_violation, and skip execute.
+    // This is the parallel control for Test 7 — confirms the allowlist
+    // gate actually fires when the type is not listed.
+    let executed = false;
+
+    const handler: IpcHandler<{ ok: boolean }, void> = {
+      type: 'wire_off_allowlist',
+      parse: (raw) =>
+        typeof raw === 'object' && raw !== null ? { ok: true } : null,
+      authorize: () => ({
+        target: 'target-off',
+        notifySummary: 'should never fire',
+        payloadForStaging: { type: 'wire_off_allowlist' },
+        skipGate: true,
+      }),
+      execute: () => {
+        executed = true;
+        return undefined;
+      },
+    };
+    registerIpcHandler(handler);
+
+    await dispatch({ type: 'wire_off_allowlist' });
+
+    expect(executed).toBe(false);
+
+    const rows = getDb()
+      .prepare(
+        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
+      )
+      .all(agentName) as { action_type: string; outcome: string }[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action_type).toBe('wire_off_allowlist');
+    expect(rows[0].outcome).toBe('denied_contract_violation');
+  });
 });

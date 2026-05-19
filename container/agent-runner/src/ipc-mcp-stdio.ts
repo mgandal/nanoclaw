@@ -383,6 +383,94 @@ WARNING: Each task run spawns a full agent container and costs tokens. Always ve
 );
 
 server.tool(
+  'schedule_wakeup',
+  `Schedule a one-shot future invocation of yourself in the current group.
+
+Use when:
+- You want to check back on something in N minutes without the user creating a cron job.
+- You need to defer a task to a later session ("process this after the inbox syncs in 20 min").
+- You want async self-thinking: start work now, continue it in a future fresh context.
+
+Do not use for:
+- Recurring tasks (use schedule_task with cron or interval).
+- Scheduling work in a different group (use schedule_task with target_group_jid — main only).
+- Sending a deferred message to another agent (use publish_to_bus).
+- Anything that needs to fire in less than 5 minutes.
+
+Important: the woken agent starts in a FRESH container with no memory of this conversation.
+All state the woken agent needs must be in prompt or context_blob. Use context_mode="group"
+only when the group session will still be alive at wake time (sessions expire after 2h idle).
+
+Inputs:
+- prompt: what to do when woken. Required, max 4000 chars. Write it as if to a fresh agent.
+- delay_minutes: minutes from now (integer, min 5, max 10080). Provide this OR fire_at, not both.
+- fire_at: absolute local time without timezone suffix (e.g. "2026-05-20T09:00:00").
+- context_blob: optional freeform context, max 8000 chars. Injected under a <wakeup-context> fence.
+- context_mode: "isolated" (default, fresh session) or "group" (reuse current if alive).
+
+Returns: "Wakeup wu-<id> scheduled for <timestamp>." on success. Use the wu-<id> with
+cancel_task to abort if needed. Error string on validation failure.
+
+Rate limit: max 10 pending wakeups per agent per group. Cancel existing ones with cancel_task.`,
+  {
+    prompt: z.string().max(4000).describe('What to do when woken. Required.'),
+    delay_minutes: z.number().int().optional().describe('Minutes from now (5-10080). XOR with fire_at.'),
+    fire_at: z.string().optional().describe('Local time "YYYY-MM-DDTHH:MM:SS" (no Z). XOR with delay_minutes.'),
+    context_blob: z.string().max(8000).optional().describe('Optional context injected under <wakeup-context> fence.'),
+    context_mode: z.enum(['group', 'isolated']).optional().describe('"isolated" (default) or "group".'),
+  },
+  async (args) => {
+    const hasDelay = args.delay_minutes !== undefined;
+    const hasFireAt = args.fire_at !== undefined;
+
+    if (hasDelay === hasFireAt) {
+      return {
+        content: [{ type: 'text' as const, text: 'Error: Provide exactly one of delay_minutes or fire_at, not both (or neither).' }],
+        isError: true,
+      };
+    }
+    if (hasDelay && (args.delay_minutes! < 5 || args.delay_minutes! > 10080)) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: delay_minutes must be 5-10080. Got ${args.delay_minutes}.` }],
+        isError: true,
+      };
+    }
+    if (hasFireAt && (/[Zz]$/.test(args.fire_at!) || /[+-]\d{2}:\d{2}$/.test(args.fire_at!))) {
+      return {
+        content: [{ type: 'text' as const, text: `Error: fire_at must be local time without timezone suffix. Example: "2026-05-20T09:00:00"` }],
+        isError: true,
+      };
+    }
+
+    const wakeupId = `wu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const fireAtPreview = hasDelay
+      ? new Date(Date.now() + args.delay_minutes! * 60_000).toLocaleString()
+      : new Date(args.fire_at!).toLocaleString();
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'schedule_wakeup',
+      wakeupId,
+      prompt: args.prompt,
+      delay_minutes: args.delay_minutes,
+      fire_at: args.fire_at,
+      context_blob: args.context_blob,
+      context_mode: args.context_mode ?? 'isolated',
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Wakeup ${wakeupId} scheduled for ${fireAtPreview}. The woken agent starts fresh — make your prompt self-contained. Cancel with cancel_task if needed.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'list_tasks',
   `List scheduled tasks visible to the current group.
 

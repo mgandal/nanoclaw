@@ -113,6 +113,12 @@ export interface ScheduledTask {
    * container so agent IPC sends with `proactive: true` have a stable
    * correlation id for governor dedup. */
   proactive?: 0 | 1;
+  /**
+   * Discriminates row provenance. 'agent_wakeup' set by createWakeupTask (Phase
+   * 1.1 self-wakeup). NULL for legacy/operator rows created via createTask or
+   * scheduleTaskHandler.
+   */
+  kind?: string | null;
 }
 
 export interface TaskRunLog {
