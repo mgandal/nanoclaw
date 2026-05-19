@@ -182,7 +182,7 @@ Format based on channel (check group folder name):
 
 **Slack** (`slack_*`): `*bold*`, `_italic_`, `<url|text>` links, `>` quotes, no `##` headings.
 
-**Telegram/WhatsApp** (`telegram_*` / `whatsapp_*`): `*bold*` (single asterisks only), `_italic_`, bullets, code blocks. No `##` headings, no `[links](url)`, no `**double stars**`.
+**Telegram/WhatsApp** (`telegram_*` / `whatsapp_*`): `**bold**` (double asterisks — host converts to Telegram bold), `_italic_`, `[links](url)`, bullets, code blocks. No `## headings`.
 
 **Discord** (`discord_*`): Standard Markdown (`**bold**`, `*italic*`, `[links](url)`, `# headings`).
 
