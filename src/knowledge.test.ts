@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import YAML from 'yaml';
 import { publishKnowledge, type KnowledgeEntry } from './knowledge.js';
 
 describe('publishKnowledge', () => {
@@ -107,5 +108,30 @@ describe('publishKnowledge', () => {
     const frontmatter = frontmatterMatch![1];
     expect(frontmatter).toContain('agent: legit-group');
     expect(frontmatter).not.toMatch(/^agent: attacker/m);
+  });
+
+  it('writes confidence: 8 to frontmatter when entry has confidence: 8', () => {
+    const filePath = publishKnowledge(
+      { topic: 'test', finding: 'X', evidence: 'manual', tags: ['t'], confidence: 8 },
+      'telegram_claire',
+      tmpDir,
+    );
+    const body = fs.readFileSync(filePath, 'utf-8');
+    const fmMatch = body.match(/^---\n([\s\S]+?)\n---/);
+    expect(fmMatch).toBeTruthy();
+    const fm = YAML.parse(fmMatch![1]) as { confidence?: number };
+    expect(fm.confidence).toBe(8);
+  });
+
+  it('writes confidence: 5 (default) to frontmatter when entry omits confidence', () => {
+    const filePath = publishKnowledge(
+      { topic: 'test', finding: 'X', evidence: 'manual', tags: ['t'] },
+      'telegram_claire',
+      tmpDir,
+    );
+    const body = fs.readFileSync(filePath, 'utf-8');
+    const fmMatch = body.match(/^---\n([\s\S]+?)\n---/);
+    const fm = YAML.parse(fmMatch![1]) as { confidence?: number };
+    expect(fm.confidence).toBe(5);
   });
 });

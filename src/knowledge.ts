@@ -8,6 +8,11 @@ export interface KnowledgeEntry {
   finding: string;
   evidence: string;
   tags: string[];
+  /**
+   * Self-assessed confidence 1-10. 1-3=weak/preliminary; 4-6=moderate;
+   * 7-9=high/evidenced; 10=definitive. Defaults to 5 when undefined.
+   */
+  confidence?: number;
   /** Ignored — overwritten by verified sourceGroup. */
   agent?: string;
 }
@@ -41,6 +46,9 @@ export function publishKnowledge(
     topic: entry.topic,
     date,
     tags: entry.tags,
+    // Default 5 when omitted so consumers can filter by confidence consistently
+    // (downstream agents weight findings by this value when ranking results).
+    confidence: entry.confidence ?? 5,
   }).trimEnd();
 
   const content = `---\n${frontmatter}\n---\n\n${entry.finding}\n\n**Evidence:** ${entry.evidence}\n`;

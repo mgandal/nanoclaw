@@ -1914,13 +1914,15 @@ Inputs:
 - finding: clear, specific, actionable statement.
 - evidence: source — DOI, URL, or conversation reference.
 - tags: array of tags for QMD retrieval.
+- confidence: optional integer 1-10. Your self-assessed confidence in the finding. 1-3=weak/preliminary; 4-6=moderate; 7-9=high/evidenced; 10=definitive. Default 5 when omitted. Returned in search results so other agents can weight findings.
 
-Returns: "Published knowledge: <topic>". Indexing happens asynchronously; retrieval via qmd or knowledge_search may lag by one ingest cycle.`,
+Returns: "Published knowledge: <topic>". BM25 search is available within ~30 seconds (host fires \`qmd update agent-knowledge\` immediately after write). Semantic search may lag up to 4 hours (next embed cycle). Retrieve via knowledge_search.`,
   {
     topic: z.string().describe('Topic category (e.g., "APA regulation", "lab scheduling")'),
     finding: z.string().describe('The finding — clear, specific, actionable'),
     evidence: z.string().describe('Source (DOI, URL, conversation reference)'),
     tags: z.array(z.string()).describe('Tags for discoverability'),
+    confidence: z.number().int().min(1).max(10).optional().describe('Self-assessed 1-10 (1-3=weak, 4-6=moderate, 7-9=high, 10=definitive). Default 5.'),
   },
   async (args) => {
     writeIpcFile(TASKS_DIR, {
@@ -1929,6 +1931,7 @@ Returns: "Published knowledge: <topic>". Indexing happens asynchronously; retrie
       finding: args.finding,
       evidence: args.evidence,
       tags: args.tags,
+      confidence: args.confidence ?? 5,
       from: groupFolder,
       timestamp: new Date().toISOString(),
     });

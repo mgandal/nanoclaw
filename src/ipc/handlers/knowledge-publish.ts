@@ -1,3 +1,4 @@
+import { execFile } from 'child_process';
 import path from 'path';
 
 import { DATA_DIR } from '../../config.js';
@@ -9,10 +10,28 @@ interface Input {
   finding: string;
   evidence: string;
   tags: string[];
+  /**
+   * Self-assessed confidence 1-10. Distinct from KnowledgeEntry.confidence:
+   * this is the IPC-payload-side input; KnowledgeEntry is the publishKnowledge()
+   * file-writer input. Both gained `confidence` in the same commit (Phase 1.2
+   * round-1 amendment §4.1) — they are structurally separate types.
+   *
+   * parse() always returns a number here (defaulted to 5 if missing or
+   * out-of-range), so the field is non-optional.
+   */
+  confidence: number;
 }
 
 const KNOWLEDGE_DIR = path.join(DATA_DIR, 'agent-knowledge');
 const AUDIT_TARGET = 'agent-knowledge';
+
+// Verified path on this host: /usr/local/bin/qmd is a stable shim that
+// hardcodes the fnm-installed node + qmd package. The raw `which qmd` output
+// (an fnm-shell-pid symlink) is unstable and must NOT be used here. Under
+// launchd, PATH and HOME are stripped — both are explicit in the execFile env
+// (round-1 amendment §3.5). If the path differs on the host, update this
+// constant.
+const QMD_BIN = '/usr/local/bin/qmd';
 
 export const knowledgePublishHandler: IpcHandler<Input> = {
   type: 'knowledge_publish',
@@ -24,11 +43,23 @@ export const knowledgePublishHandler: IpcHandler<Input> = {
       typeof raw === 'object' && raw !== null
         ? (raw as Record<string, unknown>)
         : {};
+    // Confidence: clamp to [1, 10] integers; default 5 for missing, non-numeric,
+    // non-integer, or out-of-range values. Lenient parsing matches the original
+    // handler's behavior for other fields.
+    const rawConf = r.confidence;
+    const confidence =
+      typeof rawConf === 'number' &&
+      Number.isInteger(rawConf) &&
+      rawConf >= 1 &&
+      rawConf <= 10
+        ? rawConf
+        : 5;
     return {
       topic: typeof r.topic === 'string' ? r.topic : 'unknown',
       finding: typeof r.finding === 'string' ? r.finding : '',
       evidence: typeof r.evidence === 'string' ? r.evidence : '',
       tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
+      confidence,
     };
   },
 
@@ -43,6 +74,7 @@ export const knowledgePublishHandler: IpcHandler<Input> = {
         finding: input.finding,
         evidence: input.evidence,
         tags: input.tags,
+        confidence: input.confidence,
       },
     };
   },
@@ -53,6 +85,31 @@ export const knowledgePublishHandler: IpcHandler<Input> = {
     logger.info(
       { sourceGroup: ctx.sourceGroup, topic: input.topic, filePath },
       'Knowledge entry published',
+    );
+
+    // Fire-and-forget QMD index update so the finding is BM25-searchable
+    // within ~30 seconds (vs. the 4-hour sync cycle). Under launchd, BOTH
+    // PATH and HOME are stripped; provide both explicitly (round-1 amendment
+    // §3.5). Failure is logged but does not propagate — same pattern as the
+    // bus publish below.
+    execFile(
+      QMD_BIN,
+      ['update', 'agent-knowledge'],
+      {
+        timeout: 30_000,
+        env: {
+          PATH: `/usr/local/bin:/opt/homebrew/bin:${process.env.PATH ?? ''}`,
+          HOME: process.env.HOME ?? '/Users/mgandal',
+        },
+      },
+      (err) => {
+        if (err) {
+          logger.warn(
+            { err, sourceGroup: ctx.sourceGroup, topic: input.topic },
+            'qmd update agent-knowledge failed (non-fatal)',
+          );
+        }
+      },
     );
 
     if (ctx.deps.messageBus) {
