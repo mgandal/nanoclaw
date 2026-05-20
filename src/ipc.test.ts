@@ -2449,7 +2449,9 @@ describe('kg_query trust enforcement (C13)', () => {
       deps,
     );
 
-    // No result file should be written
+    // Phase 0c (R3-C3 amendment): a stage-result file IS written for
+    // result-kind handlers so the container poller doesn't hang
+    // IPC_TIMEOUT_MS. Shape: { executed:false, staged:true, pendingId, message }.
     const resultFile = path.join(
       DATA_DIR,
       'ipc',
@@ -2457,7 +2459,12 @@ describe('kg_query trust enforcement (C13)', () => {
       'kg_results',
       'c13-kg-req2.json',
     );
-    expect(fs.existsSync(resultFile)).toBe(false);
+    expect(fs.existsSync(resultFile)).toBe(true);
+    const stagedPayload = JSON.parse(fs.readFileSync(resultFile, 'utf-8'));
+    expect(stagedPayload.executed).toBe(false);
+    expect(stagedPayload.staged).toBe(true);
+    expect(typeof stagedPayload.pendingId).toBe('string');
+    expect(stagedPayload.pendingId).toMatch(/^pa-/);
 
     const pending = listPendingActions({ groupFolder: 'telegram_other' });
     expect(pending).toHaveLength(1);
@@ -2465,6 +2472,12 @@ describe('kg_query trust enforcement (C13)', () => {
     const payload = JSON.parse(pending[0].payload_json);
     expect(payload.query).toBe('flash');
     expect(payload.hops).toBe(2);
+
+    // Cleanup the leaked result-file directory tree.
+    fs.rmSync(
+      path.join(DATA_DIR, 'ipc', `telegram_other--${TEST_AGENT}`),
+      { recursive: true, force: true },
+    );
   });
 });
 

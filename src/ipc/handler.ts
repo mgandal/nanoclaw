@@ -418,7 +418,39 @@ export async function dispatchIpcAction(
         target: auditTarget,
         payloadForStaging: auth.payloadForStaging,
       });
-  if (decision !== null && !decision.allowed) return { handled: true };
+  if (decision !== null && !decision.allowed) {
+    // Phase 0c (R3-C3 amendment): write a stage-result file for result-kind
+    // handlers so the container poller doesn't hang IPC_TIMEOUT_MS waiting
+    // on a file the old short-circuit never wrote. Notify-kind handlers
+    // don't need this — they have no result-file contract.
+    //
+    // The `decision.pendingId !== null` guard pins this to the stage path
+    // (level=draft/ask). A future "blocked" path (level=denied) would have
+    // pendingId=null and we'd correctly NOT write a result file — the agent
+    // should see a timeout, matching the legacy deny semantics. Today only
+    // the stage path produces !allowed, so this is forward-compatible.
+    if (
+      responseKind === 'result' &&
+      requestId !== null &&
+      decision.pendingId !== null
+    ) {
+      const resultsDirName =
+        handler.resultsDirName ?? `${handler.type}_results`;
+      writeResultFile(
+        ctx.dataDir,
+        ctx.sourceGroup,
+        resultsDirName,
+        requestId,
+        {
+          executed: false,
+          staged: true,
+          pendingId: decision.pendingId,
+          message: `Staged for approval: ${decision.pendingId}`,
+        },
+      );
+    }
+    return { handled: true };
+  }
 
   let executed = true;
   let resultPayload: unknown = undefined;

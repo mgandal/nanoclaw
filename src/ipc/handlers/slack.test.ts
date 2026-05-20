@@ -1000,7 +1000,11 @@ describe('slack_dm handler', () => {
     }
   });
 
-  it('agent + send_slack_dm:ask → no file, audit row outcome=staged', async () => {
+  it('agent + send_slack_dm:ask → stage-result file written, audit row outcome=staged', async () => {
+    // Phase 0c (R3-C3 amendment): the dispatcher now writes a stage-result
+    // file when a result-kind handler stages, so the in-container poller
+    // sees `{executed:false, staged:true, pendingId, message}` instead of
+    // hanging IPC_TIMEOUT_MS. Bridge is NOT called (no execute()).
     const agentName = `test-slack-dm-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const agentDir = path.join(DATA_DIR, 'agents', agentName);
     fs.mkdirSync(agentDir, { recursive: true });
@@ -1020,9 +1024,19 @@ describe('slack_dm handler', () => {
         `${SOURCE_GROUP}--${agentName}`,
       );
 
-      expect(
-        readResult(`${SOURCE_GROUP}--${agentName}`, 'req-audit-ask'),
-      ).toBeNull();
+      const stagedFile = readResult(
+        `${SOURCE_GROUP}--${agentName}`,
+        'req-audit-ask',
+      );
+      expect(stagedFile).not.toBeNull();
+      // `readResult` returns `Record<string, unknown> | null`; the prior
+      // assertion narrows null. `!` is the documented test-narrowing idiom
+      // used elsewhere in this file.
+      expect(stagedFile!.executed).toBe(false);
+      expect(stagedFile!.staged).toBe(true);
+      expect(typeof stagedFile!.pendingId).toBe('string');
+      expect(stagedFile!.pendingId).toMatch(/^pa-/);
+      expect(stagedFile!.message).toContain('Staged for approval');
       expect(fetchMock).not.toHaveBeenCalled();
 
       const rows = getDb()
