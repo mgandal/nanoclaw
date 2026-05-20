@@ -436,18 +436,12 @@ export async function dispatchIpcAction(
     ) {
       const resultsDirName =
         handler.resultsDirName ?? `${handler.type}_results`;
-      writeResultFile(
-        ctx.dataDir,
-        ctx.sourceGroup,
-        resultsDirName,
-        requestId,
-        {
-          executed: false,
-          staged: true,
-          pendingId: decision.pendingId,
-          message: `Staged for approval: ${decision.pendingId}`,
-        },
-      );
+      writeResultFile(ctx.dataDir, ctx.sourceGroup, resultsDirName, requestId, {
+        executed: false,
+        staged: true,
+        pendingId: decision.pendingId,
+        message: `Staged for approval: ${decision.pendingId}`,
+      });
     }
     return { handled: true };
   }

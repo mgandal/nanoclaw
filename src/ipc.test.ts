@@ -2474,10 +2474,10 @@ describe('kg_query trust enforcement (C13)', () => {
     expect(payload.hops).toBe(2);
 
     // Cleanup the leaked result-file directory tree.
-    fs.rmSync(
-      path.join(DATA_DIR, 'ipc', `telegram_other--${TEST_AGENT}`),
-      { recursive: true, force: true },
-    );
+    fs.rmSync(path.join(DATA_DIR, 'ipc', `telegram_other--${TEST_AGENT}`), {
+      recursive: true,
+      force: true,
+    });
   });
 });
 
