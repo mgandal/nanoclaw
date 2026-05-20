@@ -702,13 +702,19 @@ describe('save_skill handler', () => {
     });
   });
 
-  it('3. authorize returns null for non-main caller', () => {
+  it('3. authorize succeeds for non-main caller (Phase 0b: isMain block dropped)', () => {
+    // Phase 0b dropped the !ctx.isMain early-return in saveSkillHandler.authorize.
+    // Trust.yaml policy is now the only restriction. Non-main agents may
+    // stage save_skill calls (which still bypass via skipGate until Phase 4).
+    // Pre-Phase-0b this returned null. See T-non-main-save below for the
+    // gate-activation-ready pin and spec R2-I2 for the rationale.
     const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
     const auth = saveSkillHandler.authorize(
       { skillName: 'foo', skillContent: 'body' },
       ctx,
     );
-    expect(auth).toBeNull();
+    expect(auth).not.toBeNull();
+    expect(auth!.skipGate).toBe(true);
   });
 
   it('4. authorize returns non-null with skipGate:true for main caller', () => {
@@ -916,13 +922,19 @@ describe('save_skill handler', () => {
     }
   });
 
-  it('12. integration: non-main dispatch silently blocks — skill_results/ empty, no file written', async () => {
+  it('12. integration: non-main dispatch reaches skipGate path → writes SKILL.md + result file (Phase 0b)', async () => {
+    // Phase 0b dropped the !ctx.isMain early-return. Non-main dispatch now
+    // reaches the skipGate path (which short-circuits the gate), execute()
+    // runs, and writes both the SKILL.md file and the skill_results/ result
+    // file. Pre-Phase-0b: silent block, no writes. See spec R2-I2.
+    // Phase 4 will strip skipGate, causing non-main dispatch to stage in
+    // pending_actions instead of executing inline.
     await dispatch(
       {
         type: 'save_skill',
         requestId: 'req-nonmain',
-        skillName: 'should-not-save',
-        skillContent: 'body',
+        skillName: 'phase0b-nonmain-save',
+        skillContent: '---\nname: phase0b-nonmain-save\n---\nbody',
       },
       SOURCE_GROUP,
       false,
@@ -937,13 +949,13 @@ describe('save_skill handler', () => {
     const entries = fs.existsSync(skillResultsDir)
       ? fs.readdirSync(skillResultsDir)
       : [];
-    expect(entries).toEqual([]);
+    expect(entries).toContain('req-nonmain.json');
 
     expect(
       fs.existsSync(
-        path.join(cwdTmp, 'container', 'skills', 'should-not-save'),
+        path.join(cwdTmp, 'container', 'skills', 'phase0b-nonmain-save'),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('T26.5 — payloadForStaging contains actual skillName + skillContent, not just {type}', () => {
@@ -972,6 +984,24 @@ describe('save_skill handler', () => {
       skillName: 'my-test-skill',
       skillContent: '# Test\nBody',
     });
+  });
+
+  it('T-non-main-save — save_skill authorize succeeds for non-main groups (post-isMain-drop)', () => {
+    const auth = saveSkillHandler.authorize(
+      { skillName: 'x', skillContent: 'y' },
+      {
+        sourceGroup: 'telegram_lab-claw--einstein',
+        isMain: false,
+        baseGroup: 'telegram_lab-claw',
+        agentName: 'einstein',
+        requestId: null,
+        registeredGroups: {},
+        deps: {} as any,
+        dataDir: '/tmp/test',
+      },
+    );
+    expect(auth).not.toBeNull();
+    expect((auth as any).target).toBe('');
   });
 });
 
@@ -1083,13 +1113,19 @@ describe('crystallize_skill handler', () => {
     });
   });
 
-  it('14. authorize returns null for non-main caller (R2 Critical 1 preserves legacy block)', () => {
+  it('14. authorize succeeds for non-main caller (Phase 0b: isMain block dropped)', () => {
+    // Phase 0b dropped the !ctx.isMain early-return in
+    // crystallizeSkillHandler.authorize. Trust.yaml policy is now the only
+    // restriction. Non-main agents may stage crystallize_skill calls (still
+    // bypassed via skipGate until Phase 4). See spec R2-I2 + T-non-main-
+    // crystallize below for the gate-activation-ready pin.
     const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
     const auth = crystallizeSkillHandler.authorize(
       validInput() as unknown as CrystInput,
       ctx,
     );
-    expect(auth).toBeNull();
+    expect(auth).not.toBeNull();
+    expect(auth!.skipGate).toBe(true);
   });
 
   it('15. authorize returns non-null with skipGate:true for main caller', () => {
@@ -1511,7 +1547,12 @@ describe('crystallize_skill handler', () => {
     }
   });
 
-  it('21. integration: non-main dispatch silently blocks, no SKILL.md written, no result file', async () => {
+  it('21. integration: non-main dispatch reaches skipGate path → writes SKILL.md + result file (Phase 0b)', async () => {
+    // Phase 0b dropped the !ctx.isMain early-return. Non-main dispatch now
+    // reaches the skipGate path, execute() runs, and writes both the
+    // SKILL.md and skill_results/ result file. Pre-Phase-0b: silent block.
+    // See spec R2-I2. Phase 4 will strip skipGate, redirecting non-main
+    // calls to pending_actions staging.
     await dispatch(
       validInput({ agent: 'crystal-target-nonmain' }),
       SOURCE_GROUP,
@@ -1527,11 +1568,11 @@ describe('crystallize_skill handler', () => {
     const entries = fs.existsSync(skillResultsDir)
       ? fs.readdirSync(skillResultsDir)
       : [];
-    expect(entries).toEqual([]);
+    expect(entries).toContain('req-crystal.json');
 
     expect(
       fs.existsSync(path.join(agentsTmpRoot, 'crystal-target-nonmain')),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('22. path-traversal: agent regex rejects "../etc" → invalid agent message', () => {
@@ -1611,6 +1652,31 @@ describe('crystallize_skill handler', () => {
       body: '# Pattern\nBody',
       confidence: 8,
     });
+  });
+
+  it('T-non-main-crystallize — crystallize_skill authorize succeeds for non-main groups', () => {
+    const auth = crystallizeSkillHandler.authorize(
+      {
+        agent: 'einstein',
+        name: 'x',
+        description: 'd',
+        source_task: 's',
+        body: 'b',
+        confidence: 5,
+        agentsRoot: undefined,
+      },
+      {
+        sourceGroup: 'telegram_lab-claw--einstein',
+        isMain: false,
+        baseGroup: 'telegram_lab-claw',
+        agentName: 'einstein',
+        requestId: null,
+        registeredGroups: {},
+        deps: {} as any,
+        dataDir: '/tmp/test',
+      },
+    );
+    expect(auth).not.toBeNull();
   });
 });
 

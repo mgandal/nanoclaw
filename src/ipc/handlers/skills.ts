@@ -434,7 +434,9 @@ export const skillInvokedHandler: IpcHandler<SkillInvokedInput, void> = {
 
 /**
  * save_skill — write a global skill to container/skills/{name}/SKILL.md.
- * Main-only. Migrated from src/ipc.ts:1107-1199 (handleSaveSkillIpc).
+ * Open to all groups (Phase 0b dropped the isMain gate; trust.yaml policy
+ * is the only restriction once Phase 4 strips skipGate). Migrated from
+ * src/ipc.ts:1107-1199 (handleSaveSkillIpc).
  *
  * Validation lives in execute() (NOT parse() or authorize()) so the agent
  * sees the 4 actionable error messages verbatim from legacy. If validation
@@ -465,13 +467,14 @@ export const saveSkillHandler: IpcHandler<
     };
   },
 
-  authorize(input, ctx) {
-    // Preserve legacy non-main block (ipc.ts:1013-1021).
+  authorize(input, _ctx) {
+    // Phase 0b: non-main authorize block dropped — trust.yaml policy is now
+    // the only restriction. Non-main agents can stage save_skill calls
+    // (which will land in pending_actions once Phase 4 strips skipGate).
+    // See spec R2-I2.
     // Phase 0a (gate-activation prep): payloadForStaging now contains the
     // actual skillName + skillContent so a future /approve replay receives
-    // the full input. The {type} stub would have failed replay with
-    // "Missing required parameters." See spec R3-C2.
-    if (!ctx.isMain) return null;
+    // the full input. See spec R3-C2.
     return {
       target: '',
       notifySummary: '',
@@ -580,16 +583,14 @@ export const saveSkillHandler: IpcHandler<
 
 /**
  * crystallize_skill — write a "reusable recipe" skill to
- * data/agents/{agent}/skills/crystallized/{name}/SKILL.md. Main-only.
- * Migrated from src/ipc.ts:1218-1328 (handleCrystallizeSkillIpc).
+ * data/agents/{agent}/skills/crystallized/{name}/SKILL.md. Open to all
+ * groups (Phase 0b dropped the isMain gate; trust.yaml policy is the only
+ * restriction once Phase 4 strips skipGate). Migrated from
+ * src/ipc.ts:1218-1328 (handleCrystallizeSkillIpc).
  *
  * Validation lives in execute() per the same R1 Critical 2 reasoning as
  * saveSkillHandler. agentsRoot env-gate preserved (R2 Critical 2) —
  * production protection against compromised-container path-redirection.
- *
- * Non-main block: legacy at ipc.ts:1028-1036 had an `if (!isMain)` warn +
- * return-true. Both R1 and R2 peer review verified this. The brainstorm's
- * original "no main check" claim was wrong.
  */
 interface CrystallizeSkillInput {
   agent: string | undefined;
@@ -625,15 +626,13 @@ export const crystallizeSkillHandler: IpcHandler<
     };
   },
 
-  authorize(input, ctx) {
-    // Preserve legacy non-main block at ipc.ts:1028-1036.
+  authorize(input, _ctx) {
+    // Phase 0b: non-main authorize block dropped. See spec R2-I2 + R3-C2.
     // Phase 0a (gate-activation prep): payloadForStaging now contains the
-    // actual fields a /approve replay needs. The {type} stub would have
-    // failed replay validation. See spec R3-C2. agentsRoot is intentionally
+    // actual fields a /approve replay needs. agentsRoot is intentionally
     // omitted: it's a test-only seam (skills.ts:713-718 env-gates it on
     // VITEST/NODE_ENV=test) and must never round-trip through production
     // staging — that would let a compromised payload redirect writes.
-    if (!ctx.isMain) return null;
     return {
       target: '',
       notifySummary: '',
