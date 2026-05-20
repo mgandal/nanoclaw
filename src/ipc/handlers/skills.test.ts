@@ -945,6 +945,34 @@ describe('save_skill handler', () => {
       ),
     ).toBe(false);
   });
+
+  it('T26.5 — payloadForStaging contains actual skillName + skillContent, not just {type}', () => {
+    // Mutation-pin for M4 (revert payloadForStaging to {type:'save_skill'} stub).
+    // This test verifies the Phase 0a fix: when the handler stages a real call,
+    // the stored payload must be reconstructible into a working replay payload.
+    const auth = saveSkillHandler.authorize(
+      {
+        skillName: 'my-test-skill',
+        skillContent: '# Test\nBody',
+      },
+      {
+        sourceGroup: 'telegram_claire',
+        isMain: true,
+        baseGroup: 'telegram_claire',
+        agentName: 'claire',
+        requestId: null,
+        registeredGroups: {},
+        deps: {} as any,
+        dataDir: '/tmp/test',
+      },
+    );
+    expect(auth).not.toBeNull();
+    expect((auth as any).payloadForStaging).toEqual({
+      type: 'save_skill',
+      skillName: 'my-test-skill',
+      skillContent: '# Test\nBody',
+    });
+  });
 });
 
 /**
@@ -1547,6 +1575,42 @@ describe('crystallize_skill handler', () => {
     // Also verify agentsTmpRoot itself is empty (no writes landed even
     // partially via the rejected path).
     expect(fs.readdirSync(agentsTmpRoot)).toEqual([]);
+  });
+
+  it('T27.5 — payloadForStaging contains actual agent/name/description/source_task/body/confidence, not just {type}', () => {
+    // Mutation-pin for M4 (revert payloadForStaging to {type:'crystallize_skill'} stub).
+    // Phase 0a fix — see T26.5 docblock.
+    const auth = crystallizeSkillHandler.authorize(
+      {
+        agent: 'claire',
+        name: 'my-pattern',
+        description: 'a learned pattern',
+        source_task: 'task-123',
+        body: '# Pattern\nBody',
+        confidence: 8,
+        agentsRoot: undefined,
+      },
+      {
+        sourceGroup: 'telegram_claire',
+        isMain: true,
+        baseGroup: 'telegram_claire',
+        agentName: 'claire',
+        requestId: null,
+        registeredGroups: {},
+        deps: {} as any,
+        dataDir: '/tmp/test',
+      },
+    );
+    expect(auth).not.toBeNull();
+    expect((auth as any).payloadForStaging).toEqual({
+      type: 'crystallize_skill',
+      agent: 'claire',
+      name: 'my-pattern',
+      description: 'a learned pattern',
+      source_task: 'task-123',
+      body: '# Pattern\nBody',
+      confidence: 8,
+    });
   });
 });
 

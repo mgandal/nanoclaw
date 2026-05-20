@@ -465,13 +465,21 @@ export const saveSkillHandler: IpcHandler<
     };
   },
 
-  authorize(_input, ctx) {
+  authorize(input, ctx) {
     // Preserve legacy non-main block (ipc.ts:1013-1021).
+    // Phase 0a (gate-activation prep): payloadForStaging now contains the
+    // actual skillName + skillContent so a future /approve replay receives
+    // the full input. The {type} stub would have failed replay with
+    // "Missing required parameters." See spec R3-C2.
     if (!ctx.isMain) return null;
     return {
       target: '',
       notifySummary: '',
-      payloadForStaging: { type: 'save_skill' },
+      payloadForStaging: {
+        type: 'save_skill',
+        skillName: input.skillName,
+        skillContent: input.skillContent,
+      },
       skipGate: true,
     };
   },
@@ -617,15 +625,27 @@ export const crystallizeSkillHandler: IpcHandler<
     };
   },
 
-  authorize(_input, ctx) {
-    // Preserve legacy non-main block at ipc.ts:1028-1036 (R2 Critical 1 +
-    // R1 Medium 1 — both reviewers verified the brainstorm's "no main
-    // check" claim was wrong).
+  authorize(input, ctx) {
+    // Preserve legacy non-main block at ipc.ts:1028-1036.
+    // Phase 0a (gate-activation prep): payloadForStaging now contains the
+    // actual fields a /approve replay needs. The {type} stub would have
+    // failed replay validation. See spec R3-C2. agentsRoot is intentionally
+    // omitted: it's a test-only seam (skills.ts:713-718 env-gates it on
+    // VITEST/NODE_ENV=test) and must never round-trip through production
+    // staging — that would let a compromised payload redirect writes.
     if (!ctx.isMain) return null;
     return {
       target: '',
       notifySummary: '',
-      payloadForStaging: { type: 'crystallize_skill' },
+      payloadForStaging: {
+        type: 'crystallize_skill',
+        agent: input.agent,
+        name: input.name,
+        description: input.description,
+        source_task: input.source_task,
+        body: input.body,
+        confidence: input.confidence,
+      },
       skipGate: true,
     };
   },
