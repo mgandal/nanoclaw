@@ -80,7 +80,11 @@ import {
   storeChatMetadata,
   storeMessage,
   migrateGroupJid,
+  getPendingAction,
+  listPendingActions,
+  updatePendingActionStatus,
 } from './db.js';
+import { replayStagedAction } from './replay-staged-action.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { initBotPool } from './channels/telegram.js';
@@ -108,8 +112,10 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import {
+  extractApprovalCommand,
   extractPersonasCommand,
   extractSessionCommand,
+  handleApprovalCommand,
   handlePersonasCommand,
   handleSessionCommand,
   isSessionCommandAllowed,
@@ -203,6 +209,11 @@ let healthMonitor: HealthMonitor;
 let loadedAgents: AgentIdentity[] = [];
 let agentRegistry: AgentRegistryRow[] = [];
 let busWatcher: BusWatcher | null = null;
+
+// Phase 3 (gate-activation): module-scope IpcDeps reference, populated by
+// main() after construction. processGroupMessages (also module scope) needs
+// access for approval slash-command replay.
+let moduleIpcDeps: IpcDeps | null = null;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -340,6 +351,71 @@ export const _h2ForTests = {
 };
 
 /**
+ * Phase 3 (gate-activation): preprocess incoming Telegram messages for
+ * /pending, /approve <id>, and /reject <id> commands BEFORE the agent
+ * handoff. Returns true if the message was consumed as a command (the
+ * caller should advance the cursor and skip the rest of the message-loop
+ * pipeline).
+ *
+ * Spec: docs/superpowers/specs/2026-05-19-ipc-gate-activation-design.md (D4)
+ */
+export async function handleApprovalSlashCommand(opts: {
+  text: string;
+  sourceGroupFolder: string;
+  isMainGroup: boolean;
+  deps: IpcDeps;
+  sendMessage: (text: string) => Promise<void>;
+}): Promise<boolean> {
+  const { text, sourceGroupFolder, isMainGroup, deps, sendMessage } = opts;
+  const trimmed = text.trim();
+
+  // D10: prefix match (/approve, /pending, or /reject at start) — if it does
+  // not look like an approval command at all, fall through (let agent handle).
+  if (!/^\/(approve|pending|reject)(\s|$)/.test(trimmed)) {
+    return false;
+  }
+
+  // extractApprovalCommand takes a triggerPattern arg; pass /^$/ since the
+  // text is already trimmed of any group trigger at this call site.
+  const cmd = extractApprovalCommand(trimmed, /^$/);
+  if (cmd === null) {
+    // Prefix matched but argument shape did NOT — usage hint.
+    if (/^\/(approve|reject)(\s|$)/.test(trimmed)) {
+      await sendMessage(
+        'Usage: /approve <id> or /reject <id> (no spaces in id). Use /pending to list.',
+      );
+      return true;
+    }
+    // /pending with garbage args is unreachable (extractApprovalCommand
+    // returns {kind:'pending'} only for bare /pending; `/pending foo` is not
+    // exact-equals). Fall through to natural language.
+    return false;
+  }
+
+  const replyText = await handleApprovalCommand({
+    command: cmd,
+    sourceGroupFolder,
+    isMainGroup,
+    db: {
+      getPendingAction,
+      listPendingActions,
+      updatePendingActionStatus,
+    },
+    execute: (action) =>
+      replayStagedAction({
+        action_type: action.action_type,
+        payload: action.payload,
+        group_folder: action.group_folder,
+        agent_name: action.agent_name,
+        deps,
+      }),
+  });
+
+  await sendMessage(replyText);
+  return true;
+}
+
+/**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
@@ -414,6 +490,39 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       return true;
     }
     // Unauthorized /new — don't return true, let remaining messages be processed
+  }
+
+  // --- /approve, /pending, /reject (Phase 3 gate-activation) ---
+  // After /new so that `/new /approve foo` lands on /new (which uses an
+  // exact-equals check and does NOT match the compound). Spec T22b.
+  for (const m of missedMessages) {
+    const text = m.content.trim().replace(groupTriggerPattern, '').trim();
+    const isApprovalAllowed = isMainGroup || m.is_from_me === true;
+    if (!isApprovalAllowed) continue;
+    if (!/^\/(approve|pending|reject)(\s|$)/.test(text)) continue;
+    if (!moduleIpcDeps) {
+      logger.warn(
+        { chatJid },
+        'Approval slash-command before ipcDeps init — skipping',
+      );
+      continue;
+    }
+
+    const handled = await handleApprovalSlashCommand({
+      text,
+      sourceGroupFolder: group.folder,
+      isMainGroup,
+      deps: moduleIpcDeps,
+      sendMessage: async (reply) => {
+        const formatted = formatOutbound(reply, channel.name as ChannelType);
+        if (formatted) await channel.sendMessage(chatJid, formatted);
+      },
+    });
+    if (handled) {
+      lastAgentSeq[chatJid] = m.seq;
+      saveState();
+      return true;
+    }
   }
 
   // --- Session command interception (before trigger check) ---
@@ -1908,6 +2017,10 @@ async function main(): Promise<void> {
     },
     messageBus,
   };
+  // Phase 3 (gate-activation): expose to processGroupMessages module scope
+  // so /approve, /pending, /reject can replay actions through the same
+  // IpcDeps instance.
+  moduleIpcDeps = ipcDeps;
   startIpcWatcher(ipcDeps);
 
   // Proactive watchers (vault delta, task outcome, thread silence, deferred
