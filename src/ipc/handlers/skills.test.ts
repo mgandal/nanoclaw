@@ -225,6 +225,16 @@ describe('skill_search handler', () => {
     ['results null', { results: null }],
     ['results string', { results: 'not-an-array' }],
     ['results object', { results: { 0: 'x' } }],
+    // H1.6 fix from R2 review: rawText can also be a non-object primitive.
+    // JSON.parse("null") returns null, not {}. Without the parsed-shape
+    // guard, Array.isArray(parsed.results) threw TypeError on the null
+    // dereference and was caught as "QMD unavailable: ...". Now: distinct
+    // malformed-results message via a guard BEFORE the L1 check.
+    ['parsed is null', null],
+    ['parsed is integer primitive', 42],
+    ['parsed is boolean primitive', true],
+    ['parsed is string primitive', 'just a string'],
+    ['parsed is array (not object)', [1, 2, 3]],
   ])(
     '29b. execute malformed QMD results (%s) returns malformed-results message, NOT QMD-unavailable (L1 defensive fix)',
     async (_label, parsedBody) => {
@@ -248,6 +258,82 @@ describe('skill_search handler', () => {
       });
     },
   );
+
+  // Inner-element shape coverage (H1 fix from R2 review). The original L1
+  // guard only validated outer Array.isArray; an array of malformed
+  // elements (missing fields, wrong types, null) bypassed the guard and
+  // hit .map(), where r.title / r.score.toFixed() / etc. threw TypeError.
+  // The outer try/catch then reported it as 'QMD unavailable: ...' —
+  // exactly the misleading-error pattern L1 was supposed to close.
+  it.each([
+    ['element null', { results: [null] }],
+    ['element empty object', { results: [{}] }],
+    [
+      'element missing score',
+      { results: [{ file: 'a', title: 'T', snippet: 's' }] },
+    ],
+    [
+      'element missing title',
+      { results: [{ file: 'a', score: 0.5, snippet: 's' }] },
+    ],
+    [
+      'element score wrong type',
+      { results: [{ file: 'a', title: 'T', score: 'high', snippet: 's' }] },
+    ],
+    [
+      'element file wrong type',
+      { results: [{ file: 42, title: 'T', score: 0.5, snippet: 's' }] },
+    ],
+    [
+      'mixed valid+invalid',
+      {
+        results: [
+          { file: 'a', title: 'A', score: 0.9, snippet: 'aaa' },
+          { foo: 'bar' },
+        ],
+      },
+    ],
+  ])(
+    '29c. execute malformed QMD element shape (%s) returns malformed-results message (H1 defensive fix)',
+    async (_label, parsedBody) => {
+      fetchMock.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          result: {
+            content: [{ text: JSON.stringify(parsedBody) }],
+          },
+        }),
+      });
+      const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+      const out = await skillSearchHandler.execute({ query: 'foo' }, ctx);
+      expect(out).toEqual({
+        executed: true,
+        result: {
+          success: false,
+          message: 'QMD returned malformed results array',
+        },
+      });
+    },
+  );
+
+  it('29d. execute empty results array succeeds with No-skills-found body', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        result: { content: [{ text: JSON.stringify({ results: [] }) }] },
+      }),
+    });
+    const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
+    const out = await skillSearchHandler.execute({ query: 'foo' }, ctx);
+    // Empty array is well-formed — just zero results. Preserve legacy
+    // 'No skills found' message (skills.ts:163).
+    expect(out).toMatchObject({
+      executed: true,
+      result: { success: true, message: 'No skills found' },
+    });
+  });
 
   it('30. integration: dispatcher catches response.json() rejection → writes failure file', async () => {
     fetchMock.mockResolvedValueOnce({
@@ -1442,7 +1528,25 @@ describe('crystallize_skill handler', () => {
           'Invalid agent identifier. Use lowercase letters, numbers, underscores, or hyphens (1-64 chars).',
       },
     });
-    expect(fs.existsSync(path.join(agentsTmpRoot, '..', 'etc'))).toBe(false);
+    // Verify no SKILL.md was written via path traversal. We check the
+    // specific subpath the handler would have created (skills/crystallized/
+    // <name>/SKILL.md) rather than asserting `../etc` itself does not exist
+    // — the latter is host-environment-dependent (macOS sometimes creates
+    // an /etc subdirectory in $TMPDIR for unrelated reasons), making the
+    // assertion flaky.
+    const traversalTarget = path.join(
+      agentsTmpRoot,
+      '..',
+      'etc',
+      'skills',
+      'crystallized',
+      'skill1',
+      'SKILL.md',
+    );
+    expect(fs.existsSync(traversalTarget)).toBe(false);
+    // Also verify agentsTmpRoot itself is empty (no writes landed even
+    // partially via the rejected path).
+    expect(fs.readdirSync(agentsTmpRoot)).toEqual([]);
   });
 });
 

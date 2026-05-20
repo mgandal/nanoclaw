@@ -134,7 +134,38 @@ export const skillSearchHandler: IpcHandler<
         };
       }
 
-      const parsed = JSON.parse(rawText) as {
+      const parsed = JSON.parse(rawText) as unknown;
+
+      // Guard against parsed being a non-object primitive (null, number,
+      // boolean, string) or array (H1.6 fix from R2 review round 2).
+      // Without this, JSON.parse("null") returns null and the next-line
+      // Array.isArray(parsedObj.results) throws TypeError on the null
+      // dereference — caught by outer try/catch as the misleading
+      // "QMD unavailable: null is not an object..." message that L1 +
+      // H1 were already supposed to close.
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed)
+      ) {
+        logger.warn(
+          {
+            sourceGroup: ctx.sourceGroup,
+            requestId: ctx.requestId,
+            parsedType: parsed === null ? 'null' : typeof parsed,
+          },
+          'skill_search IPC: QMD returned 200 with non-object payload',
+        );
+        return {
+          executed: true,
+          result: {
+            success: false,
+            message: 'QMD returned malformed results array',
+          },
+        };
+      }
+
+      const parsedObj = parsed as {
         results?: Array<{
           file: string;
           title: string;
@@ -143,12 +174,12 @@ export const skillSearchHandler: IpcHandler<
         }>;
       };
 
-      if (!Array.isArray(parsed.results)) {
+      if (!Array.isArray(parsedObj.results)) {
         logger.warn(
           {
             sourceGroup: ctx.sourceGroup,
             requestId: ctx.requestId,
-            parsedKeys: Object.keys(parsed),
+            parsedKeys: Object.keys(parsedObj),
           },
           'skill_search IPC: QMD returned 200 with malformed results array',
         );
@@ -161,7 +192,44 @@ export const skillSearchHandler: IpcHandler<
         };
       }
 
-      const formatted = parsed.results
+      // Element-level shape validation (H1 fix from R2 review). The outer
+      // Array.isArray guard above lets {results: [null]} / {results: [{}]}
+      // through; without this check, .map() throws TypeError on r.title /
+      // r.score.toFixed() and the outer catch re-reports it as the same
+      // misleading 'QMD unavailable: ...' message L1 was supposed to fix.
+      // Strict reject (vs lenient filter): malformed elements signal a
+      // QMD-side bug worth surfacing, not silently dropping.
+      const isValidElement = (
+        r: unknown,
+      ): r is { file: string; title: string; score: number; snippet: string } =>
+        r !== null &&
+        typeof r === 'object' &&
+        typeof (r as Record<string, unknown>).file === 'string' &&
+        typeof (r as Record<string, unknown>).title === 'string' &&
+        typeof (r as Record<string, unknown>).score === 'number' &&
+        Number.isFinite((r as Record<string, unknown>).score) &&
+        typeof (r as Record<string, unknown>).snippet === 'string';
+
+      const resultCount = parsedObj.results.length;
+      if (!parsedObj.results.every(isValidElement)) {
+        logger.warn(
+          {
+            sourceGroup: ctx.sourceGroup,
+            requestId: ctx.requestId,
+            resultCount,
+          },
+          'skill_search IPC: QMD returned 200 with malformed element shape',
+        );
+        return {
+          executed: true,
+          result: {
+            success: false,
+            message: 'QMD returned malformed results array',
+          },
+        };
+      }
+
+      const formatted = parsedObj.results
         .map(
           (r) =>
             `${r.title} (score: ${r.score.toFixed(2)})\n  ${r.snippet}\n  file: ${r.file}`,
