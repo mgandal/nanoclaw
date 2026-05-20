@@ -470,11 +470,16 @@ export const saveSkillHandler: IpcHandler<
   authorize(input, _ctx) {
     // Phase 0b: non-main authorize block dropped — trust.yaml policy is now
     // the only restriction. Non-main agents can stage save_skill calls
-    // (which will land in pending_actions once Phase 4 strips skipGate).
-    // See spec R2-I2.
-    // Phase 0a (gate-activation prep): payloadForStaging now contains the
-    // actual skillName + skillContent so a future /approve replay receives
+    // which land in pending_actions. See spec R2-I2.
+    // Phase 0a (gate-activation prep): payloadForStaging contains the
+    // actual skillName + skillContent so the /approve replay path receives
     // the full input. See spec R3-C2.
+    // Phase 4 (gate-activation): skipGate REMOVED — every call now flows
+    // through gateAndStage. With trust.yaml `save_skill: draft` on all 9
+    // agents, dispatch stages in pending_actions; user `/approve pa-xxx`
+    // invokes the replay module (Phase 2) which calls execute() inline.
+    // See spec Phase 4 + docs/superpowers/plans/2026-05-19-ipc-gate-
+    // activation-plan.md.
     return {
       target: '',
       notifySummary: '',
@@ -483,7 +488,6 @@ export const saveSkillHandler: IpcHandler<
         skillName: input.skillName,
         skillContent: input.skillContent,
       },
-      skipGate: true,
     };
   },
 
@@ -628,11 +632,16 @@ export const crystallizeSkillHandler: IpcHandler<
 
   authorize(input, _ctx) {
     // Phase 0b: non-main authorize block dropped. See spec R2-I2 + R3-C2.
-    // Phase 0a (gate-activation prep): payloadForStaging now contains the
+    // Phase 0a (gate-activation prep): payloadForStaging contains the
     // actual fields a /approve replay needs. agentsRoot is intentionally
     // omitted: it's a test-only seam (skills.ts:713-718 env-gates it on
     // VITEST/NODE_ENV=test) and must never round-trip through production
     // staging — that would let a compromised payload redirect writes.
+    // Phase 4 (gate-activation): skipGate REMOVED — every call now flows
+    // through gateAndStage. With trust.yaml `crystallize_skill: draft` on
+    // all 9 agents, dispatch stages in pending_actions; user `/approve
+    // pa-xxx` invokes the replay module (Phase 2) which calls execute()
+    // inline. See spec Phase 4.
     return {
       target: '',
       notifySummary: '',
@@ -645,7 +654,6 @@ export const crystallizeSkillHandler: IpcHandler<
         body: input.body,
         confidence: input.confidence,
       },
-      skipGate: true,
     };
   },
 

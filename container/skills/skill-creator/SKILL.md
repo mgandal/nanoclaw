@@ -79,7 +79,7 @@ cat > /workspace/ipc/tasks/save-skill-$(date +%s).json << 'TASKEOF'
 TASKEOF
 ```
 
-Replace `TIMESTAMP` with `$(date +%s)` and paste the full SKILL.md content as `skillContent`. The host will save it to `container/skills/{name}/SKILL.md` so it's available to all future sessions and groups.
+Replace `TIMESTAMP` with `$(date +%s)` and paste the full SKILL.md content as `skillContent`. As of 2026-05-20 (gate-activation Phase 4), the host **stages** save_skill calls in `pending_actions` rather than writing the file immediately. The user must run `/approve pa-xxx` in their group to commit the skill to `container/skills/{name}/SKILL.md`. Your IPC reply will include the `pendingId` so you can tell the user what to approve.
 
 **Important:** Only persist skills the user explicitly wants permanent. Session-only skills are fine for one-off experiments.
 
@@ -90,6 +90,7 @@ After creating the skill, tell the user:
 - When it will activate
 - Whether it's session-only or permanent
 - How to use it (e.g., "just say /your-skill-name or describe what you want")
+- **The pendingId from your IPC reply** and the exact command (`/approve pa-xxx`) they need to run for the skill to land. Until then it sits in the approval queue (`/pending` lists them).
 
 ## Example
 

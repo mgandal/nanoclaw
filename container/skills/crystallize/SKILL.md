@@ -80,11 +80,14 @@ Substitute values before writing. `AGENT_NAME_HERE` is your own agent name (`cla
 
 ### Step 5: Confirm to the user
 
+As of 2026-05-20 (gate-activation Phase 4), the host **stages** crystallize_skill calls in `pending_actions` rather than writing the file immediately. The user must run `/approve pa-xxx` in their group to commit the skill. Your IPC reply will include the `pendingId`.
+
 Tell them:
 - The skill name.
 - One sentence on when it will activate.
 - The confidence score.
-- That the skill shows up on the **next** container spawn (current session won't see it).
+- **The pendingId from your IPC reply** and the exact command (`/approve pa-xxx`) they need to run for the skill to land. Until approved, the skill sits in the queue (`/pending` lists them).
+- That once approved, the skill shows up on the **next** container spawn (current session won't see it).
 
 ## Generalize, don't replay
 

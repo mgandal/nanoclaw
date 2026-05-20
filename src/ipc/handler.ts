@@ -41,12 +41,16 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   'task_close',
   'task_reopen',
   'pageindex_index',
-  // TODO: gate save_skill / crystallize_skill (currently preserve-bypass
-  // per Batch 2G; trust.yaml has 9 dormant save_skill: draft entries on
-  // claire/freud/simon/coo/einstein/steve/marvin/vincent/warren that this
-  // gate-bypass keeps inactive).
-  'save_skill',
-  'crystallize_skill',
+  // Phase 4 (2026-05-19): save_skill + crystallize_skill REMOVED from this
+  // list as the gate-activation policy flip went live. All 9 agents'
+  // trust.yaml carry `save_skill: draft` + `crystallize_skill: draft`, so
+  // every call now stages in pending_actions; user `/approve pa-xxx`
+  // invokes the replay module (Phase 2) to actually write the SKILL.md.
+  // See docs/superpowers/specs/2026-05-19-ipc-gate-activation-design.md
+  // and docs/superpowers/plans/2026-05-19-ipc-gate-activation-plan.md
+  // Phase 4. Rollback: re-add both entries here AND re-add
+  // `skipGate: true` to the two authorize() blocks in
+  // src/ipc/handlers/skills.ts — gate stays inert without rows to approve.
   // Self-directed agent wakeup. Rate-limited (10/agent/group) in
   // scheduleWakeupHandler.authorize; handler writes its own audit row.
   // Phase 1.1 — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md

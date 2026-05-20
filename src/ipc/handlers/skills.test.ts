@@ -702,29 +702,41 @@ describe('save_skill handler', () => {
     });
   });
 
-  it('3. authorize succeeds for non-main caller (Phase 0b: isMain block dropped)', () => {
+  it('3. authorize succeeds for non-main caller and flows through the gate (Phase 4)', () => {
     // Phase 0b dropped the !ctx.isMain early-return in saveSkillHandler.authorize.
-    // Trust.yaml policy is now the only restriction. Non-main agents may
-    // stage save_skill calls (which still bypass via skipGate until Phase 4).
-    // Pre-Phase-0b this returned null. See T-non-main-save below for the
-    // gate-activation-ready pin and spec R2-I2 for the rationale.
+    // Trust.yaml policy is now the only restriction.
+    // Phase 4 (gate-activation): skipGate REMOVED — every call now flows
+    // through gateAndStage. Authorize must return non-null with NO
+    // skipGate field, so the dispatcher routes to the gate path.
     const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
     const auth = saveSkillHandler.authorize(
       { skillName: 'foo', skillContent: 'body' },
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.skipGate).toBe(true);
+    expect(auth!.skipGate).toBeUndefined();
+    expect(auth!.payloadForStaging).toEqual({
+      type: 'save_skill',
+      skillName: 'foo',
+      skillContent: 'body',
+    });
   });
 
-  it('4. authorize returns non-null with skipGate:true for main caller', () => {
+  it('4. authorize returns non-null with NO skipGate field for main caller (Phase 4)', () => {
+    // Phase 4: main caller no longer bypasses gate. Returns non-null + the
+    // staging payload, so the dispatcher routes through gateAndStage.
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     const auth = saveSkillHandler.authorize(
       { skillName: 'foo', skillContent: 'body' },
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.skipGate).toBe(true);
+    expect(auth!.skipGate).toBeUndefined();
+    expect(auth!.payloadForStaging).toEqual({
+      type: 'save_skill',
+      skillName: 'foo',
+      skillContent: 'body',
+    });
   });
 
   it('5. execute missing skillName or skillContent returns Missing required parameters', () => {
@@ -878,7 +890,14 @@ describe('save_skill handler', () => {
     );
   });
 
-  it('11. integration: agent main caller writes SKILL.md, no audit row, no pending_actions (preserve-bypass)', async () => {
+  it('11. integration: gate-activation — main caller stages save_skill in pending_actions (Phase 4)', async () => {
+    // Phase 4 flipped this: pre-Phase-4 the skipGate bypass let execute()
+    // run, writing SKILL.md + zero audit/pending rows ("preserve-bypass").
+    // Post-Phase-4 the gate sees trust.yaml `save_skill: draft`, decides
+    // `stage: true`, writes ONE agent_actions row (outcome=staged), inserts
+    // ONE pending_actions row, and short-circuits before execute() — so the
+    // SKILL.md file is NEVER written. The agent gets a stage-result file
+    // (Phase 0c) via the dispatcher's `decision.pendingId !== null` branch.
     const agentName = `test-save-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const agentDir = path.join(DATA_DIR, 'agents', agentName);
     fs.mkdirSync(agentDir, { recursive: true });
@@ -892,49 +911,59 @@ describe('save_skill handler', () => {
         {
           type: 'save_skill',
           requestId: 'req-bypass',
-          skillName: 'preserve-bypass-test',
-          skillContent: '---\nname: preserve-bypass-test\n---\nbody',
+          skillName: 'gate-staged-save',
+          skillContent: '---\nname: gate-staged-save\n---\nbody',
         },
         `${SOURCE_GROUP}--${agentName}`,
         true,
       );
 
+      // SKILL.md NOT written — execute() short-circuited at the gate.
       const file = path.join(
         cwdTmp,
         'container',
         'skills',
-        'preserve-bypass-test',
+        'gate-staged-save',
         'SKILL.md',
       );
-      expect(fs.existsSync(file)).toBe(true);
+      expect(fs.existsSync(file)).toBe(false);
 
+      // agent_actions row written by checkTrustAndStage (outcome=staged).
       const actionRows = getDb()
         .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
-        .all(agentName);
-      expect(actionRows).toHaveLength(0);
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(actionRows).toHaveLength(1);
+      expect(actionRows[0].action_type).toBe('save_skill');
+      expect(actionRows[0].outcome).toBe('staged');
 
+      // pending_actions row written; agent must /approve to invoke.
       const pendingRows = getDb()
         .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
-        .all(agentName);
-      expect(pendingRows).toHaveLength(0);
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pendingRows).toHaveLength(1);
+      expect(pendingRows[0].action_type).toBe('save_skill');
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
 
-  it('12. integration: non-main dispatch reaches skipGate path → writes SKILL.md + result file (Phase 0b)', async () => {
-    // Phase 0b dropped the !ctx.isMain early-return. Non-main dispatch now
-    // reaches the skipGate path (which short-circuits the gate), execute()
-    // runs, and writes both the SKILL.md file and the skill_results/ result
-    // file. Pre-Phase-0b: silent block, no writes. See spec R2-I2.
-    // Phase 4 will strip skipGate, causing non-main dispatch to stage in
-    // pending_actions instead of executing inline.
+  it('12. integration: non-agent caller path — non-main dispatch with no agentName executes inline (Phase 4)', async () => {
+    // Phase 4: skipGate is gone, but the gate's NON_AGENT_DECISION short-
+    // circuit (trust-gate.ts:35 `if (!input.agentName) return NON_AGENT_DECISION`)
+    // still allows non-agent callers through. compoundSource here is bare
+    // `SOURCE_GROUP` (no `--agent` suffix), so buildContext parses
+    // agentName=null. The gate returns allowed=true without consulting any
+    // trust.yaml; execute() runs and writes both the SKILL.md + result file.
+    //
+    // Pre-Phase-4 this passed via the skipGate bypass for the same outcome;
+    // post-Phase-4 it passes via the non-agent decision path. Test is
+    // structurally identical — the underlying mechanism changed.
     await dispatch(
       {
         type: 'save_skill',
         requestId: 'req-nonmain',
-        skillName: 'phase0b-nonmain-save',
-        skillContent: '---\nname: phase0b-nonmain-save\n---\nbody',
+        skillName: 'phase4-nonagent-save',
+        skillContent: '---\nname: phase4-nonagent-save\n---\nbody',
       },
       SOURCE_GROUP,
       false,
@@ -953,7 +982,7 @@ describe('save_skill handler', () => {
 
     expect(
       fs.existsSync(
-        path.join(cwdTmp, 'container', 'skills', 'phase0b-nonmain-save'),
+        path.join(cwdTmp, 'container', 'skills', 'phase4-nonagent-save'),
       ),
     ).toBe(true);
   });
@@ -1002,6 +1031,127 @@ describe('save_skill handler', () => {
     );
     expect(auth).not.toBeNull();
     expect((auth as any).target).toBe('');
+  });
+
+  // Phase 4 gate-activation tests (T24, T26, T28). Behavior assertions
+  // replacing the previous tautological "no skipGate field" pin.
+  it('T24 — dispatch save_skill invokes gateAndStage (not skipGate)', async () => {
+    // R3-I3 amendment: behavior assertion, not line-edit assertion.
+    // Spy on loadAgentTrust to verify the gate path was taken — pre-Phase-4,
+    // skipGate short-circuited before gateAndStage so loadAgentTrust never
+    // fired. Post-Phase-4 it MUST fire.
+    const agentRegistry = await import('../../agent-registry.js');
+    const spy = vi.spyOn(agentRegistry, 'loadAgentTrust');
+
+    const agentName = `t24-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  save_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'save_skill',
+          requestId: `req_t24_${agentName}`,
+          skillName: 'x',
+          skillContent: 'y',
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('T26 — stage save_skill end-to-end with REAL on-disk trust.yaml (R3-C5)', async () => {
+    // End-to-end gate-activation pin. Verifies that a real on-disk trust.yaml
+    // with `save_skill: draft` causes the dispatcher to stage the action in
+    // pending_actions and skip execute() — using the existing dispatch()
+    // helper (not raw dispatchIpcAction) so the compound-source path is real.
+    const agentName = `t26-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  save_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'save_skill',
+          requestId: `req_t26_${agentName}`,
+          skillName: 't26-skill',
+          skillContent: '# t26',
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+
+      // pending_actions has one row for this agent.
+      const pending = getDb()
+        .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pending).toHaveLength(1);
+      expect(pending[0].action_type).toBe('save_skill');
+
+      // Skill file NOT written — execute() short-circuited at the gate.
+      const skillFile = path.join(
+        cwdTmp,
+        'container',
+        'skills',
+        't26-skill',
+        'SKILL.md',
+      );
+      expect(fs.existsSync(skillFile)).toBe(false);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('T28 — pending_actions.payload_json contains actual skillName + skillContent (R3-C6)', async () => {
+    // Load-bearing roundtrip pin. Mutation pin for M4 — without the Phase 0a
+    // payloadForStaging fix, this row would contain only `{type:'save_skill'}`
+    // and /approve replay would fail with "missing required parameters."
+    const agentName = `t28-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  save_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'save_skill',
+          requestId: `req_t28_${agentName}`,
+          skillName: 't28-skill',
+          skillContent: '# real content',
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+
+      const pending = getDb()
+        .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pending).toHaveLength(1);
+      const payload = JSON.parse(pending[0].payload_json as string);
+      expect(payload).toEqual({
+        type: 'save_skill',
+        skillName: 't28-skill',
+        skillContent: '# real content',
+      });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1113,29 +1263,31 @@ describe('crystallize_skill handler', () => {
     });
   });
 
-  it('14. authorize succeeds for non-main caller (Phase 0b: isMain block dropped)', () => {
-    // Phase 0b dropped the !ctx.isMain early-return in
-    // crystallizeSkillHandler.authorize. Trust.yaml policy is now the only
-    // restriction. Non-main agents may stage crystallize_skill calls (still
-    // bypassed via skipGate until Phase 4). See spec R2-I2 + T-non-main-
-    // crystallize below for the gate-activation-ready pin.
+  it('14. authorize succeeds for non-main caller and flows through the gate (Phase 4)', () => {
+    // Phase 0b dropped the !ctx.isMain early-return.
+    // Phase 4 (gate-activation): skipGate REMOVED — every call flows through
+    // gateAndStage. Authorize returns non-null with NO skipGate field.
     const ctx = buildContext(SOURCE_GROUP, false, deps, dataDir);
     const auth = crystallizeSkillHandler.authorize(
       validInput() as unknown as CrystInput,
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.skipGate).toBe(true);
+    expect(auth!.skipGate).toBeUndefined();
+    expect(auth!.payloadForStaging.type).toBe('crystallize_skill');
   });
 
-  it('15. authorize returns non-null with skipGate:true for main caller', () => {
+  it('15. authorize returns non-null with NO skipGate field for main caller (Phase 4)', () => {
+    // Phase 4: main caller no longer bypasses gate. Returns non-null + the
+    // staging payload (agentsRoot intentionally NOT included — test-only seam).
     const ctx = buildContext(SOURCE_GROUP, true, deps, dataDir);
     const auth = crystallizeSkillHandler.authorize(
       validInput() as unknown as CrystInput,
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.skipGate).toBe(true);
+    expect(auth!.skipGate).toBeUndefined();
+    expect(auth!.payloadForStaging.type).toBe('crystallize_skill');
   });
 
   // Tests 16, 16b–16g pin per-field validation messages (M1 fix). Legacy
@@ -1511,10 +1663,23 @@ describe('crystallize_skill handler', () => {
     }
   });
 
-  it('20. integration: agent main caller writes SKILL.md, no audit row, no pending_actions', async () => {
+  it('20. integration: gate-activation — main caller stages crystallize_skill in pending_actions (Phase 4)', async () => {
+    // Phase 4 flipped this: pre-Phase-4 the skipGate bypass let execute()
+    // run, writing SKILL.md + zero audit/pending rows. Post-Phase-4 the gate
+    // reads trust.yaml. We write `crystallize_skill: draft` explicitly
+    // (mirroring Test 11 and the migration script's Phase 1 writes) so
+    // trust_level lands as 'draft' — NOT the 'ask' fail-safe path. This
+    // pins that the migrated trust.yaml entry is what's actually consulted
+    // (caught by Phase 4 code review: without explicit draft, the test
+    // would still pass via fail-safe and silently miss a regression where
+    // crystallize_skill: draft never got written to disk).
     const agentName = `test-crystal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const agentDir = path.join(DATA_DIR, 'agents', agentName);
     fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  crystallize_skill: draft\n',
+    );
 
     try {
       await dispatch(
@@ -1523,6 +1688,7 @@ describe('crystallize_skill handler', () => {
         true,
       );
 
+      // SKILL.md NOT written — execute() short-circuited at the gate.
       const file = path.join(
         agentsTmpRoot,
         'crystal-target',
@@ -1531,28 +1697,41 @@ describe('crystallize_skill handler', () => {
         'test-skill-1',
         'SKILL.md',
       );
-      expect(fs.existsSync(file)).toBe(true);
+      expect(fs.existsSync(file)).toBe(false);
 
+      // agent_actions row written by checkTrustAndStage (outcome=staged,
+      // trust_level=draft — not 'ask' — confirming the on-disk entry was
+      // consulted, not the missing-entry fail-safe).
       const actionRows = getDb()
         .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
-        .all(agentName);
-      expect(actionRows).toHaveLength(0);
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(actionRows).toHaveLength(1);
+      expect(actionRows[0].action_type).toBe('crystallize_skill');
+      expect(actionRows[0].outcome).toBe('staged');
+      expect(actionRows[0].trust_level).toBe('draft');
 
+      // pending_actions row written; agent must /approve to invoke.
       const pendingRows = getDb()
         .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
-        .all(agentName);
-      expect(pendingRows).toHaveLength(0);
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pendingRows).toHaveLength(1);
+      expect(pendingRows[0].action_type).toBe('crystallize_skill');
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
 
-  it('21. integration: non-main dispatch reaches skipGate path → writes SKILL.md + result file (Phase 0b)', async () => {
-    // Phase 0b dropped the !ctx.isMain early-return. Non-main dispatch now
-    // reaches the skipGate path, execute() runs, and writes both the
-    // SKILL.md and skill_results/ result file. Pre-Phase-0b: silent block.
-    // See spec R2-I2. Phase 4 will strip skipGate, redirecting non-main
-    // calls to pending_actions staging.
+  it('21. integration: non-agent caller path — non-main dispatch with no agentName executes inline (Phase 4)', async () => {
+    // Phase 4: skipGate is gone, but the gate's NON_AGENT_DECISION short-
+    // circuit (trust-gate.ts:35 `if (!input.agentName) return NON_AGENT_DECISION`)
+    // still allows non-agent callers through. compoundSource here is bare
+    // `SOURCE_GROUP` (no `--agent` suffix), so buildContext parses
+    // agentName=null; the gate returns allowed=true without consulting any
+    // trust.yaml; execute() runs and writes both the SKILL.md + result file.
+    //
+    // Pre-Phase-4 this passed via the skipGate bypass for the same outcome;
+    // post-Phase-4 it passes via the non-agent decision path. Test is
+    // structurally identical — the underlying mechanism changed.
     await dispatch(
       validInput({ agent: 'crystal-target-nonmain' }),
       SOURCE_GROUP,
@@ -1678,25 +1857,173 @@ describe('crystallize_skill handler', () => {
     );
     expect(auth).not.toBeNull();
   });
+
+  // Phase 4 gate-activation tests (T25, T27, T29). Behavior assertions
+  // replacing the previous tautological "no skipGate field" pin.
+  it('T25 — dispatch crystallize_skill invokes gateAndStage (not skipGate)', async () => {
+    // R3-I3 amendment: behavior assertion. loadAgentTrust MUST fire under
+    // Phase 4. Pre-Phase-4 the skipGate path short-circuited before
+    // gateAndStage so loadAgentTrust never fired.
+    const agentRegistry = await import('../../agent-registry.js');
+    const spy = vi.spyOn(agentRegistry, 'loadAgentTrust');
+
+    const agentName = `t25-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  crystallize_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'crystallize_skill',
+          requestId: `req_t25_${agentName}`,
+          agent: 'einstein',
+          name: 'x',
+          description: 'd',
+          source_task: 's',
+          body: 'b',
+          confidence: 5,
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('T27 — stage crystallize_skill end-to-end with REAL on-disk trust.yaml (R3-C5)', async () => {
+    // End-to-end gate-activation pin. Mirror of T26 for the crystallize_skill
+    // handler. Uses the existing dispatch() helper (compound-source path).
+    const agentName = `t27-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  crystallize_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'crystallize_skill',
+          requestId: `req_t27_${agentName}`,
+          agent: 'einstein',
+          name: 't27-pattern',
+          description: 'd',
+          source_task: 's',
+          body: '# body',
+          confidence: 7,
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+
+      const pending = getDb()
+        .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pending).toHaveLength(1);
+      expect(pending[0].action_type).toBe('crystallize_skill');
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('T29 — pending_actions.payload_json contains all crystallize_skill fields (R3-C6)', async () => {
+    // Load-bearing roundtrip pin. Mutation pin for M4 — without the Phase 0a
+    // payloadForStaging fix, this row would contain only
+    // `{type:'crystallize_skill'}` and /approve replay would fail validation.
+    // agentsRoot is intentionally NOT in the expected payload (it's a test-
+    // only seam that must never round-trip through staging; see authorize()
+    // comment in skills.ts:630).
+    const agentName = `t29-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const agentDir = path.join(DATA_DIR, 'agents', agentName);
+    fs.mkdirSync(agentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(agentDir, 'trust.yaml'),
+      'actions:\n  crystallize_skill: draft\n',
+    );
+
+    try {
+      await dispatch(
+        {
+          type: 'crystallize_skill',
+          requestId: `req_t29_${agentName}`,
+          agent: 'einstein',
+          name: 't29-pattern',
+          description: 'desc',
+          source_task: 'task-1',
+          body: '# body',
+          confidence: 7,
+        },
+        `${SOURCE_GROUP}--${agentName}`,
+        true,
+      );
+
+      const pending = getDb()
+        .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+        .all(agentName) as Array<Record<string, unknown>>;
+      expect(pending).toHaveLength(1);
+      const payload = JSON.parse(pending[0].payload_json as string);
+      expect(payload).toEqual({
+        type: 'crystallize_skill',
+        agent: 'einstein',
+        name: 't29-pattern',
+        description: 'desc',
+        source_task: 'task-1',
+        body: '# body',
+        confidence: 7,
+      });
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
 });
 
 /**
- * SKIP_GATE_ALLOWLIST membership regression pins (spec Section E,
- * tests 39-41 — R3 Critical 1).
+ * SKIP_GATE_ALLOWLIST membership regression pins (spec Section E).
  *
- * These tests are the mutation guards for the preserve-bypass policy.
- * Dropping any of these three handlers from the allowlist would silently
- * change behavior: writes would either be staged in pending_actions or
- * write denied_contract_violation audit rows. Each assertion makes that
- * regression loud at test-time.
+ * Phase 4 update: save_skill + crystallize_skill have been REMOVED from
+ * the allowlist as the policy flip goes live. T23 pins the new state;
+ * T-allowlist-exact is a single regression sentinel for the whole list.
+ * skill_invoked stays on the allowlist (R1 High 2 — skipGate is load-bearing
+ * for the fire-and-forget telemetry path).
  */
 describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
-  it('39. save_skill is on SKIP_GATE_ALLOWLIST (preserve-bypass)', () => {
-    expect([...SKIP_GATE_ALLOWLIST]).toContain('save_skill');
+  it('T23 — save_skill and crystallize_skill are NOT in SKIP_GATE_ALLOWLIST (post-Phase-4)', () => {
+    // After Phase 4, both handlers flow through gateAndStage.
+    expect(SKIP_GATE_ALLOWLIST.has('save_skill')).toBe(false);
+    expect(SKIP_GATE_ALLOWLIST.has('crystallize_skill')).toBe(false);
   });
 
-  it('40. crystallize_skill is on SKIP_GATE_ALLOWLIST (preserve-bypass)', () => {
-    expect([...SKIP_GATE_ALLOWLIST]).toContain('crystallize_skill');
+  it('T-allowlist-exact — exact membership pin (R3-I4)', () => {
+    // Single regression sentinel for the WHOLE allowlist. If any entry is
+    // added, removed, or renamed without updating this list, the test
+    // breaks loudly. Sorted-array compare so ordering changes do not break.
+    const expected = [
+      'dashboard_query',
+      'imessage_list_contacts',
+      'imessage_read',
+      'imessage_search',
+      'kg_query',
+      'knowledge_search',
+      'pageindex_fetch',
+      'pageindex_index',
+      'schedule_wakeup',
+      'skill_invoked',
+      'skill_search',
+      'slack_dm_read',
+      'task_add',
+      'task_close',
+      'task_list',
+      'task_reopen',
+    ].sort();
+    expect([...SKIP_GATE_ALLOWLIST].sort()).toEqual(expected);
   });
 
   it('41. skill_invoked is on SKIP_GATE_ALLOWLIST (skipGate is load-bearing per R1 High 2)', () => {
