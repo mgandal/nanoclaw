@@ -124,7 +124,9 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
       // — that's a legitimate empty search and the test at
       // knowledge-search.test.ts:134-144 pins that behavior.
       if (!json.result) {
-        throw new Error('QMD returned malformed envelope (no result, no error)');
+        throw new Error(
+          'QMD returned malformed envelope (no result, no error)',
+        );
       }
       const rawText = json.result?.content?.[0]?.text ?? '';
       logger.info(
