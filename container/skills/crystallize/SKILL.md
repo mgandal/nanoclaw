@@ -1,6 +1,6 @@
 ---
 name: crystallize
-description: Save a reusable skill (a "recipe for doing") from a task you just completed successfully. Use when the user says "save that as a skill", "remember how you did that", "crystallize this", "make this reusable", or "add this to your skills". Only works from the main channel.
+description: Save a reusable skill (a "recipe for doing") from a task you just completed successfully. Use when the user says "save that as a skill", "remember how you did that", "crystallize this", "make this reusable", or "add this to your skills". Works from any group.
 ---
 
 # /crystallize — Save a reusable skill from a completed task
