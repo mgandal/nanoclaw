@@ -48,13 +48,11 @@ HEAD at push: `61a533e4 feat(ipc): Phase 4 — gate-activation policy flip for s
 
 **Severity:** Important. Misleading agent-facing contract.
 
-### E. crystallize SKILL.md still says "main channel only"
+### E. crystallize SKILL.md still says "main channel only" — RESOLVED 2026-05-21 (`fb8e2ec1`)
 
-**Finding:** `container/skills/crystallize/SKILL.md:23` reads "Gate: **main channel only.** If the user is in a non-main group, tell them they need to run this from the main channel." This contradicts Phase 0b, which removed the `isMain` block specifically so non-main groups can stage. Agent will refuse legitimate non-main requests.
+**Finding:** `container/skills/crystallize/SKILL.md:23` read "Gate: **main channel only.** If the user is in a non-main group, tell them they need to run this from the main channel." This contradicted Phase 0b, which removed the `isMain` block specifically so non-main groups can stage.
 
-**Resolution:** Update the SKILL.md prose to remove the main-only gate and explain the trust.yaml policy instead. ~5 LOC edit.
-
-**Severity:** Important. Active misleading-of-agent.
+**Resolution:** Replaced with trust.yaml-policy description + `/approve` instructions. Commit `fb8e2ec1`.
 
 ### F. Minor: Spec drift on test paths / numbering
 
