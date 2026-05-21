@@ -68,6 +68,11 @@ UPLOAD_WORKERS = 5  # parallel connections (IMAP) or threads (API)
 UPLOAD_BATCH_SIZE = 500  # messages per upload round
 API_UPLOAD_WORKERS = 10  # more threads for API (no connection overhead)
 
+# Gmail messages.import caps the base64-encoded body at ~35 MB and rejects
+# larger payloads with 413. We pre-check before calling the API so a single
+# oversized message doesn't burn MAX_RETRIES round-trips.
+GMAIL_IMPORT_MAX_BYTES = 35 * 1024 * 1024
+
 SKIP_FOLDERS = {
     "Deleted Items", "Junk Email", "Drafts", "Outbox", "Junk E-Mail",
     "Conflicts", "Sync Issues", "Local Failures", "Server Failures",
@@ -221,10 +226,117 @@ def migrate_state_format(state):
 # ---------------------------------------------------------------------------
 
 
+def reinflate_apple_stub_attachments(rfc822_bytes, emlx_path):
+    """Inline Apple Mail sidecar attachments into an rfc822 byte string.
+
+    Mac Mail downloads partial Exchange messages by storing the MIME envelope
+    in the .emlx file with `X-Apple-Content-Length` stub headers, and the
+    actual attachment bytes in a sibling `Attachments/<msgnum>/<part_dir>/`
+    directory tree. Uploading the raw .emlx to Gmail loses those bytes.
+
+    This function walks the MIME tree, finds stub parts, locates matching
+    sidecar files by filename + part-dir ordinal, re-encodes the bytes as
+    base64, and removes the stub header. Non-stub messages pass through
+    untouched (returns the original bytes).
+
+    Returns (rfc822_bytes, stats_dict). Never raises — failures are counted.
+    """
+    stats = {
+        "parts_reinflated": 0,
+        "parts_skipped_no_disk": 0,
+        "parts_skipped_no_filename": 0,
+    }
+    try:
+        msg = email.message_from_bytes(rfc822_bytes)
+    except Exception as e:
+        log.warning("  reinflate: failed to parse %s: %s", emlx_path, e)
+        return rfc822_bytes, stats
+
+    stub_parts = [p for p in msg.walk() if p.get("X-Apple-Content-Length")]
+    if not stub_parts:
+        return rfc822_bytes, stats
+
+    # Locate sidecar dir: <emlx_parent.parent>/Attachments/<msgnum>/
+    msg_num = emlx_path.stem.replace(".partial", "")
+    att_root = emlx_path.parent.parent / "Attachments" / msg_num
+    if not att_root.exists():
+        stats["parts_skipped_no_disk"] += len(stub_parts)
+        return rfc822_bytes, stats
+
+    # Build (part_dir_int, filename) -> Path index. part_dir is a numeric
+    # subdirectory ("2", "3", ...) holding one file each.
+    sidecar = []  # list of (part_dir_int, filename, path)
+    for sub in sorted(att_root.iterdir(), key=lambda p: _safe_int(p.name)):
+        if not sub.is_dir():
+            continue
+        try:
+            idx = int(sub.name)
+        except ValueError:
+            continue
+        for f in sub.iterdir():
+            if f.is_file():
+                sidecar.append((idx, f.name, f))
+
+    # Match stubs to sidecar files. Multi-pass:
+    #   1. Iterate stubs in MIME order.
+    #   2. For each stub with a filename, claim the lowest-part_dir unclaimed
+    #      sidecar entry whose filename matches.
+    claimed = set()  # indices into sidecar
+    for part in stub_parts:
+        fn = part.get_filename()
+        if not fn:
+            stats["parts_skipped_no_filename"] += 1
+            continue
+        match_idx = None
+        for i, (_pidx, sname, _path) in enumerate(sidecar):
+            if i in claimed:
+                continue
+            if sname == fn:
+                match_idx = i
+                break
+        if match_idx is None:
+            stats["parts_skipped_no_disk"] += 1
+            continue
+        claimed.add(match_idx)
+        _pidx, _sname, disk_path = sidecar[match_idx]
+        try:
+            raw = disk_path.read_bytes()
+        except Exception as e:
+            log.warning("  reinflate: failed to read sidecar %s: %s", disk_path, e)
+            stats["parts_skipped_no_disk"] += 1
+            continue
+        # Replace the empty stub payload with the real bytes, base64-encoded.
+        # set_payload(raw) + encoders.encode_base64() handles the encoding +
+        # adds the Content-Transfer-Encoding header. We then strip the stub
+        # header so downstream code sees a normal attachment.
+        from email import encoders as _encoders
+        part.set_payload(raw)
+        if part.get("Content-Transfer-Encoding"):
+            del part["Content-Transfer-Encoding"]
+        _encoders.encode_base64(part)
+        del part["X-Apple-Content-Length"]
+        stats["parts_reinflated"] += 1
+
+    if stats["parts_reinflated"] == 0:
+        # Nothing changed — return original bytes to preserve byte-exactness
+        # (avoid email module's re-serialization quirks).
+        return rfc822_bytes, stats
+    return msg.as_bytes(), stats
+
+
+def _safe_int(s):
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        return 1 << 30  # sort unparseables last
+
+
 def parse_emlx(emlx_path):
     """Parse a Mac Mail .emlx file.
 
     Returns (rfc822_bytes, is_read, date_received_timestamp) or None on error.
+    For Apple-stub `.partial.emlx` files, sidecar attachments are reinflated
+    into the rfc822 byte string before return.
     """
     try:
         with open(emlx_path, "rb") as f:
@@ -241,6 +353,15 @@ def parse_emlx(emlx_path):
         flags = meta.get("flags", 0)
         is_read = bool(flags & 1)
         date_received = meta.get("date-received", 0)
+
+        rfc822, stats = reinflate_apple_stub_attachments(rfc822, emlx_path)
+        if stats["parts_reinflated"] or stats["parts_skipped_no_disk"] or stats["parts_skipped_no_filename"]:
+            log.debug("  reinflate %s: +%d inlined, -%d no-disk, -%d no-filename",
+                      emlx_path.name,
+                      stats["parts_reinflated"],
+                      stats["parts_skipped_no_disk"],
+                      stats["parts_skipped_no_filename"])
+
         return rfc822, is_read, date_received
     except Exception as e:
         log.warning("  Failed to parse %s: %s", emlx_path, e)
@@ -514,6 +635,14 @@ class GmailApiUploader:
         Raises GmailLimitReached on quota errors.
         """
         raw = base64.urlsafe_b64encode(eml_content).decode("ascii")
+
+        # Pre-flight size check: Gmail rejects >35 MB base64 with 413. Skip
+        # without invoking the API to avoid burning MAX_RETRIES round-trips.
+        if len(raw) > GMAIL_IMPORT_MAX_BYTES:
+            return 0, (
+                f"message too large for Gmail import "
+                f"(base64 size {len(raw)} exceeds {GMAIL_IMPORT_MAX_BYTES})"
+            )
 
         label_ids = [label_id]
         if not is_read:
