@@ -464,13 +464,15 @@ class TestUploadSizeCap:
         assert api_called["count"] == 1
 
     def test_size_cap_compares_against_decoded_message_size(self, em):
-        """Gmail's 35 MB cap is on the RFC822 (decoded) message, not the
-        base64 wire encoding. A 36 MB raw message that base64-encodes to
-        ~48 MB must be rejected; a 30 MB raw message that base64-encodes
-        to ~40 MB must be accepted.
+        """Gmail's cap is on the RFC822 (decoded) message, not the base64
+        wire encoding. A message just over the cap raw (which base64-encodes
+        to ~1.35x larger) must be rejected; a message under the cap raw
+        (whose base64 expansion would exceed the cap if checked the wrong
+        way) must be accepted.
         """
-        # 36 MB raw → ~48 MB base64. Must be rejected (over 35 MB raw cap).
-        over_raw = b"A" * (36 * 1024 * 1024)
+        cap = em.GMAIL_IMPORT_MAX_BYTES
+        # Just over the cap raw → base64 ~1.35x larger. Must be rejected.
+        over_raw = b"A" * (cap + 1024)
 
         api_called = {"count": 0}
 
@@ -491,8 +493,10 @@ class TestUploadSizeCap:
         assert err and "too large" in err.lower()
         assert api_called["count"] == 0
 
-        # 30 MB raw → ~40 MB base64. Must be ACCEPTED (under 35 MB raw cap).
-        under_raw = b"B" * (30 * 1024 * 1024)
+        # Just under cap raw, whose base64 expansion (1.35x) would exceed
+        # the cap if the check were on base64 not decoded. Must be ACCEPTED.
+        # We use 90% of cap to ensure raw < cap but raw*1.35 > cap.
+        under_raw = b"B" * int(cap * 0.9)
         api_called["count"] = 0
 
         class _FakeReq:
@@ -749,6 +753,117 @@ class TestRealAppleMailShape:
 # ---------------------------------------------------------------------------
 # H6/H7 — byte-exactness regression guard for the no-stubs path
 # ---------------------------------------------------------------------------
+
+
+class TestSizeCapConstantMatchesDocumentedLimit:
+    """Gmail messages.import documents a 150 MB cap. Round-2 used 35 MB
+    (the messages.send cap), which silently routes legitimate 35-150 MB
+    messages into the skipped list. Round-3 raises the cap to 50 MB
+    (conservative under documented 150 MB, well above realistic Exchange
+    attachment sizes)."""
+
+    def test_size_cap_is_at_least_50_mb(self, em):
+        """The cap must be at least 50 MB so we don't silently drop large
+        but legitimate Exchange attachments."""
+        assert em.GMAIL_IMPORT_MAX_BYTES >= 50 * 1024 * 1024, (
+            f"GMAIL_IMPORT_MAX_BYTES is {em.GMAIL_IMPORT_MAX_BYTES} bytes "
+            f"({em.GMAIL_IMPORT_MAX_BYTES / 1024 / 1024:.0f} MB); "
+            "Gmail messages.import documents 150 MB. Round-2's 35 MB "
+            "was wrong — it's the messages.send cap, not import."
+        )
+
+    def test_size_cap_below_documented_gmail_limit(self, em):
+        """Stay below the documented 150 MB cap to avoid 413s."""
+        assert em.GMAIL_IMPORT_MAX_BYTES <= 150 * 1024 * 1024
+
+
+class TestMigrateFolderRoutesOversizedToSkipped:
+    """End-to-end coverage gap from round-3 review: no test actually drives
+    an oversized message through migrate_folder's as_completed loop into
+    folder_state['skipped']. Marker-format drift or refactoring the
+    `if SIZE_CAP_ERROR_MARKER in error:` check could silently break the
+    H5 fix without any test failing."""
+
+    def test_oversized_message_lands_in_skipped_not_errors(self, em, tmp_path, monkeypatch):
+        """An oversized .emlx flows through migrate_folder and lands in
+        folder_state['skipped'], not folder_state['errors']."""
+        # Build a real .emlx containing a body so large that
+        # GMAIL_IMPORT_MAX_BYTES is exceeded.
+        msg_dir = tmp_path / "Data" / "Messages"
+        msg_dir.mkdir(parents=True, exist_ok=True)
+        big_body = b"X" * (em.GMAIL_IMPORT_MAX_BYTES + 4096)
+        rfc822 = (
+            b"From: a@b.com\r\nTo: c@d.com\r\nSubject: huge\r\n"
+            b"Message-ID: <huge@x>\r\n"
+            b"Date: Tue, 28 Apr 2026 12:00:00 +0000\r\n\r\n"
+        ) + big_body
+        plist = (
+            b'<?xml version="1.0"?><plist version="1.0"><dict>'
+            b'<key>flags</key><integer>1</integer>'
+            b'<key>date-received</key><integer>1730000000</integer>'
+            b'</dict></plist>'
+        )
+        path = msg_dir / "huge.emlx"
+        with open(path, "wb") as f:
+            f.write(f"{len(rfc822)}\n".encode("ascii"))
+            f.write(rfc822)
+            f.write(plist)
+
+        # Build an uploader without going through __init__ (no real creds).
+        uploader = em.GmailApiUploader.__new__(em.GmailApiUploader)
+        # Stub the parts of GmailApiUploader migrate_folder needs.
+        uploader._label_cache = {"Outlook/huge-folder": "Label_1"}
+        uploader._admin_service = None  # seed_migrated_files_from_gmail short-circuits
+        uploader._num_workers = 1
+        uploader._thread_local = __import__("threading").local()
+
+        # Force seed_migrated_files_from_gmail to no-op (no admin service).
+        monkeypatch.setattr(em, "seed_migrated_files_from_gmail",
+                            lambda *a, **kw: None)
+        # Force label resolution to a fixed Label_1.
+        monkeypatch.setattr(uploader, "_ensure_label",
+                            lambda label_name: "Label_1")
+        # Stub _get_thread_service to return a service whose import_ would 413
+        # if called — but with our 60 MB body, the pre-flight cap MUST catch
+        # it first and import_ must never be invoked.
+        api_called = {"count": 0}
+
+        class _FailService:
+            def users(self_inner):
+                class _U:
+                    def messages(self_inner2):
+                        class _M:
+                            def import_(self_inner3, **kw):
+                                api_called["count"] += 1
+                                raise AssertionError(
+                                    "API import_ must NOT be called for oversized "
+                                    "message; pre-flight cap should reject first"
+                                )
+                        return _M()
+                return _U()
+
+        monkeypatch.setattr(uploader, "_get_thread_service",
+                            lambda: _FailService())
+
+        state = {"folders": {}, "bytes_uploaded_today": 0}
+        state = uploader.migrate_folder("huge-folder", [path], state)
+
+        folder_state = state["folders"]["huge-folder"]
+        # The size-cap path must route to skipped, not errors
+        assert len(folder_state.get("errors", [])) == 0, (
+            f"oversized message must NOT land in errors; got "
+            f"{folder_state.get('errors')}"
+        )
+        assert len(folder_state.get("skipped", [])) == 1, (
+            f"oversized message must land in skipped; got "
+            f"{folder_state.get('skipped')}"
+        )
+        # And the marker substring must be present in the skipped record
+        assert em.SIZE_CAP_ERROR_MARKER in folder_state["skipped"][0]["error"]
+        # File must be marked migrated so we don't retry it next sync
+        assert "huge.emlx" in folder_state["migrated_files"]
+        # And the API must NOT have been called
+        assert api_called["count"] == 0
 
 
 class TestByteExactnessForNonStub:

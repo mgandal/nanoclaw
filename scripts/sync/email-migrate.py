@@ -69,11 +69,16 @@ UPLOAD_WORKERS = 5  # parallel connections (IMAP) or threads (API)
 UPLOAD_BATCH_SIZE = 500  # messages per upload round
 API_UPLOAD_WORKERS = 10  # more threads for API (no connection overhead)
 
-# Gmail messages.import caps the RFC 822 (decoded) message at 35 MB and
-# rejects larger payloads with 413. We pre-check before calling the API so
-# a single oversized message doesn't burn MAX_RETRIES round-trips.
-# Note: the limit is on the decoded body, not the base64 wire encoding.
-GMAIL_IMPORT_MAX_BYTES = 35 * 1024 * 1024
+# Gmail messages.import documents a 150 MB cap on the RFC 822 (decoded)
+# message. We cap at 50 MB defensively: well under the documented limit
+# (to stay clear of per-request HTTP/2 frame and Gmail-side processing
+# margins) but well above realistic Exchange attachment sizes (largest
+# observed on Penn INBOX after reinflate: 35 MB). A single oversized
+# message would otherwise burn MAX_RETRIES round-trips against 413.
+# Note: the limit is on the decoded body, not the base64 wire encoding —
+# this matters because the round-1 check (against base64-encoded len)
+# was effectively ~26 MB raw and silently dropped legitimate messages.
+GMAIL_IMPORT_MAX_BYTES = 50 * 1024 * 1024
 
 # Sentinel substring embedded in upload_message's size-cap error string.
 # migrate_folder uses this to route the failure into `folder_state["skipped"]`
