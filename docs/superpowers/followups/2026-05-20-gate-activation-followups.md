@@ -48,11 +48,19 @@ HEAD at push: `61a533e4 feat(ipc): Phase 4 — gate-activation policy flip for s
 
 **Severity:** Important. Misleading agent-facing contract.
 
-### E. crystallize SKILL.md still says "main channel only" — RESOLVED 2026-05-21 (`fb8e2ec1`)
+### E. crystallize SKILL.md still says "main channel only" — RESOLVED 2026-05-21 (`fb8e2ec1` + `99ee6f8a`)
 
-**Finding:** `container/skills/crystallize/SKILL.md:23` read "Gate: **main channel only.** If the user is in a non-main group, tell them they need to run this from the main channel." This contradicted Phase 0b, which removed the `isMain` block specifically so non-main groups can stage.
+**Finding:** `container/skills/crystallize/SKILL.md:23` read "Gate: **main channel only.** If the user is in a non-main group, tell them they need to run this from the main channel." Frontmatter line 3 also said "Only works from the main channel." Both contradicted Phase 0b, which removed the `isMain` block specifically so non-main groups can stage.
 
-**Resolution:** Replaced with trust.yaml-policy description + `/approve` instructions. Commit `fb8e2ec1`.
+**Resolution:** Two commits:
+- `fb8e2ec1` — patched line 23 body prose with trust.yaml-policy description + `/approve` instructions.
+- `99ee6f8a` — patched frontmatter description (caught by review of fb8e2ec1; frontmatter is load-bearing for Claude Code's skill matcher).
+
+**Review-flagged regressions still open (deferred to existing Items D + A):**
+- The new line 23 prose at `fb8e2ec1` says "user runs /approve pa-xxx" but the agent has no mechanism to extract pa-xxx (Item D — IPC is fire-and-forget, no result file read).
+- The new prose claims "every call flows through checkTrustAndStage" — false in production today (Item A — gate inert on bare {groupFolder} IPC path).
+
+Both inherited from Phase 4's broader SKILL.md amendments. Will resolve as part of Items A + D respectively.
 
 ### F. Minor: Spec drift on test paths / numbering
 
