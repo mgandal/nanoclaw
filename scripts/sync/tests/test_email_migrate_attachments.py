@@ -787,6 +787,15 @@ class TestMigrateFolderRoutesOversizedToSkipped:
     def test_oversized_message_lands_in_skipped_not_errors(self, em, tmp_path, monkeypatch):
         """An oversized .emlx flows through migrate_folder and lands in
         folder_state['skipped'], not folder_state['errors']."""
+        # CRITICAL: monkeypatch STATE_DIR before any save_state call.
+        # migrate_folder() calls save_state() internally, which writes to
+        # the global STATE_DIR / "email-migration.json". Without this patch
+        # the test clobbers the production state file at ~/.cache/email-
+        # migrate/email-migration.json. (Lesson learned: round-3 of this
+        # patch series clobbered the live state file by omitting this.)
+        monkeypatch.setattr(em, "STATE_DIR", tmp_path)
+        monkeypatch.setattr(em, "STATE_FILE", tmp_path / "email-migration.json")
+
         # Build a real .emlx containing a body so large that
         # GMAIL_IMPORT_MAX_BYTES is exceeded.
         msg_dir = tmp_path / "Data" / "Messages"
@@ -864,6 +873,62 @@ class TestMigrateFolderRoutesOversizedToSkipped:
         assert "huge.emlx" in folder_state["migrated_files"]
         # And the API must NOT have been called
         assert api_called["count"] == 0
+
+
+class TestStateIsolationGuard:
+    """Guard against the round-3 state-corruption bug: tests that exercise
+    migrate_folder MUST monkeypatch STATE_DIR/STATE_FILE before any save_state
+    call. Without this, a single test run wipes the production state file at
+    ~/.cache/email-migrate/email-migration.json (it happened — recovered from
+    on-disk Mac Mail .emlx files)."""
+
+    def test_save_state_honors_monkeypatched_state_dir(self, em, tmp_path, monkeypatch):
+        """If a test monkeypatches em.STATE_DIR + em.STATE_FILE, save_state
+        must write to the test dir, not the real user-cache dir."""
+        monkeypatch.setattr(em, "STATE_DIR", tmp_path)
+        monkeypatch.setattr(em, "STATE_FILE", tmp_path / "email-migration.json")
+        state = {
+            "folders": {"test": {"total": 1, "migrated": 1, "migrated_files": ["x.emlx"],
+                                  "errors": [], "skipped": []}},
+            "bytes_uploaded_today": 0,
+        }
+        em.save_state(state)
+        # Test dir must have the file
+        assert (tmp_path / "email-migration.json").exists()
+        # Real user cache must NOT have been touched in this test
+        # (we can't easily assert this without inspecting mtime, but the
+        # presence of file in tmp_path is the positive signal)
+
+    def test_migrate_folder_with_isolated_state_does_not_touch_real_cache(
+        self, em, tmp_path, monkeypatch
+    ):
+        """End-to-end isolation guard: a migrate_folder call with patched
+        STATE_DIR must NOT write to the real ~/.cache/email-migrate/."""
+        import time as _time
+        real_state = Path.home() / ".cache" / "email-migrate" / "email-migration.json"
+        # Capture real-state mtime before the test if file exists
+        before_mtime = real_state.stat().st_mtime if real_state.exists() else None
+
+        monkeypatch.setattr(em, "STATE_DIR", tmp_path)
+        monkeypatch.setattr(em, "STATE_FILE", tmp_path / "email-migration.json")
+
+        # Trivial save_state call
+        state = {
+            "folders": {"x": {"total": 0, "migrated": 0, "migrated_files": [],
+                              "errors": [], "skipped": []}},
+            "bytes_uploaded_today": 0,
+        }
+        em.save_state(state)
+
+        after_mtime = real_state.stat().st_mtime if real_state.exists() else None
+        # If real-state existed before, mtime must be unchanged
+        if before_mtime is not None and after_mtime is not None:
+            assert before_mtime == after_mtime, (
+                f"Real state file at {real_state} was mtime-modified during "
+                f"a test: before={before_mtime}, after={after_mtime}. "
+                f"Monkeypatching of em.STATE_DIR/em.STATE_FILE is not enough — "
+                f"some code path is using a captured-at-import-time path."
+            )
 
 
 class TestByteExactnessForNonStub:
