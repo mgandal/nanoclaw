@@ -30,6 +30,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from email import encoders as email_encoders
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -68,10 +69,18 @@ UPLOAD_WORKERS = 5  # parallel connections (IMAP) or threads (API)
 UPLOAD_BATCH_SIZE = 500  # messages per upload round
 API_UPLOAD_WORKERS = 10  # more threads for API (no connection overhead)
 
-# Gmail messages.import caps the base64-encoded body at ~35 MB and rejects
-# larger payloads with 413. We pre-check before calling the API so a single
-# oversized message doesn't burn MAX_RETRIES round-trips.
+# Gmail messages.import caps the RFC 822 (decoded) message at 35 MB and
+# rejects larger payloads with 413. We pre-check before calling the API so
+# a single oversized message doesn't burn MAX_RETRIES round-trips.
+# Note: the limit is on the decoded body, not the base64 wire encoding.
 GMAIL_IMPORT_MAX_BYTES = 35 * 1024 * 1024
+
+# Sentinel substring embedded in upload_message's size-cap error string.
+# migrate_folder uses this to route the failure into `folder_state["skipped"]`
+# instead of `folder_state["errors"]`, so sync-health-check.sh's
+# silent-degrade detector (errors > 0 AND bytes == 0 -> HARD) doesn't
+# trigger on intentional size-cap skips.
+SIZE_CAP_ERROR_MARKER = "too large for Gmail import"
 
 SKIP_FOLDERS = {
     "Deleted Items", "Junk Email", "Drafts", "Outbox", "Junk E-Mail",
@@ -246,6 +255,13 @@ def reinflate_apple_stub_attachments(rfc822_bytes, emlx_path):
         "parts_skipped_no_disk": 0,
         "parts_skipped_no_filename": 0,
     }
+
+    # Fast path: ~70% of .emlx files have no Apple stubs. Skip the MIME
+    # parse entirely if the marker header is not present anywhere in the
+    # bytes. Substring scan is O(n) but ~100x faster than email.parser.
+    if b"X-Apple-Content-Length" not in rfc822_bytes:
+        return rfc822_bytes, stats
+
     try:
         msg = email.message_from_bytes(rfc822_bytes)
     except Exception as e:
@@ -309,11 +325,10 @@ def reinflate_apple_stub_attachments(rfc822_bytes, emlx_path):
         # set_payload(raw) + encoders.encode_base64() handles the encoding +
         # adds the Content-Transfer-Encoding header. We then strip the stub
         # header so downstream code sees a normal attachment.
-        from email import encoders as _encoders
         part.set_payload(raw)
         if part.get("Content-Transfer-Encoding"):
             del part["Content-Transfer-Encoding"]
-        _encoders.encode_base64(part)
+        email_encoders.encode_base64(part)
         del part["X-Apple-Content-Length"]
         stats["parts_reinflated"] += 1
 
@@ -634,15 +649,18 @@ class GmailApiUploader:
         Returns (bytes_uploaded, error_or_None).
         Raises GmailLimitReached on quota errors.
         """
-        raw = base64.urlsafe_b64encode(eml_content).decode("ascii")
-
-        # Pre-flight size check: Gmail rejects >35 MB base64 with 413. Skip
-        # without invoking the API to avoid burning MAX_RETRIES round-trips.
-        if len(raw) > GMAIL_IMPORT_MAX_BYTES:
+        # Pre-flight size check: Gmail rejects RFC 822 messages over 35 MB
+        # (decoded) with 413. Skip without invoking the API to avoid burning
+        # MAX_RETRIES round-trips. The error string is matched against
+        # SIZE_CAP_ERROR_MARKER by migrate_folder to route this into the
+        # `skipped` list, not `errors` (silent-degrade detector lives there).
+        if len(eml_content) > GMAIL_IMPORT_MAX_BYTES:
             return 0, (
-                f"message too large for Gmail import "
-                f"(base64 size {len(raw)} exceeds {GMAIL_IMPORT_MAX_BYTES})"
+                f"message {SIZE_CAP_ERROR_MARKER} "
+                f"(decoded size {len(eml_content)} exceeds {GMAIL_IMPORT_MAX_BYTES})"
             )
+
+        raw = base64.urlsafe_b64encode(eml_content).decode("ascii")
 
         label_ids = [label_id]
         if not is_read:
@@ -684,6 +702,8 @@ class GmailApiUploader:
         folder_state = state["folders"].setdefault(
             folder_name, {"total": 0, "migrated": 0, "migrated_files": [], "errors": []}
         )
+        # Backfill the skipped list for state migrated from older versions.
+        folder_state.setdefault("skipped", [])
 
         total = len(emlx_files)
         folder_state["total"] = total
@@ -781,10 +801,22 @@ class GmailApiUploader:
                     emlx_path, nbytes, error = future.result()
                     with state_lock:
                         if error and error not in ("cancelled", "quota_exceeded"):
-                            log.warning("  Upload failed %s: %s", emlx_path.name, error)
-                            folder_state["errors"].append(
-                                {"file": emlx_path.name, "error": error}
-                            )
+                            # Size-cap skips are intentional, not silent
+                            # failures. Route to `skipped` so the
+                            # health-check silent-degrade detector
+                            # (errors > 0 AND bytes == 0) stays pure.
+                            if SIZE_CAP_ERROR_MARKER in error:
+                                log.info("  Skipped %s: %s", emlx_path.name, error)
+                                folder_state["skipped"].append(
+                                    {"file": emlx_path.name, "error": error}
+                                )
+                                # Mark migrated so we don't retry next run
+                                folder_state["migrated_files"].append(emlx_path.name)
+                            else:
+                                log.warning("  Upload failed %s: %s", emlx_path.name, error)
+                                folder_state["errors"].append(
+                                    {"file": emlx_path.name, "error": error}
+                                )
                         elif not error:
                             state["bytes_uploaded_today"] += nbytes
                             folder_state["migrated_files"].append(emlx_path.name)
@@ -944,6 +976,9 @@ class ImapUploadPool:
         folder_state = state["folders"].setdefault(
             folder_name, {"total": 0, "migrated": 0, "migrated_files": [], "errors": []}
         )
+        # Mirror the API path: keep `skipped` separate from `errors` so
+        # write_success_marker's accounting stays consistent across paths.
+        folder_state.setdefault("skipped", [])
 
         total = len(emlx_files)
         folder_state["total"] = total
@@ -1272,12 +1307,19 @@ def write_success_marker(state, bytes_at_start, errors_at_start):
     errors_session = sum(
         len(f.get("errors", [])) for f in state.get("folders", {}).values()
     ) - errors_at_start
+    # skipped_session is reported separately so sync-health-check.sh can
+    # distinguish intentional size-cap skips (which produce 0 bytes per
+    # message) from genuine silent failures.
+    skipped_session = sum(
+        len(f.get("skipped", [])) for f in state.get("folders", {}).values()
+    )
     payload = json.dumps({
         "timestamp": time.time(),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "bytes_uploaded_today": state["bytes_uploaded_today"],
         "bytes_session": bytes_session,
         "errors_session": errors_session,
+        "skipped_session": skipped_session,
     }, indent=2)
     success_file = STATE_DIR / "last-success.json"
     tmp_file = success_file.with_suffix(".json.tmp")

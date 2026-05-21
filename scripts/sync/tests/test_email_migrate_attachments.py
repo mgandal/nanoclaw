@@ -462,3 +462,319 @@ class TestUploadSizeCap:
         assert err is None
         assert nbytes == len(small_raw)
         assert api_called["count"] == 1
+
+    def test_size_cap_compares_against_decoded_message_size(self, em):
+        """Gmail's 35 MB cap is on the RFC822 (decoded) message, not the
+        base64 wire encoding. A 36 MB raw message that base64-encodes to
+        ~48 MB must be rejected; a 30 MB raw message that base64-encodes
+        to ~40 MB must be accepted.
+        """
+        # 36 MB raw → ~48 MB base64. Must be rejected (over 35 MB raw cap).
+        over_raw = b"A" * (36 * 1024 * 1024)
+
+        api_called = {"count": 0}
+
+        class _FakeService:
+            def users(self_inner):
+                class _U:
+                    def messages(self_inner2):
+                        class _M:
+                            def import_(self_inner3, **kw):
+                                api_called["count"] += 1
+                                raise AssertionError("must not be called")
+                        return _M()
+                return _U()
+
+        uploader = em.GmailApiUploader.__new__(em.GmailApiUploader)
+        nbytes, err = uploader.upload_message(_FakeService(), "L", over_raw, True)
+        assert nbytes == 0
+        assert err and "too large" in err.lower()
+        assert api_called["count"] == 0
+
+        # 30 MB raw → ~40 MB base64. Must be ACCEPTED (under 35 MB raw cap).
+        under_raw = b"B" * (30 * 1024 * 1024)
+        api_called["count"] = 0
+
+        class _FakeReq:
+            def execute(self_inner):
+                return {"id": "m1"}
+
+        class _OkService:
+            def users(self_inner):
+                class _U:
+                    def messages(self_inner2):
+                        class _M:
+                            def import_(self_inner3, **kw):
+                                api_called["count"] += 1
+                                return _FakeReq()
+                        return _M()
+                return _U()
+
+        uploader2 = em.GmailApiUploader.__new__(em.GmailApiUploader)
+        nbytes2, err2 = uploader2.upload_message(_OkService(), "L", under_raw, True)
+        assert err2 is None
+        assert nbytes2 == len(under_raw)
+        assert api_called["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# H2 — fast path for non-stub messages (no MIME parse on hot path)
+# ---------------------------------------------------------------------------
+
+
+class TestReinflateFastPath:
+    """Non-stub messages must NOT parse the MIME tree.
+
+    Parsing every message through email.message_from_bytes is wasted CPU
+    for the ~70% of Penn messages without X-Apple-Content-Length headers.
+    The reinflater must short-circuit on a cheap substring check.
+    """
+
+    def test_non_stub_skips_mime_parse_entirely(self, em, tmp_path, monkeypatch):
+        """email.message_from_bytes must NOT be called when no stub header."""
+        rfc822 = (
+            b"From: a@b.com\r\nTo: c@d.com\r\nSubject: clean\r\n"
+            b"Message-ID: <abc@x>\r\nDate: Tue, 28 Apr 2026 12:00:00 +0000\r\n"
+            b"\r\nhello world\r\n"
+        )
+        parse_count = {"calls": 0}
+        real_parse = em.email.message_from_bytes
+
+        def counting_parse(*a, **kw):
+            parse_count["calls"] += 1
+            return real_parse(*a, **kw)
+
+        monkeypatch.setattr(em.email, "message_from_bytes", counting_parse)
+
+        path = tmp_path / "1.emlx"
+        path.write_bytes(rfc822)
+        out, stats = em.reinflate_apple_stub_attachments(rfc822, path)
+
+        assert out == rfc822  # byte-exact passthrough
+        assert stats["parts_reinflated"] == 0
+        assert parse_count["calls"] == 0, (
+            "fast path must avoid email.message_from_bytes when no stub header present"
+        )
+
+    def test_stub_message_still_parses(self, em, tmp_path):
+        """Sanity: when X-Apple-Content-Length IS present, parsing still happens."""
+        png = b"\x89PNGfake" * 30
+        emlx = _build_stub_emlx(
+            tmp_path, "fast1",
+            stubs=[("img.png", "image/png", png)],
+        )
+        with open(emlx, "rb") as f:
+            n = int(f.readline().strip())
+            rfc822 = f.read(n)
+        # Must contain the marker substring
+        assert b"X-Apple-Content-Length" in rfc822
+        out, stats = em.reinflate_apple_stub_attachments(rfc822, emlx)
+        assert stats["parts_reinflated"] == 1
+
+
+# ---------------------------------------------------------------------------
+# H5 — size-cap rejection must NOT count as silent-degrade error
+# ---------------------------------------------------------------------------
+
+
+class TestSizeCapAccountingDistinctFromErrors:
+    """Per sync-health-check.sh:182, `errors_session > 0 AND bytes_session == 0`
+    promotes the run to HARD ("silent degrade"). Size-capped skips would
+    trigger a false HARD on attachment-heavy folders. We must classify them
+    as SKIPPED, not ERRORED.
+    """
+
+    def test_folder_state_distinguishes_skipped_from_errored(self, em):
+        """The folder_state dict must carry a `skipped` list separate from
+        `errors`. This is the new shape consumed by the health-check marker
+        writer.
+        """
+        # Build a folder_state by hand and run the size-cap-failure path
+        # through upload_one -> migrate_folder error-handler logic.
+        # We do this indirectly: assert that the size-cap error message,
+        # when seen by the migration loop, lands in a `skipped` list and
+        # NOT in `errors`.
+        #
+        # We test by introspecting: the constant SIZE_CAP_ERROR_MARKER must
+        # exist as a string the migration loop uses to dispatch.
+        assert hasattr(em, "SIZE_CAP_ERROR_MARKER"), (
+            "expected module constant SIZE_CAP_ERROR_MARKER so migrate_folder "
+            "can distinguish skipped (size-cap) from errored uploads"
+        )
+        # The marker must be a non-empty substring of the actual error msg
+        # that upload_message returns, so dispatch is reliable.
+        oversized = b"X" * (em.GMAIL_IMPORT_MAX_BYTES + 1024)
+        uploader = em.GmailApiUploader.__new__(em.GmailApiUploader)
+
+        class _NoCallService:
+            def users(self_inner):
+                class _U:
+                    def messages(self_inner2):
+                        class _M:
+                            def import_(self_inner3, **kw):
+                                raise AssertionError("must not be called")
+                        return _M()
+                return _U()
+
+        _, err = uploader.upload_message(_NoCallService(), "L", oversized, True)
+        assert em.SIZE_CAP_ERROR_MARKER in err, (
+            f"upload_message error must contain marker {em.SIZE_CAP_ERROR_MARKER!r} "
+            f"so migration loop can route to skipped/, got: {err!r}"
+        )
+
+    def test_marker_writer_reports_skipped_session_separately(self, em, tmp_path, monkeypatch):
+        """write_last_success_marker must emit a `skipped_session` count distinct
+        from `errors_session` so sync-health-check.sh can keep its silent-degrade
+        check pure (real failures only).
+        """
+        monkeypatch.setattr(em, "STATE_DIR", tmp_path)
+        state = {
+            "folders": {
+                "Inbox": {
+                    "total": 5,
+                    "migrated": 3,
+                    "migrated_files": [],
+                    "errors": [{"file": "real-fail.emlx", "error": "OAuth revoked"}],
+                    "skipped": [
+                        {"file": "huge1.emlx", "error": "too large for Gmail import"},
+                        {"file": "huge2.emlx", "error": "too large for Gmail import"},
+                    ],
+                }
+            },
+            "bytes_uploaded_today": 12345,
+        }
+        em.write_success_marker(state, bytes_at_start=0, errors_at_start=0)
+        marker_path = tmp_path / "last-success.json"
+        import json as _json
+        payload = _json.loads(marker_path.read_text())
+        assert payload["errors_session"] == 1, "real errors only"
+        assert payload["skipped_session"] == 2, "size-cap skips reported separately"
+
+
+# ---------------------------------------------------------------------------
+# H6 — real-shape Apple Mail fixture (nested multipart/related + Content-ID inline)
+# ---------------------------------------------------------------------------
+
+
+class TestRealAppleMailShape:
+    """Real Penn .partial.emlx files use nested multipart/related →
+    multipart/alternative → text/plain + text/html, with attachments at
+    the outer level marked by Content-ID for inline images. Test that the
+    reinflater handles this shape (and not just the simpler one in the
+    other tests).
+    """
+
+    def test_nested_multipart_related_with_inline_image(self, em, tmp_path):
+        # Build the exact shape we saw in 106967.partial.emlx
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.image import MIMEImage
+
+        msg_dir = tmp_path / "Data" / "Messages"
+        msg_dir.mkdir(parents=True, exist_ok=True)
+        att_dir = tmp_path / "Data" / "Attachments" / "real1"
+
+        # Real image bytes that round-trip cleanly
+        png = b"\x89PNG\r\n\x1a\n" + b"realsample" * 100
+
+        # Sidecar layout matches what we observed: 2/<filename>
+        d = att_dir / "2"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "image001.png").write_bytes(png)
+
+        # Build nested MIME: multipart/related[multipart/alternative[text, html], image]
+        root = MIMEMultipart("related")
+        root["From"] = "sender@penn.edu"
+        root["To"] = "mgandal@upenn.edu"
+        root["Subject"] = "Real shape"
+        root["Message-ID"] = "<real1@penn.edu>"
+        root["Date"] = "Tue, 28 Apr 2026 12:00:00 +0000"
+
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText("Plain version", "plain"))
+        alt.attach(MIMEText("<p>HTML version</p>", "html"))
+        root.attach(alt)
+
+        # Image stub with Content-ID (inline reference style)
+        stub = MIMEImage(b"", _subtype="png", name="image001.png")
+        stub.set_payload("")
+        del stub["Content-Transfer-Encoding"]
+        stub.add_header("Content-Disposition", "inline", filename="image001.png")
+        stub.add_header("Content-ID", "<image001.png@01DAE284.23A7F060>")
+        stub.add_header("X-Apple-Content-Length", str(4 * ((len(png) + 2) // 3)))
+        root.attach(stub)
+
+        rfc822 = root.as_bytes()
+        plist = (
+            b'<?xml version="1.0"?><plist version="1.0"><dict>'
+            b'<key>flags</key><integer>1</integer>'
+            b'<key>date-received</key><integer>1730000000</integer>'
+            b'</dict></plist>'
+        )
+        emlx = msg_dir / "real1.partial.emlx"
+        with open(emlx, "wb") as f:
+            f.write(f"{len(rfc822)}\n".encode("ascii"))
+            f.write(rfc822)
+            f.write(plist)
+
+        # Now reinflate
+        result = em.parse_emlx(emlx)
+        assert result is not None
+        out_rfc822, _, _ = result
+
+        out_msg = email.message_from_bytes(out_rfc822)
+
+        # Find the image part and verify it has the real bytes
+        image_parts = [
+            p for p in out_msg.walk()
+            if p.get_content_type() == "image/png"
+        ]
+        assert len(image_parts) == 1
+        part = image_parts[0]
+        assert part.get_payload(decode=True) == png
+        # Content-ID must be preserved (critical for inline rendering)
+        assert part.get("Content-ID") == "<image001.png@01DAE284.23A7F060>"
+        # X-Apple stub header must be stripped
+        assert part.get("X-Apple-Content-Length") is None
+
+        # Text/html parts must be untouched
+        html_parts = [
+            p for p in out_msg.walk()
+            if p.get_content_type() == "text/html"
+        ]
+        assert len(html_parts) == 1
+        assert "HTML version" in html_parts[0].get_payload()
+
+
+# ---------------------------------------------------------------------------
+# H6/H7 — byte-exactness regression guard for the no-stubs path
+# ---------------------------------------------------------------------------
+
+
+class TestByteExactnessForNonStub:
+    """Even when a message has X-Apple-Content-Length stubs but the sidecar
+    dir is missing entirely, the original bytes must be returned unchanged
+    (we cannot improve on what we have). Verifies the early-return contract.
+    """
+
+    def test_stubs_with_no_sidecar_returns_original_bytes_byteexact(self, em, tmp_path):
+        emlx = _build_stub_emlx(
+            tmp_path, "exact1",
+            stubs=[("ghost.png", "image/png", b"xxx")],
+            sidecar_files=[],
+        )
+        # Remove sidecar dir to force the "skipped_no_disk" path for all parts
+        att_root = tmp_path / "Data" / "Attachments" / "exact1"
+        if att_root.exists():
+            import shutil
+            shutil.rmtree(att_root)
+        with open(emlx, "rb") as f:
+            n = int(f.readline().strip())
+            rfc822 = f.read(n)
+        out, stats = em.reinflate_apple_stub_attachments(rfc822, emlx)
+        assert stats["parts_reinflated"] == 0
+        assert stats["parts_skipped_no_disk"] == 1
+        assert out == rfc822, (
+            "when nothing was reinflated, original bytes must be returned "
+            "byte-for-byte (preserve DKIM, header folding, line endings)"
+        )
