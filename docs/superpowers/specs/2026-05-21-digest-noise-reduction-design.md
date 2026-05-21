@@ -43,6 +43,10 @@ Archived 10 explicitly-stale tasks (3,4,6,10,18,19,20,21,22,23) + closed 4 user-
 
 This is the falsification primer for Stage 1.
 
+**Audit artifacts (backfilled per code-review C2):**
+- Migration file: `scripts/migrations/2026-05-21-stage0-task-cleanup.sql` (idempotent re-run safe)
+- Post-state snapshot: `docs/snapshots/tasks-pre-stage0-2026-05-21-postchange.json` (touched-row dump; note: post-state because pre-state was not preserved at live-run time)
+
 ## Stage 1: Fix the compression-gate (1 SQL statement)
 
 ### Root cause
@@ -55,39 +59,38 @@ Morning briefing prompt has a compression branch:
 
 ### Fix
 
+Migration file (apply): `scripts/migrations/2026-05-21-patch-morning-briefing-compression-gate.sql`
+Migration file (rollback): `scripts/migrations/2026-05-21-rollback-morning-briefing-compression-gate.sql`
+
 ```sql
 UPDATE scheduled_tasks
 SET prompt = REPLACE(
   prompt,
   'On quiet days (≤3 events, no conflicts, nothing urgent, nothing overdue, no open follow-ups, Slack quiet)',
-  'On quiet days (≤3 events, no conflicts, nothing urgent, ≤2 overdue items, no NEW follow-ups in last 24h, Slack quiet)'
+  'On quiet days (≤3 events, no conflicts, nothing urgent, ≤2 items in the OVERDUE bucket (per task_list), no NEW follow-ups in last 24h, Slack quiet)'
 )
 WHERE id='claire-morning-briefing';
 ```
 
+Per code-review M2: the overdue clause names its source (`per task_list`) to disambiguate "≤2 in the OVERDUE bucket" from "≤2 items past due date anywhere."
+
 ### Rationale for new thresholds
 
-- `≤2 overdue items` — even with Stage 0 cleanup, a few real items will sit overdue. Two is a "not a crisis" threshold.
-- `no NEW follow-ups in last 24h` — follow-ups don't auto-expire; "no open" was wrong. The 24h-new filter aligns with the briefing's actual daily cadence.
+- `≤2 items in the OVERDUE bucket (per task_list)` — even with Stage 0 cleanup, a few real items will sit overdue. Two is a "not a crisis" threshold. Source named explicitly to avoid ambiguity with other "overdue" surfaces (Gmail starred, Todoist, etc.).
+- `no NEW follow-ups in last 24h` — follow-ups don't auto-expire; "no open" was wrong. The 24h-new filter aligns with the briefing's actual daily cadence. Source: `followups.md` (which the briefing already reads in STEP 2).
 - All other conjuncts unchanged.
 
 ### Rollback
 
-```sql
-UPDATE scheduled_tasks
-SET prompt = REPLACE(
-  prompt,
-  'On quiet days (≤3 events, no conflicts, nothing urgent, ≤2 overdue items, no NEW follow-ups in last 24h, Slack quiet)',
-  'On quiet days (≤3 events, no conflicts, nothing urgent, nothing overdue, no open follow-ups, Slack quiet)'
-)
-WHERE id='claire-morning-briefing';
-```
+Use `scripts/migrations/2026-05-21-rollback-morning-briefing-compression-gate.sql`. Includes a verify-SELECT (per code-review I3) that signals if the REPLACE no-ops (e.g., if the new clause was paraphrased elsewhere).
 
 ### Acceptance
 
-- **Baseline:** capture tomorrow morning's pre-deploy briefing length BEFORE running the SQL (manual: read from Telegram, count lines).
-- **T+1 day:** if briefing length drops ≥30%, Stage 1 succeeds. If not, re-investigate (compression-gate isn't the load-bearer; check Stage 1.5).
-- **T+7 days:** baseline ratio holds (no regression).
+**Baseline gap (per code-review I1):** Stage 1 SQL ran at commit time (2026-05-21 ~14:22 ET) BEFORE a pre-change baseline was captured. The "pre-deploy" briefing length is unrecoverable from the DB; reconstruction would require reading the last 5-7 days of CLAIRE morning briefings from Telegram history (the `messages` table does not consistently carry `is_bot_message=1` per earlier audit). Acceptance downgraded accordingly:
+
+- **T+1 day (qualitative):** read tomorrow's briefing alongside the V2 prompt. Did the quiet-day branch trigger (3-4 line output) or did it fall through to the full envelope? Either result is informative — quiet-day triggering on a normal Friday is the smoking gun for "compression-gate was the load-bearer."
+- **T+3 days (qualitative):** review the 3 weekday briefings (Fri, Mon, Tue) for length distribution. Mixed compression should be visible.
+- **T+7 days (light quantitative):** Telegram chat history — count message lengths for last 7 morning-briefing messages. Compare to subjective recall of pre-change length. ≥30% drop is the target but the comparison is rough.
 
 ### Stage 1.5: If Stage 1 doesn't reduce length
 
@@ -133,9 +136,13 @@ new, follow the SELF-DIFF GATE above."
 
 ### Why this works where V1's fingerprint didn't
 
-- **Storage path:** `/workspace/group/` is writable from the container that fires the task. No mount changes needed (R2-H3 resolved).
+- **Storage path:** `/workspace/group/` is writable from the container that fires the task. No mount changes needed (R2-H3 resolved). Proof-of-writability: `task-1774637802835-tp6ugc` (VAULT briefing) writes a per-fire state file under `groups/telegram_vault-claw/` and has done so since ~2026-04-20 without breakage.
 - **Item identity:** the LLM does semantic comparison, not hash-overlap. Works for synthesized content (R1-H1 resolved).
 - **No cross-group coordination needed:** each task owns its own state file. Aligned with NanoClaw's group-isolation model.
+
+### Honest framing (per code-review I4)
+
+The spec's "0 TypeScript LOC" claim is true but understates Stage 2's risk: it depends on the in-container LLM following multi-step prompt instructions (read JSON → compose → diff → write JSON) reliably. Stage 2 ships only if Stage 1 confirms the compression-gate hypothesis empirically; otherwise we re-investigate. Stage 2 acceptance includes "at least one fire emits the quiet-line" because LLM-adherence is the test, not an assumption.
 
 ### Acceptance
 
@@ -174,24 +181,26 @@ This stage is deferred until Stages 1+2 are evaluated. Pull-not-push has its own
 
 ## Components touched
 
-| Stage | Path | Change |
-|---|---|---|
-| 0 | `store/messages.db:tasks` | Hand cleanup DONE |
-| 1 | `store/messages.db:scheduled_tasks` row `claire-morning-briefing` | 1 prompt edit |
-| 2 | `store/messages.db:scheduled_tasks` rows `hermes-ai-brief`, `hermes-slack-scanner` | 1 prompt edit each |
-| 2 | `groups/telegram_code-claw/last-fire-hermes-ai-brief.json` | NEW, written by container |
-| 2 | `groups/telegram_ops-claw/last-fire-hermes-slack-scanner.json` | NEW, written by container |
-| 3 (deferred) | `src/session-commands.ts` | New extractors |
-| 3 (deferred) | `src/index.ts` | New dispatch arms |
+| Stage | Path | Change | In commit? |
+|---|---|---|---|
+| 0 | `store/messages.db:tasks` (14 rows mutated) | Hand cleanup DONE | DB-live, migration backfilled `scripts/migrations/2026-05-21-stage0-task-cleanup.sql` |
+| 0 | `docs/snapshots/tasks-pre-stage0-2026-05-21-postchange.json` | Post-state audit dump | Yes (post-review backfill) |
+| 1 | `store/messages.db:scheduled_tasks` row `claire-morning-briefing` | 1 prompt edit | DB-live + migration `scripts/migrations/2026-05-21-patch-morning-briefing-compression-gate.sql` |
+| 1 | Rollback migration | Inverse + verify-SELECT | Yes — `scripts/migrations/2026-05-21-rollback-morning-briefing-compression-gate.sql` |
+| 2 | `store/messages.db:scheduled_tasks` rows `hermes-ai-brief`, `hermes-slack-scanner` | 1 prompt edit each | Pending Stage 1 measurement |
+| 2 | `groups/telegram_code-claw/last-fire-hermes-ai-brief.json` | NEW, written by container | Pending |
+| 2 | `groups/telegram_ops-claw/last-fire-hermes-slack-scanner.json` | NEW, written by container | Pending |
+| 3 (deferred) | `src/session-commands.ts` | New extractors | Deferred |
+| 3 (deferred) | `src/index.ts` | New dispatch arms | Deferred |
 
-Total new code in Stages 1+2: **zero TypeScript LOC**. Three prompt edits.
+Total new code in Stages 1+2: **zero TypeScript LOC**. Three prompt edits. (Stage 3 if-and-only-if it becomes warranted: ~200 LOC slash-command wiring.)
 
 ## Phased rollout
 
-### Phase 1.1 (tonight)
-1. Capture baseline briefing length (manual screenshot of tomorrow's pre-deploy fire).
-2. Run Stage 1 SQL.
-3. Observe T+1 briefing.
+### Phase 1.1 (what actually happened — per code-review I2)
+1. ~~Capture baseline briefing length (manual screenshot of tomorrow's pre-deploy fire).~~ **SKIPPED** — Stage 1 SQL ran live at 2026-05-21 14:22 ET, before this step was executed. Baseline is unrecoverable from DB; see Acceptance section for downgraded measurement plan.
+2. Run Stage 1 SQL. **DONE** — applied live, then backfilled as `scripts/migrations/2026-05-21-patch-morning-briefing-compression-gate.sql`.
+3. Observe T+1 briefing. **PENDING** — tomorrow 2026-05-22 07:30 ET fire.
 
 ### Phase 1.2 (T+1, IF Stage 1 shows shrinkage)
 - Mark Stage 1 successful. Proceed to Stage 2.
