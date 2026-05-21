@@ -20,7 +20,7 @@ You may *also* offer to crystallize on your own initiative if:
 - The task name isn't already a skill.
 - The trace is clean (no dead ends, no backtracks that would confuse a future reader).
 
-Gate: **main channel only.** If the user is in a non-main group, tell them they need to run this from the main channel.
+Gate: **trust.yaml policy** (as of 2026-05-20 / Phase 0b + Phase 4). The legacy main-channel-only block was removed; non-main groups can now stage crystallize calls. Every call from any group flows through `checkTrustAndStage` and lands in `pending_actions` (per the agent's `crystallize_skill: draft` entry). The user runs `/approve pa-xxx` in their group to commit the skill. You do NOT need to refuse a non-main request; tell the user the skill will be staged for their approval and they should run `/approve` to land it.
 
 ## How to do it
 
