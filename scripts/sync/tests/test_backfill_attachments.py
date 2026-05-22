@@ -46,3 +46,62 @@ class TestStripMessageId:
     def test_double_brackets_strips_only_one_pair(self, bf):
         # Malformed input: only ONE surrounding pair is stripped
         assert bf.strip_message_id("<<abc@penn.edu>>") == "<abc@penn.edu>"
+
+
+class TestMessageHasAttachments:
+    def test_body_only_message_has_no_attachments(self, bf):
+        # Gmail messages.get format=full payload with only text parts
+        msg = {
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "parts": [
+                    {"mimeType": "text/plain", "filename": "", "body": {"size": 100}},
+                    {"mimeType": "text/html", "filename": "", "body": {"size": 200}},
+                ],
+            }
+        }
+        assert bf.message_has_attachments(msg) is False
+
+    def test_message_with_pdf_attachment(self, bf):
+        msg = {
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {"mimeType": "text/plain", "filename": "", "body": {"size": 100}},
+                    {"mimeType": "application/pdf", "filename": "report.pdf",
+                     "body": {"size": 50000, "attachmentId": "abc"}},
+                ],
+            }
+        }
+        assert bf.message_has_attachments(msg) is True
+
+    def test_nested_multipart_with_inline_image(self, bf):
+        msg = {
+            "payload": {
+                "mimeType": "multipart/related",
+                "parts": [
+                    {"mimeType": "multipart/alternative", "parts": [
+                        {"mimeType": "text/plain", "filename": "", "body": {"size": 10}},
+                    ]},
+                    {"mimeType": "image/png", "filename": "image001.png",
+                     "body": {"size": 49000, "attachmentId": "xyz"}},
+                ],
+            }
+        }
+        assert bf.message_has_attachments(msg) is True
+
+    def test_empty_payload_has_no_attachments(self, bf):
+        assert bf.message_has_attachments({"payload": {}}) is False
+
+    def test_filename_present_but_zero_size_not_counted(self, bf):
+        # A stub part with a filename but empty body is NOT a real attachment
+        msg = {
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {"mimeType": "image/png", "filename": "image001.png",
+                     "body": {"size": 0}},
+                ],
+            }
+        }
+        assert bf.message_has_attachments(msg) is False

@@ -65,3 +65,25 @@ def _load_migrate_module():
     finally:
         sys.argv = saved_argv
     return mod
+
+
+def message_has_attachments(gmail_msg):
+    """Return True if a Gmail messages.get(format=full) resource has a real
+    attachment part: a part with a non-empty filename and a body size > 0.
+
+    Walks nested multiparts. A filename with size 0 is a stub, not a real
+    attachment (this is exactly the body-only state we are repairing).
+    """
+    def _walk(part):
+        filename = part.get("filename") or ""
+        body = part.get("body") or {}
+        size = body.get("size", 0) or 0
+        if filename and size > 0:
+            return True
+        for child in part.get("parts", []) or []:
+            if _walk(child):
+                return True
+        return False
+
+    payload = gmail_msg.get("payload") or {}
+    return _walk(payload)
