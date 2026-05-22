@@ -15,6 +15,10 @@ def _load_backfill():
     mod = importlib.util.module_from_spec(spec)
     saved_argv = sys.argv
     sys.argv = ["backfill-attachments.py"]
+    # Register before exec_module: @dataclass under `from __future__ import
+    # annotations` resolves string field annotations via
+    # sys.modules[cls.__module__]; without registration that lookup crashes.
+    sys.modules["backfill_under_test"] = mod
     try:
         spec.loader.exec_module(mod)
     finally:

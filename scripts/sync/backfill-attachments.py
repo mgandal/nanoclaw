@@ -22,21 +22,8 @@ import logging
 import os
 import sys
 import time
-import types
 from dataclasses import dataclass
 from pathlib import Path
-
-# When this file is loaded via importlib.util.exec_module (the test harness
-# does this), the module is NOT auto-registered in sys.modules. The @dataclass
-# decorator below, combined with `from __future__ import annotations`, resolves
-# string field annotations via sys.modules[cls.__module__] — which would be
-# None and crash. Register a stand-in module so that lookup succeeds. Harmless
-# under normal `python3 backfill-attachments.py` execution (__name__ is
-# "__main__", already registered, so this is a no-op).
-if __name__ not in sys.modules:
-    _self_module = types.ModuleType(__name__)
-    _self_module.__dict__.update(globals())
-    sys.modules[__name__] = _self_module
 
 log = logging.getLogger("backfill-attachments")
 
