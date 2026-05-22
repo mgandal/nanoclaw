@@ -238,6 +238,42 @@ else
     check "gtimeout available (coreutils)" "missing — notes export timeout will fail open" 1
 fi
 
+# 7h. Attachment-reinflate regression canary. The email-migrate.py fix
+# (commits 0844e5b4..85072d20) makes .partial.emlx files upload WITH
+# attachments. This canary samples the single most-recently-modified
+# Penn .partial.emlx and confirms parse_emlx still reinflates it. If a
+# future change breaks reinflate, fresh mail silently uploads body-only.
+CANARY=$(GMAIL_MIGRATE_USER=mikejg1838@gmail.com /usr/bin/python3 - <<'PYEOF' 2>/dev/null
+import glob, os, sys, importlib.util, email
+from pathlib import Path
+root = '/Users/mgandal/Library/Mail/V10/EF7AC40E-29D7-47BD-AE80-2A6694A1045E'
+parts = glob.glob(root + '/INBOX.mbox/**/Messages/*.partial.emlx', recursive=True)
+if not parts:
+    print("SKIP"); sys.exit(0)
+newest = max(parts, key=os.path.getmtime)
+spec = importlib.util.spec_from_file_location(
+    "em", os.path.expanduser("~/Agents/nanoclaw/scripts/sync/email-migrate.py"))
+em = importlib.util.module_from_spec(spec)
+sys.argv = ["email-migrate.py"]
+spec.loader.exec_module(em)
+r = em.parse_emlx(Path(newest))
+if r is None:
+    print("FAIL"); sys.exit(0)
+msg = email.message_from_bytes(r[0])
+has_stub = any(p.get("X-Apple-Content-Length") for p in msg.walk())
+has_attach = any(p.get_filename() and (p.get_payload(decode=True) or b"")
+                 for p in msg.walk())
+# A healthy reinflate leaves no stub headers. If the newest file has stubs
+# AND no inlined attachment, reinflate regressed.
+print("FAIL" if (has_stub and not has_attach) else "OK")
+PYEOF
+)
+if [ "$CANARY" = "OK" ] || [ "$CANARY" = "SKIP" ]; then
+    check "Attachment reinflate canary" "" 0
+else
+    check "Attachment reinflate canary" "newest .partial.emlx did not reinflate — reinflate fix may have regressed" 1
+fi
+
 # 8. Check last sync completed recently (within 24h)
 if [ -f "$SCRIPT_DIR/sync.log" ]; then
     LAST_COMPLETE=$(grep 'SYNC COMPLETE' "$SCRIPT_DIR/sync.log" | tail -1)
