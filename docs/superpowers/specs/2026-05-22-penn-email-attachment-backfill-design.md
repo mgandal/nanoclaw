@@ -25,12 +25,23 @@ re-upload the attachment-bearing version and remove the body-only copy.
 
 ## Scope
 
-- **In scope:** a standalone one-shot script that repairs the ~192
-  already-migrated Penn `.partial.emlx` messages whose attachments were
-  dropped.
+- **In scope:** a standalone one-shot script that repairs the
+  already-migrated `.partial.emlx` messages in the **`Inbox` and
+  `Inbox/PennWide` folders only** (~253 partials, of which ~192 have
+  recoverable attachments) whose attachments were dropped.
 - **In scope:** a lightweight regression canary in `sync-health-check.sh`
   that flags if a freshly-migrated `.partial.emlx` ever uploads body-only
   again (verifies the shipped fix stays working).
+- **Out of scope:** the other 10 Penn folders. The migration ledger holds
+  ~13,291 `.partial.emlx` across all folders — `Archive` (8,729),
+  `Sent Items` (4,280), and small `Archive/*` subfolders. A `.partial.emlx`
+  means Mac Mail did a *partial download*, not necessarily that an
+  attachment was dropped; many old Archive/Sent partials never had their
+  sidecar bytes downloaded and would bucket `MISSING`/`SKIP_NO_ATTACHMENTS`.
+  Backfilling those is a deliberately-separate, larger-blast-radius decision
+  (a 2+ hour dry-run, multi-day quota windows, trash/re-import across the
+  whole Penn archive). The script supports `--folder <name>` so any folder
+  can be targeted later, but the **default scope is `Inbox` + `Inbox/PennWide`**.
 - **Out of scope:** wiring the backfill into the recurring `sync-all.sh`
   (it is run once, manually). No cron, no recurring monitor.
 - **Out of scope:** non-Penn accounts. `email-migrate.py` only reads the
@@ -67,7 +78,15 @@ gracefully mid-run.
 
 ## Core algorithm
 
-Per `.partial.emlx` file listed in `state["folders"][folder]["migrated_files"]`:
+Candidate enumeration is restricted to the in-scope folders: with no
+`--folder` argument, `build_candidates` iterates **only** the `Inbox` and
+`Inbox/PennWide` ledger entries. `--folder <name>` overrides this to a
+single named folder. The ledger's other 10 folders are never scanned by
+default — this is the load-bearing scope guard (a default run must not
+touch the ~13k Archive/Sent partials).
+
+Per `.partial.emlx` file listed in `state["folders"][folder]["migrated_files"]`
+(for an in-scope folder):
 
 1. **Resolve full path.** Reuse `discover_folders()` to build a
    `{folder: {basename: full_Path}}` index. Basenames alone cannot locate
