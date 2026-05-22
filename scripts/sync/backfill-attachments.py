@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Penn email attachment backfill.
 
-One-shot repair: ~192 Penn .partial.emlx messages were migrated to the
-backup Gmail account body-only (attachments dropped) before the reinflate
-fix shipped. This script re-uploads the attachment-bearing version and
-trashes the body-only copy.
+One-shot repair: the body-only-migrated .partial.emlx messages in the
+Inbox and Inbox/PennWide folders (~171 WOULD_REPAIR of ~247 scanned
+candidates) were migrated to the backup Gmail account body-only
+(attachments dropped) before the reinflate fix shipped. This script
+re-uploads the attachment-bearing version and trashes the body-only copy.
 
 Usage:
     python3 scripts/sync/backfill-attachments.py            # dry-run report
@@ -16,7 +17,6 @@ See docs/superpowers/specs/2026-05-22-penn-email-attachment-backfill-design.md
 from __future__ import annotations
 
 import argparse
-import base64
 import email as _email
 import importlib.util
 import logging
@@ -30,6 +30,11 @@ log = logging.getLogger("backfill-attachments")
 
 MIGRATE_USER = "mikejg1838@gmail.com"
 _MIGRATE_PATH = Path(__file__).resolve().parent / "email-migrate.py"
+
+# Module-level handle on the loaded email-migrate.py module. Set by
+# _load_migrate_module() so repair_one() can reach em.SIZE_CAP_ERROR_MARKER
+# (the size-cap sentinel) without threading `em` through every signature.
+em = None
 
 # Default backfill scope. The migration ledger holds ~13,291 .partial.emlx
 # across all 12 Penn folders (Archive ~8,729, Sent Items ~4,280); a default
@@ -64,6 +69,7 @@ def _load_migrate_module():
     the module purely for its pure functions are unaffected (that only runs
     when credentials are actually loaded).
     """
+    global em
     os.environ.setdefault("GMAIL_MIGRATE_USER", MIGRATE_USER)
     spec = importlib.util.spec_from_file_location("email_migrate_for_backfill", _MIGRATE_PATH)
     mod = importlib.util.module_from_spec(spec)
@@ -73,6 +79,9 @@ def _load_migrate_module():
         spec.loader.exec_module(mod)
     finally:
         sys.argv = saved_argv
+    # Publish the module handle so repair_one() can reach
+    # em.SIZE_CAP_ERROR_MARKER without an extra signature parameter.
+    em = mod
     return mod
 
 
@@ -196,66 +205,90 @@ def classify(gmail_copies):
     return "AMBIGUOUS"
 
 
-def repair_one(service, label_id, reinflated_bytes, old_message,
+def repair_one(uploader, service, label_id, reinflated_bytes, old_message,
                _import_raises=None):
     """Import-first repair of one WOULD_REPAIR message.
 
-    1. messages.import the reinflated rfc822, labelIds = folder label +
-       user labels copied from the old body-only message.
-    2. messages.get the new id, verify it has attachment parts.
+    1. Re-import the reinflated rfc822 via email-migrate.py's
+       `uploader.upload_message` — the single code path that raises
+       GmailLimitReached on quota and returns a SIZE_CAP_ERROR_MARKER
+       error string on oversize messages.
+    2. Re-query Gmail for the just-imported copy (upload_message does NOT
+       return the new message id) and verify it has attachment parts.
     3. Only if verify passes: messages.trash the old body-only copy.
 
     On any failure before step 3, the old copy is left untouched — worst
     case is a harmless duplicate, never data loss.
 
+    upload_message takes a SINGLE label_id and composes labelIds itself
+    (folder label + UNREAD). It does NOT support copying arbitrary user
+    labels onto the import, so the re-imported message carries the folder
+    label but not the old copy's extra user labels (STARRED etc.) — an
+    accepted, documented trade-off: replicating upload_message's
+    retry/quota/size logic here just to also copy labels would duplicate
+    the exact code this fix exists to reuse.
+
     `_import_raises` is a test-only hook to simulate an import exception.
 
-    Returns "REPAIRED", "REPAIRED_TRASH_FAILED", or "IMPORT_FAILED".
+    GmailLimitReached raised by upload_message is NOT caught here — it
+    propagates to run_backfill/main, the clean-stop path.
+
+    Returns "REPAIRED", "REPAIRED_TRASH_FAILED", "IMPORT_FAILED", or
+    "SKIP_TOO_LARGE".
     """
-    # Compose labelIds: folder label + user labels from the old copy.
-    # Drop Gmail system labels that import sets itself or that don't
-    # transfer meaningfully.
-    skip_labels = {"UNREAD", "TRASH", "SPAM", "INBOX", "SENT", "DRAFT"}
-    old_labels = [l for l in (old_message.get("labelIds") or [])
-                  if l not in skip_labels]
-    label_ids = list(dict.fromkeys([label_id] + old_labels))
-
-    raw = base64.urlsafe_b64encode(reinflated_bytes).decode("ascii")
-    body = {"raw": raw, "labelIds": label_ids}
-
+    # is_read=True: migrated Outlook-folder messages are treated as read;
+    # upload_message appends UNREAD itself only when is_read is False.
+    #
+    # GmailLimitReached is allowed to propagate (clean-stop path). Any
+    # OTHER exception out of upload_message — which the real wrapper does
+    # not raise, since it returns (0, error) for non-quota failures — is
+    # treated as a plain import failure: log it, leave the old copy intact.
     try:
         if _import_raises is not None:
+            # Test hook: simulate the import call raising.
             raise _import_raises
-        result = (
-            service.users().messages()
-            .import_(userId="me", body=body,
-                     internalDateSource="dateHeader", neverMarkSpam=True)
-            .execute()
+        nbytes, error = uploader.upload_message(
+            service, label_id, reinflated_bytes, True
         )
+    except em.GmailLimitReached:
+        raise
     except Exception as e:
-        log.warning("  import failed for old id %s: %s",
+        log.warning("  import raised for old id %s: %s",
                     old_message.get("id"), e)
         return "IMPORT_FAILED"
 
-    new_id = result.get("id")
-    if not new_id:
-        log.warning("  import returned no id for old id %s; leaving old "
-                    "copy intact", old_message.get("id"))
-        return "IMPORT_FAILED"
-    # Verify the new message actually has attachments.
-    try:
-        new_msg = (
-            service.users().messages()
-            .get(userId="me", id=new_id, format="full")
-            .execute()
-        )
-    except Exception as e:
-        log.warning("  verify get failed for new id %s: %s", new_id, e)
+    if error is not None:
+        # SIZE_CAP_ERROR_MARKER lives in email-migrate.py; oversize
+        # messages route to SKIP_TOO_LARGE, every other error to
+        # IMPORT_FAILED. In both cases the old copy is NOT trashed.
+        if em.SIZE_CAP_ERROR_MARKER in error:
+            log.info("  skipping oversize message for old id %s: %s",
+                     old_message.get("id"), error)
+            return "SKIP_TOO_LARGE"
+        log.warning("  import failed for old id %s: %s",
+                    old_message.get("id"), error)
         return "IMPORT_FAILED"
 
-    if not message_has_attachments(new_msg):
-        log.warning("  verify failed: imported msg %s has no attachments; "
-                    "leaving old copy %s intact", new_id, old_message.get("id"))
+    # upload_message returned (len(eml_content), None) on success but does
+    # not give us the new message id. Re-query Gmail for the just-imported
+    # copy by its bare Message-ID and confirm at least one copy on the
+    # label carries attachments.
+    bare_mid = strip_message_id(_rfc822_message_id(reinflated_bytes))
+    if not bare_mid:
+        log.warning("  verify: no Message-ID in reinflated bytes for old id "
+                    "%s; leaving old copy intact", old_message.get("id"))
+        return "IMPORT_FAILED"
+    try:
+        copies = find_gmail_copies(service, label_id, bare_mid)
+    except Exception as e:
+        log.warning("  verify re-query failed for old id %s (mid %s): %s",
+                    old_message.get("id"), bare_mid, e)
+        return "IMPORT_FAILED"
+
+    if not any(message_has_attachments(m) for m in copies):
+        log.warning("  verify failed: no attachment-bearing copy for mid %s "
+                    "after import; leaving old copy %s intact",
+                    bare_mid, old_message.get("id"))
         return "IMPORT_FAILED"
 
     # Verified — safe to trash the old body-only copy. If the trash itself
@@ -290,7 +323,13 @@ def trash_only(service, body_only_message):
     """Trash a leftover body-only copy (WOULD_REPAIR_TRASH_ONLY bucket).
 
     Used when a prior --execute imported the attachment copy but failed to
-    trash the body-only original. Returns "REPAIRED" or "IMPORT_FAILED".
+    trash the body-only original.
+
+    Returns "REPAIRED" on success, or "REPAIRED_TRASH_FAILED" if the trash
+    call fails. The failure outcome is REPAIRED_TRASH_FAILED (not
+    IMPORT_FAILED) because no import happens on this path — the attachment
+    copy already exists; the only unfinished step is trashing the
+    body-only original. This matches repair_one's trash-failure outcome.
     """
     try:
         service.users().messages().trash(
@@ -300,7 +339,7 @@ def trash_only(service, body_only_message):
     except Exception as e:
         log.warning("  trash-only failed for id %s: %s",
                     body_only_message.get("id"), e)
-        return "IMPORT_FAILED"
+        return "REPAIRED_TRASH_FAILED"
 
 
 # All buckets the report tracks.
@@ -311,25 +350,32 @@ BUCKETS = [
 ]
 
 
-def run_backfill(service, candidates, execute, rate_limit_s=0.3):
+def run_backfill(uploader, service, candidates, execute, rate_limit_s=0.3):
     """Classify and (if execute) repair each candidate.
+
+    `uploader` is email-migrate.py's GmailApiUploader — passed through to
+    repair_one so the re-import goes via uploader.upload_message (the only
+    code path with quota + size-cap handling).
 
     Returns a dict of bucket -> count. In dry-run (execute=False) it
     classifies and counts but performs no import/trash.
 
-    Raising GmailLimitReached propagates to the caller (main), which stops
-    cleanly — partial progress is fine because re-runs are idempotent.
+    GmailLimitReached raised by upload_message is NOT caught here — it
+    propagates to the caller (main), which stops cleanly. Partial progress
+    is fine because re-runs are idempotent.
     """
     counts = {b: 0 for b in BUCKETS}
     # Count accounting: in DRY-RUN every candidate lands in exactly one
     # bucket (the classify bucket), so the bucket sum == candidate count.
     # In EXECUTE mode WOULD_REPAIR / WOULD_REPAIR_TRASH_ONLY count only
     # SUCCESSES — a candidate whose repair_one returns IMPORT_FAILED moves
-    # to the IMPORT_FAILED bucket instead. So execute-mode WOULD_REPAIR can
-    # be lower than the dry-run WOULD_REPAIR; the difference is in
-    # IMPORT_FAILED. REPAIRED_TRASH_FAILED additionally double-counts (the
-    # WOULD_REPAIR bucket AND REPAIRED_TRASH_FAILED both increment) because
-    # the import succeeded but a recoverable duplicate was left.
+    # to the IMPORT_FAILED bucket, and one returning SKIP_TOO_LARGE moves
+    # to the SKIP_TOO_LARGE bucket. So execute-mode WOULD_REPAIR can be
+    # lower than the dry-run WOULD_REPAIR; the difference is split across
+    # IMPORT_FAILED + SKIP_TOO_LARGE. REPAIRED_TRASH_FAILED additionally
+    # double-counts (the action bucket AND REPAIRED_TRASH_FAILED both
+    # increment) because the import succeeded but a recoverable duplicate
+    # was left — this applies to both repair_one and trash_only.
 
     for cand in candidates:
         if not cand.reinflated_has_attachments:
@@ -350,7 +396,7 @@ def run_backfill(service, candidates, execute, rate_limit_s=0.3):
         if bucket == "WOULD_REPAIR":
             body_only = [m for m in copies
                          if not message_has_attachments(m)][0]
-            outcome = repair_one(service, cand.label_id,
+            outcome = repair_one(uploader, service, cand.label_id,
                                  cand.reinflated_bytes, body_only)
         elif bucket == "WOULD_REPAIR_TRASH_ONLY":
             body_only = [m for m in copies
@@ -362,10 +408,14 @@ def run_backfill(service, candidates, execute, rate_limit_s=0.3):
         if outcome == "REPAIRED":
             counts[bucket] += 1
         elif outcome == "REPAIRED_TRASH_FAILED":
-            # import+verify succeeded; a recoverable duplicate was left.
-            # Count the bucket as actioned AND record the trash failure.
+            # import+verify succeeded (repair_one) or the attachment copy
+            # already existed (trash_only); a recoverable duplicate was
+            # left. Count the action bucket as actioned AND record the
+            # trash failure.
             counts[bucket] += 1
             counts["REPAIRED_TRASH_FAILED"] += 1
+        elif outcome == "SKIP_TOO_LARGE":
+            counts["SKIP_TOO_LARGE"] += 1
         elif outcome == "IMPORT_FAILED":
             counts["IMPORT_FAILED"] += 1
 
@@ -509,7 +559,8 @@ def main():
     log.info("Found %d .partial.emlx candidate(s).", len(candidates))
 
     try:
-        counts = run_backfill(service, candidates, execute=args.execute)
+        counts = run_backfill(uploader, service, candidates,
+                              execute=args.execute)
     except em.GmailLimitReached as e:
         log.warning("Gmail quota reached — stopping. Re-run to resume. %s", e)
         return 0
