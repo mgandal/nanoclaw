@@ -93,11 +93,27 @@ def message_has_attachments(gmail_msg):
 def build_emlx_index(em):
     """Build {folder_path: {basename: full_Path}} from discover_folders().
 
-    discover_folders() returns [(folder_path_str, mbox_entry, [Path,...])].
-    The backfill resolves ledger basenames to full paths because parse_emlx
-    needs the full path to find the sibling Attachments/ sidecar dir.
+    discover_folders() returns a sorted list of
+    [(folder_path_str, mbox_dir_Path, [emlx_full_Path, ...])]. The backfill
+    resolves ledger basenames to full paths because parse_emlx needs the
+    full path to find the sibling Attachments/ sidecar dir.
+
+    Mac Mail .emlx basenames are the message UID — folder-unique in
+    practice (verified: 0 collisions across the live Penn mailbox). The
+    collision check below is a loud guard: if two distinct paths ever
+    share a basename within one folder, that breaks the basename->path
+    contract this index depends on, and we must not silently drop one.
     """
     index = {}
-    for folder_path, _mbox_entry, emlx_files in em.discover_folders():
-        index[folder_path] = {p.name: p for p in emlx_files}
+    for folder_path, _mbox_dir, emlx_files in em.discover_folders():
+        folder = {}
+        for p in emlx_files:
+            existing = folder.get(p.name)
+            if existing is not None and existing != p:
+                raise ValueError(
+                    f"emlx basename collision in {folder_path!r}: "
+                    f"{existing} vs {p} — basename->path index is unsafe"
+                )
+            folder[p.name] = p
+        index[folder_path] = folder
     return index

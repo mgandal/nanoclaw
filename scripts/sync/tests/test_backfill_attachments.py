@@ -162,3 +162,19 @@ class TestBuildEmlxIndex:
             def discover_folders():
                 return []
         assert bf.build_emlx_index(FakeEm()) == {}
+
+    def test_basename_collision_raises(self, bf):
+        # Two distinct full paths sharing a basename within one folder must
+        # raise — silently dropping one would corrupt path resolution.
+        class FakeEm:
+            @staticmethod
+            def discover_folders():
+                return [
+                    ("Inbox", object(), [
+                        Path("/mail/Inbox.mbox/UUID/Data/0/Messages/1.emlx"),
+                        Path("/mail/Inbox.mbox/UUID/Data/1/Messages/1.emlx"),
+                    ]),
+                ]
+        import pytest
+        with pytest.raises(ValueError, match="basename collision"):
+            bf.build_emlx_index(FakeEm())
