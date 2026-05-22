@@ -105,3 +105,31 @@ class TestMessageHasAttachments:
             }
         }
         assert bf.message_has_attachments(msg) is False
+
+    def test_zero_byte_attachment_with_attachmentid_counts(self, bf):
+        # A genuine zero-byte attachment (empty file) has attachmentId but size 0.
+        # It IS a real attachment — must not be mis-classified as body-only.
+        msg = {
+            "payload": {
+                "mimeType": "multipart/mixed",
+                "parts": [
+                    {"mimeType": "text/plain", "filename": "empty.txt",
+                     "body": {"size": 0, "attachmentId": "z"}},
+                ],
+            }
+        }
+        assert bf.message_has_attachments(msg) is True
+
+    def test_parts_explicitly_none_is_handled(self, bf):
+        msg = {"payload": {"mimeType": "multipart/mixed", "parts": None}}
+        assert bf.message_has_attachments(msg) is False
+
+    def test_non_multipart_leaf_payload_with_attachment(self, bf):
+        # A message whose payload IS the attachment part (no nested parts)
+        msg = {
+            "payload": {
+                "mimeType": "application/pdf", "filename": "scan.pdf",
+                "body": {"size": 9000, "attachmentId": "a"},
+            }
+        }
+        assert bf.message_has_attachments(msg) is True
