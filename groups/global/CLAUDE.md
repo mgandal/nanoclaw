@@ -182,9 +182,27 @@ Format based on channel (check group folder name):
 
 **Slack** (`slack_*`): `*bold*`, `_italic_`, `<url|text>` links, `>` quotes, no `##` headings.
 
-**Telegram/WhatsApp** (`telegram_*` / `whatsapp_*`): `*bold*` (single asterisks only), `_italic_`, bullets, code blocks. No `##` headings, no `[links](url)`, no `**double stars**`.
+**Telegram/WhatsApp** (`telegram_*` / `whatsapp_*`): `*bold*` (single asterisks only), `_italic_`, bullets, code blocks, `[text](url)` links (Telegram renders these as clickable — always prefer a link over a bare URL). No `##` headings, no `**double stars**`. The container `telegram-formatting` skill is the full syntax reference.
 
 **Discord** (`discord_*`): Standard Markdown (`**bold**`, `*italic*`, `[links](url)`, `# headings`).
+
+## House Style — Scheduled Digests
+
+When producing a **scheduled digest or notification** (a message sent by a
+scheduled task, not an interactive reply to something the user just said),
+follow these concision rules. They do NOT apply to interactive replies — a
+direct question deserves a full conversational answer.
+
+- No preamble and no sign-off. The first line is content. Do not open with
+  "Here's your…" / "I've checked…" and do not close with a pleasantry.
+- One item per bullet; one line per bullet wherever the content allows.
+- Per-item summary: at most 2 sentences. Lead with the takeaway, not the setup.
+- Default cap of 5 items per digest. Only exceed this if the task's own prompt
+  gives an explicit higher cap.
+- Omit empty sections entirely. Never emit a "Nothing to report" header.
+- Every URL must be a clickable link, never a bare URL. (The per-channel
+  formatting skill defines the link syntax.)
+- If nothing is worth sending, send nothing at all.
 
 ## Task Scripts
 

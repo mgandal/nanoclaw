@@ -50,7 +50,7 @@ If prepare-digest.js fails or produces no output, fall back to web search:
 ```
 AI Builders Digest -- [DATE]
 
-1. **[Title]** -- [1-sentence summary] [Link]
-2. **[Title]** -- [1-sentence summary] [Link]
-3. **[Title]** -- [1-sentence summary] [Link]
+1. *[Title]* -- [1-sentence summary] -- [source]([URL])
+2. *[Title]* -- [1-sentence summary] -- [source]([URL])
+3. *[Title]* -- [1-sentence summary] -- [source]([URL])
 ```
