@@ -311,3 +311,59 @@ class TestClassify:
         copies = [self._bodyonly("m1"), self._bodyonly("m2"),
                   self._withattach("m3")]
         assert bf.classify(copies) == "AMBIGUOUS"
+
+
+class TestRepairOne:
+    def _withattach(self, mid):
+        return {"id": mid, "payload": {"mimeType": "multipart/mixed", "parts": [
+            {"mimeType": "application/pdf", "filename": "x.pdf",
+             "body": {"size": 9000, "attachmentId": "a"}},
+        ]}}
+
+    def _bodyonly(self, mid, labels=None):
+        return {"id": mid, "labelIds": labels or ["Label_5", "UNREAD"],
+                "payload": {"mimeType": "text/plain"}}
+
+    def test_import_then_verify_then_trash_on_happy_path(self, bf):
+        # import_ returns id imported-1; verify get returns attachment-bearing
+        svc = _FakeGmailService(
+            get_returns={"imported-1": self._withattach("imported-1")},
+        )
+        old = self._bodyonly("old-id", labels=["Label_5", "STARRED", "UNREAD"])
+        outcome = bf.repair_one(
+            svc, label_id="Label_5", reinflated_bytes=b"RFC822-BYTES",
+            old_message=old,
+        )
+        assert outcome == "REPAIRED"
+        # import_ was called exactly once
+        assert len(svc.import_calls) == 1
+        # labelIds on the import include the folder label + copied user labels
+        sent_labels = svc.import_calls[0]["body"]["labelIds"]
+        assert "Label_5" in sent_labels
+        assert "STARRED" in sent_labels
+        # old copy was trashed AFTER import + verify
+        assert svc.trash_calls == ["old-id"]
+
+    def test_import_failure_does_not_trash(self, bf):
+        # import_ raises -> old copy must NOT be trashed
+        svc = _FakeGmailService()
+        outcome = bf.repair_one(
+            svc, label_id="Label_5", reinflated_bytes=b"X",
+            old_message=self._bodyonly("old-id"),
+            _import_raises=RuntimeError("import 413"),
+        )
+        assert outcome == "IMPORT_FAILED"
+        assert svc.trash_calls == []  # CRITICAL: old copy untouched
+
+    def test_verify_failure_does_not_trash(self, bf):
+        # import succeeds, but the verify get returns a body-only message
+        svc = _FakeGmailService(
+            get_returns={"imported-1": {"id": "imported-1",
+                         "payload": {"mimeType": "text/plain"}}},
+        )
+        outcome = bf.repair_one(
+            svc, label_id="Label_5", reinflated_bytes=b"X",
+            old_message=self._bodyonly("old-id"),
+        )
+        assert outcome == "IMPORT_FAILED"
+        assert svc.trash_calls == []  # CRITICAL: old copy untouched

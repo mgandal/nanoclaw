@@ -16,6 +16,7 @@ See docs/superpowers/specs/2026-05-22-penn-email-attachment-backfill-design.md
 from __future__ import annotations
 
 import argparse
+import base64
 import importlib.util
 import logging
 import os
@@ -185,3 +186,68 @@ def classify(gmail_copies):
 
     # 2+ body-only copies — unclear which (if any) to trash; manual review.
     return "AMBIGUOUS"
+
+
+def repair_one(service, label_id, reinflated_bytes, old_message,
+               _import_raises=None):
+    """Import-first repair of one WOULD_REPAIR message.
+
+    1. messages.import the reinflated rfc822, labelIds = folder label +
+       user labels copied from the old body-only message.
+    2. messages.get the new id, verify it has attachment parts.
+    3. Only if verify passes: messages.trash the old body-only copy.
+
+    On any failure before step 3, the old copy is left untouched — worst
+    case is a harmless duplicate, never data loss.
+
+    `_import_raises` is a test-only hook to simulate an import exception.
+
+    Returns "REPAIRED" or "IMPORT_FAILED".
+    """
+    # Compose labelIds: folder label + user labels from the old copy.
+    # Drop Gmail system labels that import sets itself or that don't
+    # transfer meaningfully.
+    skip_labels = {"UNREAD", "TRASH", "SPAM", "INBOX", "SENT", "DRAFT"}
+    old_labels = [l for l in (old_message.get("labelIds") or [])
+                  if l not in skip_labels]
+    label_ids = list(dict.fromkeys([label_id] + old_labels))
+
+    raw = base64.urlsafe_b64encode(reinflated_bytes).decode("ascii")
+    body = {"raw": raw, "labelIds": label_ids}
+
+    try:
+        if _import_raises is not None:
+            raise _import_raises
+        result = (
+            service.users().messages()
+            .import_(userId="me", body=body,
+                     internalDateSource="dateHeader", neverMarkSpam=True)
+            .execute()
+        )
+    except Exception as e:
+        log.warning("  import failed for old id %s: %s",
+                    old_message.get("id"), e)
+        return "IMPORT_FAILED"
+
+    new_id = result.get("id")
+    # Verify the new message actually has attachments.
+    try:
+        new_msg = (
+            service.users().messages()
+            .get(userId="me", id=new_id, format="full")
+            .execute()
+        )
+    except Exception as e:
+        log.warning("  verify get failed for new id %s: %s", new_id, e)
+        return "IMPORT_FAILED"
+
+    if not message_has_attachments(new_msg):
+        log.warning("  verify failed: imported msg %s has no attachments; "
+                    "leaving old copy %s intact", new_id, old_message.get("id"))
+        return "IMPORT_FAILED"
+
+    # Verified — safe to trash the old body-only copy.
+    service.users().messages().trash(
+        userId="me", id=old_message["id"]
+    ).execute()
+    return "REPAIRED"
