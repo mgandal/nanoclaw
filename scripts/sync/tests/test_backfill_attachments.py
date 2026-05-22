@@ -367,3 +367,64 @@ class TestRepairOne:
         )
         assert outcome == "IMPORT_FAILED"
         assert svc.trash_calls == []  # CRITICAL: old copy untouched
+
+    def test_import_returns_no_id_does_not_trash(self, bf):
+        # import_ returns a malformed result with no "id" -> must not trash.
+        svc = _FakeGmailService()
+        # Make import_ return an empty dict (no "id")
+        import types
+
+        class _NoIdMessages:
+            def __init__(self, real):
+                self._real = real
+            def import_(self, userId, body, **kwargs):
+                class _R:
+                    def execute(self_inner):
+                        return {}  # malformed: no "id"
+                return _R()
+            def get(self, *a, **kw):
+                return self._real.get(*a, **kw)
+            def trash(self, *a, **kw):
+                return self._real.trash(*a, **kw)
+
+        real_messages = svc.users().messages()
+        svc.users = lambda: types.SimpleNamespace(
+            messages=lambda: _NoIdMessages(real_messages))
+
+        outcome = bf.repair_one(
+            svc, label_id="Label_5", reinflated_bytes=b"X",
+            old_message=self._bodyonly("old-id"),
+        )
+        assert outcome == "IMPORT_FAILED"
+        assert svc.trash_calls == []  # CRITICAL: old copy untouched
+
+    def test_trash_failure_after_verified_import(self, bf):
+        # import + verify succeed, but trash raises -> REPAIRED_TRASH_FAILED,
+        # exception NOT propagated (batch must not abort).
+        svc = _FakeGmailService(
+            get_returns={"imported-1": self._withattach("imported-1")},
+        )
+        import types
+        real_messages = svc.users().messages()
+
+        class _TrashFailsMessages:
+            def __init__(self, real):
+                self._real = real
+            def import_(self, *a, **kw):
+                return self._real.import_(*a, **kw)
+            def get(self, *a, **kw):
+                return self._real.get(*a, **kw)
+            def trash(self, userId, id):
+                class _R:
+                    def execute(self_inner):
+                        raise RuntimeError("trash 429")
+                return _R()
+
+        svc.users = lambda: types.SimpleNamespace(
+            messages=lambda: _TrashFailsMessages(real_messages))
+
+        outcome = bf.repair_one(
+            svc, label_id="Label_5", reinflated_bytes=b"X",
+            old_message=self._bodyonly("old-id"),
+        )
+        assert outcome == "REPAIRED_TRASH_FAILED"

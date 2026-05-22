@@ -202,7 +202,7 @@ def repair_one(service, label_id, reinflated_bytes, old_message,
 
     `_import_raises` is a test-only hook to simulate an import exception.
 
-    Returns "REPAIRED" or "IMPORT_FAILED".
+    Returns "REPAIRED", "REPAIRED_TRASH_FAILED", or "IMPORT_FAILED".
     """
     # Compose labelIds: folder label + user labels from the old copy.
     # Drop Gmail system labels that import sets itself or that don't
@@ -230,6 +230,10 @@ def repair_one(service, label_id, reinflated_bytes, old_message,
         return "IMPORT_FAILED"
 
     new_id = result.get("id")
+    if not new_id:
+        log.warning("  import returned no id for old id %s; leaving old "
+                    "copy intact", old_message.get("id"))
+        return "IMPORT_FAILED"
     # Verify the new message actually has attachments.
     try:
         new_msg = (
@@ -246,8 +250,18 @@ def repair_one(service, label_id, reinflated_bytes, old_message,
                     "leaving old copy %s intact", new_id, old_message.get("id"))
         return "IMPORT_FAILED"
 
-    # Verified — safe to trash the old body-only copy.
-    service.users().messages().trash(
-        userId="me", id=old_message["id"]
-    ).execute()
+    # Verified — safe to trash the old body-only copy. If the trash itself
+    # fails, the import already succeeded: a recoverable duplicate now
+    # exists (a later run classifies it WOULD_REPAIR_TRASH_ONLY). Return a
+    # distinct outcome so the caller logs it and continues the batch
+    # instead of aborting on one transient trash error.
+    try:
+        service.users().messages().trash(
+            userId="me", id=old_message["id"]
+        ).execute()
+    except Exception as e:
+        log.warning("  trash failed for old id %s after a verified import "
+                    "(duplicate left for re-run): %s",
+                    old_message.get("id"), e)
+        return "REPAIRED_TRASH_FAILED"
     return "REPAIRED"
