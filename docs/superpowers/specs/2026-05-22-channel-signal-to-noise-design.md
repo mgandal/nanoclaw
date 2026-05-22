@@ -99,13 +99,13 @@ picked up on the next fire with no restart.
 
 Tasks are classified into three buckets (full inventory in Appendix A):
 
-- **Bucket A (16 tasks)** — carry an explicit inline formatting block. Strip the
+- **Bucket A (15 tasks)** — carry an explicit inline formatting block. Strip the
   formatting block; the prompt inherits House Style (concision) + the channel
   skill (syntax).
 - **Bucket B (12 tasks)** — a digest/monitor that posts to chat but has no
   formatting block. Add a single one-line pointer: "Format per the House Style
   in global CLAUDE.md and the channel formatting skill."
-- **Bucket C (14 tasks)** — does not post to chat (pure ingest, file-writes,
+- **Bucket C (15 tasks)** — does not post to chat (pure ingest, file-writes,
   "output NOTHING" maintenance monitors). **Leave alone** — no edit.
 
 **Special-case handling (must not be flattened):**
@@ -260,7 +260,7 @@ Bucket C = leave alone (does not post to chat).
 | vault-inbox-ingest-1776610760 | vault-claw | A | SPECIAL — fenced template + rules block; also bus_publish |
 | task-1777903475488-0zq0sd | vault-claw | A | SPECIAL — X bookmarks; wrong `**double**` rule + template |
 
-Tally: **A = 16, B = 12, C = 14.**
+Tally: **A = 15, B = 12, C = 15** (= 42).
 
 High-frequency tasks for Workstream 4 (cadence shown):
 - `task-1776290962534-widv4w` (claire) — `0,30 9-17 * * 1-5`
