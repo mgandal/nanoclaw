@@ -419,6 +419,9 @@ def build_candidates(em, emlx_index, state, uploader, folder_filter):
     candidates = []
     if folder_filter:
         in_scope = {folder_filter}
+        if folder_filter not in state.get("folders", {}):
+            log.warning("--folder %r is not a known ledger folder; "
+                        "0 candidates will be found.", folder_filter)
     else:
         in_scope = set(DEFAULT_SCOPE_FOLDERS)
     for folder, fstate in state.get("folders", {}).items():
@@ -492,15 +495,18 @@ def main():
         log.error("Could not load email-migrate.py (missing Gmail token?)")
         return 1
 
-    creds = em.load_gmail_api_credentials()
-    uploader = em.GmailApiUploader(creds)
-    service = uploader._admin_service
-
-    state = em.load_state()
-    emlx_index = build_emlx_index(em)
-    candidates = build_candidates(em, emlx_index, state, uploader, args.folder)
-    log.info("Found %d .partial.emlx candidate(s) across the ledger.",
-             len(candidates))
+    try:
+        creds = em.load_gmail_api_credentials()
+        uploader = em.GmailApiUploader(creds)
+        service = uploader._admin_service
+        state = em.load_state()
+        emlx_index = build_emlx_index(em)
+        candidates = build_candidates(em, emlx_index, state, uploader,
+                                      args.folder)
+    except Exception as e:
+        log.error("Backfill setup failed: %s", e)
+        return 1
+    log.info("Found %d .partial.emlx candidate(s).", len(candidates))
 
     try:
         counts = run_backfill(service, candidates, execute=args.execute)

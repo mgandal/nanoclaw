@@ -748,3 +748,41 @@ class TestBuildCandidates:
         cands = bf.build_candidates(FakeEm(), emlx_index, state,
                                     FakeUploader(), folder_filter="Archive")
         assert {c.folder for c in cands} == {"Archive"}
+
+    def test_parse_emlx_returning_none_is_skipped(self, bf, tmp_path):
+        # If parse_emlx fails (returns None) for a candidate, it is skipped
+        # rather than crashing the run.
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder): return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return None  # parse failure
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        emlx_index = {"Inbox": {"1.partial.emlx": tmp_path / "1.partial.emlx"}}
+        state = {"folders": {"Inbox": {"migrated_files": ["1.partial.emlx"]}}}
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter=None)
+        assert cands == []
+
+    def test_message_without_message_id_is_skipped(self, bf, tmp_path):
+        # An rfc822 with no Message-ID header cannot be matched in Gmail —
+        # skip it rather than build an unusable Candidate.
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder): return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return (b"Subject: no message-id here\r\n\r\nbody\r\n", True, 0)
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        emlx_index = {"Inbox": {"1.partial.emlx": tmp_path / "1.partial.emlx"}}
+        state = {"folders": {"Inbox": {"migrated_files": ["1.partial.emlx"]}}}
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter=None)
+        assert cands == []
