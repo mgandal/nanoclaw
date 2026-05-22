@@ -39,3 +39,10 @@ class TestStripMessageId:
 
     def test_none_returns_none(self, bf):
         assert bf.strip_message_id(None) is None
+
+    def test_empty_string_returns_empty(self, bf):
+        assert bf.strip_message_id("") == ""
+
+    def test_double_brackets_strips_only_one_pair(self, bf):
+        # Malformed input: only ONE surrounding pair is stripped
+        assert bf.strip_message_id("<<abc@penn.edu>>") == "<abc@penn.edu>"

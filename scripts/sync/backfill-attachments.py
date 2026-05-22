@@ -30,14 +30,20 @@ _MIGRATE_PATH = Path(__file__).resolve().parent / "email-migrate.py"
 
 
 def strip_message_id(mid):
-    """Strip surrounding angle brackets and whitespace from a Message-ID.
+    """Strip one surrounding pair of angle brackets and whitespace from a
+    Message-ID.
 
     The Gmail `rfc822msgid:` search operator matches the bare id; passing
     the `<...>`-wrapped header value verbatim can return zero matches.
+    Strips exactly one surrounding `<>` pair (RFC 5322 forbids bare `<`/`>`
+    inside a msg-id, so a well-formed Message-ID has at most one pair).
     """
     if mid is None:
         return None
-    return mid.strip().lstrip("<").rstrip(">").strip()
+    mid = mid.strip()
+    if mid.startswith("<") and mid.endswith(">"):
+        mid = mid[1:-1].strip()
+    return mid
 
 
 def _load_migrate_module():
