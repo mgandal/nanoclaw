@@ -152,14 +152,15 @@ def find_gmail_copies(service, label_id, bare_message_id):
     return copies
 
 
-def classify(gmail_copies, reinflated_has_attachments):
+def classify(gmail_copies):
     """Classify one candidate message into a repair bucket.
 
     gmail_copies: list of full Gmail message resources matching the
       message's rfc822msgid on the folder label.
-    reinflated_has_attachments: whether the local reinflated .emlx actually
-      has attachments. The caller decides SKIP_NO_ATTACHMENTS before calling
-      this; the parameter is kept for caller clarity and possible future use.
+
+    The caller decides SKIP_NO_ATTACHMENTS (the local .emlx has no
+    recoverable attachments) before ever calling classify — so classify
+    only reasons about the Gmail-side state.
 
     Returns one of: MISSING, WOULD_REPAIR, WOULD_REPAIR_TRASH_ONLY,
     ALREADY_DONE, AMBIGUOUS.

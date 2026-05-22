@@ -281,25 +281,33 @@ class TestClassify:
         ]}}
 
     def test_zero_copies_is_missing(self, bf):
-        assert bf.classify([], reinflated_has_attachments=True) == "MISSING"
+        assert bf.classify([]) == "MISSING"
 
     def test_single_bodyonly_copy_is_would_repair(self, bf):
         copies = [self._bodyonly("m1")]
-        assert bf.classify(copies, reinflated_has_attachments=True) == "WOULD_REPAIR"
+        assert bf.classify(copies) == "WOULD_REPAIR"
 
     def test_single_copy_with_attachments_is_already_done(self, bf):
         copies = [self._withattach("m1")]
-        assert bf.classify(copies, reinflated_has_attachments=True) == "ALREADY_DONE"
+        assert bf.classify(copies) == "ALREADY_DONE"
 
     def test_two_copies_one_bodyonly_one_attach_is_trash_only(self, bf):
         # Re-run after import-succeeded-trash-failed: clean up the duplicate
         copies = [self._bodyonly("m1"), self._withattach("m2")]
-        assert bf.classify(copies, reinflated_has_attachments=True) == "WOULD_REPAIR_TRASH_ONLY"
+        assert bf.classify(copies) == "WOULD_REPAIR_TRASH_ONLY"
 
     def test_two_bodyonly_copies_is_ambiguous(self, bf):
         copies = [self._bodyonly("m1"), self._bodyonly("m2")]
-        assert bf.classify(copies, reinflated_has_attachments=True) == "AMBIGUOUS"
+        assert bf.classify(copies) == "AMBIGUOUS"
 
     def test_two_copies_both_with_attachments_is_already_done(self, bf):
         copies = [self._withattach("m1"), self._withattach("m2")]
-        assert bf.classify(copies, reinflated_has_attachments=True) == "ALREADY_DONE"
+        assert bf.classify(copies) == "ALREADY_DONE"
+
+    def test_two_bodyonly_plus_attach_is_ambiguous(self, bf):
+        # 2+ body-only copies are AMBIGUOUS even when an attachment-bearing
+        # copy is also present — the attachment copy does not tell us which
+        # body-only copy to trash.
+        copies = [self._bodyonly("m1"), self._bodyonly("m2"),
+                  self._withattach("m3")]
+        assert bf.classify(copies) == "AMBIGUOUS"
