@@ -266,3 +266,40 @@ class TestFindGmailCopies:
         assert call["q"] == "rfc822msgid:abc@penn.edu"
         assert call["labelIds"] == ["Label_5"]
         assert call["includeSpamTrash"] is False
+
+
+class TestClassify:
+    def _bodyonly(self, mid):
+        return {"id": mid, "payload": {"mimeType": "multipart/alternative",
+                "parts": [{"mimeType": "text/plain", "filename": "", "body": {"size": 50}}]}}
+
+    def _withattach(self, mid):
+        return {"id": mid, "payload": {"mimeType": "multipart/mixed", "parts": [
+            {"mimeType": "text/plain", "filename": "", "body": {"size": 50}},
+            {"mimeType": "application/pdf", "filename": "x.pdf",
+             "body": {"size": 9000, "attachmentId": "a"}},
+        ]}}
+
+    def test_zero_copies_is_missing(self, bf):
+        assert bf.classify([], reinflated_has_attachments=True) == "MISSING"
+
+    def test_single_bodyonly_copy_is_would_repair(self, bf):
+        copies = [self._bodyonly("m1")]
+        assert bf.classify(copies, reinflated_has_attachments=True) == "WOULD_REPAIR"
+
+    def test_single_copy_with_attachments_is_already_done(self, bf):
+        copies = [self._withattach("m1")]
+        assert bf.classify(copies, reinflated_has_attachments=True) == "ALREADY_DONE"
+
+    def test_two_copies_one_bodyonly_one_attach_is_trash_only(self, bf):
+        # Re-run after import-succeeded-trash-failed: clean up the duplicate
+        copies = [self._bodyonly("m1"), self._withattach("m2")]
+        assert bf.classify(copies, reinflated_has_attachments=True) == "WOULD_REPAIR_TRASH_ONLY"
+
+    def test_two_bodyonly_copies_is_ambiguous(self, bf):
+        copies = [self._bodyonly("m1"), self._bodyonly("m2")]
+        assert bf.classify(copies, reinflated_has_attachments=True) == "AMBIGUOUS"
+
+    def test_two_copies_both_with_attachments_is_already_done(self, bf):
+        copies = [self._withattach("m1"), self._withattach("m2")]
+        assert bf.classify(copies, reinflated_has_attachments=True) == "ALREADY_DONE"

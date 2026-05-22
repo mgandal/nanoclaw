@@ -150,3 +150,37 @@ def find_gmail_copies(service, label_id, bare_message_id):
         )
         copies.append(msg)
     return copies
+
+
+def classify(gmail_copies, reinflated_has_attachments):
+    """Classify one candidate message into a repair bucket.
+
+    gmail_copies: list of full Gmail message resources matching the
+      message's rfc822msgid on the folder label.
+    reinflated_has_attachments: whether the local reinflated .emlx actually
+      has attachments. The caller decides SKIP_NO_ATTACHMENTS before calling
+      this; the parameter is kept for caller clarity and possible future use.
+
+    Returns one of: MISSING, WOULD_REPAIR, WOULD_REPAIR_TRASH_ONLY,
+    ALREADY_DONE, AMBIGUOUS.
+    """
+    if not gmail_copies:
+        return "MISSING"
+
+    body_only = [m for m in gmail_copies if not message_has_attachments(m)]
+    with_attach = [m for m in gmail_copies if message_has_attachments(m)]
+
+    if not body_only:
+        # Every copy already has attachments.
+        return "ALREADY_DONE"
+
+    if len(body_only) == 1 and with_attach:
+        # One body-only copy + at least one attachment-bearing copy:
+        # a prior --execute imported but did not finish trashing.
+        return "WOULD_REPAIR_TRASH_ONLY"
+
+    if len(body_only) == 1 and not with_attach:
+        return "WOULD_REPAIR"
+
+    # 2+ body-only copies — unclear which (if any) to trash; manual review.
+    return "AMBIGUOUS"
