@@ -133,3 +133,32 @@ class TestMessageHasAttachments:
             }
         }
         assert bf.message_has_attachments(msg) is True
+
+
+class TestBuildEmlxIndex:
+    def test_index_maps_basename_to_full_path(self, bf):
+        # Fake discover_folders() return shape
+        class FakeEm:
+            @staticmethod
+            def discover_folders():
+                return [
+                    ("Inbox", object(), [
+                        Path("/mail/Inbox.mbox/UUID/Data/1/Messages/100.emlx"),
+                        Path("/mail/Inbox.mbox/UUID/Data/1/Messages/101.partial.emlx"),
+                    ]),
+                    ("Sent Items", object(), [
+                        Path("/mail/Sent.mbox/UUID/Data/2/Messages/200.emlx"),
+                    ]),
+                ]
+
+        index = bf.build_emlx_index(FakeEm())
+        assert index["Inbox"]["100.emlx"] == Path("/mail/Inbox.mbox/UUID/Data/1/Messages/100.emlx")
+        assert index["Inbox"]["101.partial.emlx"] == Path("/mail/Inbox.mbox/UUID/Data/1/Messages/101.partial.emlx")
+        assert index["Sent Items"]["200.emlx"] == Path("/mail/Sent.mbox/UUID/Data/2/Messages/200.emlx")
+
+    def test_index_empty_when_no_folders(self, bf):
+        class FakeEm:
+            @staticmethod
+            def discover_folders():
+                return []
+        assert bf.build_emlx_index(FakeEm()) == {}

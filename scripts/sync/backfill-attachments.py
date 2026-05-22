@@ -88,3 +88,16 @@ def message_has_attachments(gmail_msg):
 
     payload = gmail_msg.get("payload") or {}
     return _walk(payload)
+
+
+def build_emlx_index(em):
+    """Build {folder_path: {basename: full_Path}} from discover_folders().
+
+    discover_folders() returns [(folder_path_str, mbox_entry, [Path,...])].
+    The backfill resolves ledger basenames to full paths because parse_emlx
+    needs the full path to find the sibling Attachments/ sidecar dir.
+    """
+    index = {}
+    for folder_path, _mbox_entry, emlx_files in em.discover_folders():
+        index[folder_path] = {p.name: p for p in emlx_files}
+    return index
