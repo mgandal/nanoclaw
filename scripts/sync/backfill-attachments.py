@@ -22,7 +22,21 @@ import logging
 import os
 import sys
 import time
+import types
+from dataclasses import dataclass
 from pathlib import Path
+
+# When this file is loaded via importlib.util.exec_module (the test harness
+# does this), the module is NOT auto-registered in sys.modules. The @dataclass
+# decorator below, combined with `from __future__ import annotations`, resolves
+# string field annotations via sys.modules[cls.__module__] — which would be
+# None and crash. Register a stand-in module so that lookup succeeds. Harmless
+# under normal `python3 backfill-attachments.py` execution (__name__ is
+# "__main__", already registered, so this is a no-op).
+if __name__ not in sys.modules:
+    _self_module = types.ModuleType(__name__)
+    _self_module.__dict__.update(globals())
+    sys.modules[__name__] = _self_module
 
 log = logging.getLogger("backfill-attachments")
 
@@ -265,3 +279,94 @@ def repair_one(service, label_id, reinflated_bytes, old_message,
                     old_message.get("id"), e)
         return "REPAIRED_TRASH_FAILED"
     return "REPAIRED"
+
+
+@dataclass
+class Candidate:
+    """One backfill candidate: a pre-fix .partial.emlx and its lookup keys."""
+    folder: str
+    basename: str
+    label_id: str
+    bare_mid: str
+    reinflated_bytes: bytes
+    reinflated_has_attachments: bool
+
+
+def trash_only(service, body_only_message):
+    """Trash a leftover body-only copy (WOULD_REPAIR_TRASH_ONLY bucket).
+
+    Used when a prior --execute imported the attachment copy but failed to
+    trash the body-only original. Returns "REPAIRED" or "IMPORT_FAILED".
+    """
+    try:
+        service.users().messages().trash(
+            userId="me", id=body_only_message["id"]
+        ).execute()
+        return "REPAIRED"
+    except Exception as e:
+        log.warning("  trash-only failed for id %s: %s",
+                    body_only_message.get("id"), e)
+        return "IMPORT_FAILED"
+
+
+# All buckets the report tracks.
+BUCKETS = [
+    "WOULD_REPAIR", "WOULD_REPAIR_TRASH_ONLY", "ALREADY_DONE", "MISSING",
+    "AMBIGUOUS", "SKIP_NO_ATTACHMENTS", "SKIP_TOO_LARGE", "IMPORT_FAILED",
+    "REPAIRED_TRASH_FAILED",
+]
+
+
+def run_backfill(service, candidates, execute, rate_limit_s=0.3):
+    """Classify and (if execute) repair each candidate.
+
+    Returns a dict of bucket -> count. In dry-run (execute=False) it
+    classifies and counts but performs no import/trash.
+
+    Raising GmailLimitReached propagates to the caller (main), which stops
+    cleanly — partial progress is fine because re-runs are idempotent.
+    """
+    counts = {b: 0 for b in BUCKETS}
+
+    for cand in candidates:
+        if not cand.reinflated_has_attachments:
+            counts["SKIP_NO_ATTACHMENTS"] += 1
+            continue
+
+        copies = find_gmail_copies(service, cand.label_id, cand.bare_mid)
+        bucket = classify(copies)
+
+        if not execute or bucket in ("ALREADY_DONE", "MISSING", "AMBIGUOUS"):
+            counts[bucket] += 1
+            if bucket == "MISSING":
+                log.info("  MISSING (no Gmail copy): %s/%s",
+                         cand.folder, cand.basename)
+            continue
+
+        # execute mode, actionable bucket
+        if bucket == "WOULD_REPAIR":
+            body_only = [m for m in copies
+                         if not message_has_attachments(m)][0]
+            outcome = repair_one(service, cand.label_id,
+                                 cand.reinflated_bytes, body_only)
+        elif bucket == "WOULD_REPAIR_TRASH_ONLY":
+            body_only = [m for m in copies
+                         if not message_has_attachments(m)][0]
+            outcome = trash_only(service, body_only)
+        else:
+            outcome = None
+
+        if outcome == "REPAIRED":
+            counts[bucket] += 1
+        elif outcome == "REPAIRED_TRASH_FAILED":
+            # import+verify succeeded; a recoverable duplicate was left.
+            # Count the bucket as actioned AND record the trash failure.
+            counts[bucket] += 1
+            counts["REPAIRED_TRASH_FAILED"] += 1
+        elif outcome == "IMPORT_FAILED":
+            counts["IMPORT_FAILED"] += 1
+
+        if rate_limit_s:
+            time.sleep(rate_limit_s)
+
+    return counts

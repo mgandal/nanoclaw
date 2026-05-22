@@ -428,3 +428,92 @@ class TestRepairOne:
             old_message=self._bodyonly("old-id"),
         )
         assert outcome == "REPAIRED_TRASH_FAILED"
+
+
+class TestTrashOnly:
+    def test_trash_only_trashes_the_body_only_copy(self, bf):
+        svc = _FakeGmailService()
+        body_only = {"id": "dup-id", "payload": {"mimeType": "text/plain"}}
+        outcome = bf.trash_only(svc, body_only)
+        assert outcome == "REPAIRED"
+        assert svc.trash_calls == ["dup-id"]
+
+    def test_trash_only_reports_failure_without_raising(self, bf):
+        import types
+
+        class _RaisingMessages:
+            def trash(self, userId, id):
+                class _R:
+                    def execute(self_inner):
+                        raise RuntimeError("trash 500")
+                return _R()
+
+        svc = _FakeGmailService()
+        svc.users = lambda: types.SimpleNamespace(
+            messages=lambda: _RaisingMessages())
+        outcome = bf.trash_only(svc, {"id": "x"})
+        assert outcome == "IMPORT_FAILED"
+
+
+class TestRunBackfill:
+    def test_dry_run_makes_no_import_or_trash_calls(self, bf):
+        """Dry-run (execute=False) classifies and counts but never mutates."""
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}]},
+            get_returns={"m1": {"id": "m1", "payload": {"mimeType": "text/plain"}}},
+        )
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="101.partial.emlx",
+                         label_id="Label_5", bare_mid="abc@penn.edu",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=False, rate_limit_s=0)
+        assert counts["WOULD_REPAIR"] == 1
+        assert svc.import_calls == []
+        assert svc.trash_calls == []
+
+    def test_skip_no_attachments_candidate_counted_and_not_queried(self, bf):
+        svc = _FakeGmailService()
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="1.partial.emlx",
+                         label_id="L", bare_mid="x@y",
+                         reinflated_bytes=b"X", reinflated_has_attachments=False),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["SKIP_NO_ATTACHMENTS"] == 1
+        # no Gmail query made for a no-attachment candidate
+        assert svc.list_calls == []
+
+    def test_execute_repairs_would_repair_candidate(self, bf):
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}]},
+            get_returns={
+                "m1": {"id": "m1", "labelIds": ["Label_5"],
+                       "payload": {"mimeType": "text/plain"}},
+                "imported-1": {"id": "imported-1", "payload": {
+                    "mimeType": "multipart/mixed", "parts": [
+                        {"mimeType": "application/pdf", "filename": "x.pdf",
+                         "body": {"size": 9000, "attachmentId": "a"}}]}},
+            },
+        )
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="101.partial.emlx",
+                         label_id="Label_5", bare_mid="abc@penn.edu",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["WOULD_REPAIR"] == 1
+        assert len(svc.import_calls) == 1
+        assert svc.trash_calls == ["m1"]
+
+    def test_missing_candidate_bucketed(self, bf):
+        svc = _FakeGmailService(list_returns={})  # no Gmail match
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="9.partial.emlx",
+                         label_id="L", bare_mid="gone@y",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["MISSING"] == 1
+        assert svc.import_calls == []
+        assert svc.trash_calls == []
