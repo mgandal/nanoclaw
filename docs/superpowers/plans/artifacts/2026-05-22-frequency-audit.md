@@ -70,12 +70,16 @@ written back to `result`). Treat it as directional only.
   judgment, which is the weakest gate.
 - Recommended lever: **ADD GATE**.
   - Add a script that checks the slack-mcp unread cache / Slack `conversations`
-    for unread count BEFORE waking the agent. The script should emit
-    `{"wakeAgent": <bool>}` JSON: `wakeAgent=true` only when unread count > 0
-    in monitored channels; `wakeAgent=false` (skip agent) when zero unreads or
-    the slack-mcp cache is not ready. Fail-open (`wakeAgent=true`) on hard
-    errors so mail is never silently lost. Pattern to copy: the `wakeAgent`
-    JSON contract used by task-1775761988868-n4j7vg's script.
+    for unread count BEFORE waking the agent. The scheduler decides guard
+    behavior from the script's PROCESS EXIT CODE (`src/task-scheduler.ts:171`):
+    `exit 0` runs the agent, non-zero (e.g. `exit 1`) skips it, and any guard
+    crash/timeout fails open (runs the agent). The script must therefore
+    `exit 0` only when unread count > 0 in monitored channels, and `exit 1`
+    when it has POSITIVELY confirmed zero unreads. On any error or
+    indeterminate result (slack-mcp cache not ready, query failed), `exit 0`
+    so mail is never silently lost — `exit 1` is reserved for a confirmed
+    "nothing to do". Pattern to copy: task-1775761988868-n4j7vg's script,
+    which sets an internal flag and exits accordingly.
 
 ### task-1776735101107-nobd1s — NanoClaw inbox monitor (telegram_ops-claw)
 - Cadence: `0,30 9-17 * * 1-5` — every 30 min, 9am-5pm, weekdays.
@@ -90,9 +94,11 @@ written back to `result`). Treat it as directional only.
 - Recommended lever: **ADD GATE**.
   - Add a script that checks whether the NanoClaw inbox actually has unprocessed
     items before waking the agent (e.g. count files in the inbox directory the
-    task processes, or query the relevant table/queue). Emit
-    `{"wakeAgent": <bool>}` — `true` only when item count > 0, `false` to skip
-    when empty. Fail-open on errors. Reuse the n4j7vg script's JSON contract.
+    task processes, or query the relevant table/queue). The scheduler keys on
+    the script's PROCESS EXIT CODE (`src/task-scheduler.ts:171`): `exit 0` when
+    item count > 0, `exit 1` when the inbox is positively confirmed empty. On
+    any error or indeterminate result, `exit 0` (fail-open). Reuse the
+    n4j7vg script's exit-code pattern.
 
 ### task-1775761988868-n4j7vg — inbox-convert pipeline (telegram_claire)
 - Cadence: `*/30 * * * *` — every 30 min, 24/7 (highest fire count here).
@@ -175,7 +181,8 @@ Only 3 of the 10 tasks contribute to notification spam:
    `0 9-17 * * 1-5` (halve workday fires; script gate already suppresses empty
    hours).
 2. **task-1776735101104-trfhud** — ADD GATE: host-side script checking Slack
-   unread count > 0 before waking the agent (`wakeAgent` JSON contract).
+   unread count > 0 before waking the agent (`exit 0` wake / `exit 1` skip /
+   `exit 0` fail-open on error — see `src/task-scheduler.ts:171`).
 3. **task-1776735101107-nobd1s** — ADD GATE: host-side script checking the
    NanoClaw inbox for unprocessed items before waking the agent.
 
