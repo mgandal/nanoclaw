@@ -243,7 +243,7 @@ fi
 # attachments. This canary samples the single most-recently-modified
 # Penn .partial.emlx and confirms parse_emlx still reinflates it. If a
 # future change breaks reinflate, fresh mail silently uploads body-only.
-CANARY=$(GMAIL_MIGRATE_USER=mikejg1838@gmail.com /usr/bin/python3 - <<'PYEOF' 2>/dev/null
+CANARY=$(GMAIL_MIGRATE_USER=mikejg1838@gmail.com "$PYTHON3" - <<'PYEOF'
 import glob, os, sys, importlib.util, email
 from pathlib import Path
 root = '/Users/mgandal/Library/Mail/V10/EF7AC40E-29D7-47BD-AE80-2A6694A1045E'
