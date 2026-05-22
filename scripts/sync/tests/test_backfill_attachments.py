@@ -178,3 +178,74 @@ class TestBuildEmlxIndex:
         import pytest
         with pytest.raises(ValueError, match="basename collision"):
             bf.build_emlx_index(FakeEm())
+
+
+class _FakeGmailService:
+    """Minimal fake Gmail service for find_gmail_copies / repair tests.
+
+    list_returns: dict mapping the rfc822msgid query string -> list of
+      {"id": ...} stubs.
+    get_returns: dict mapping message id -> full message resource.
+    """
+    def __init__(self, list_returns=None, get_returns=None):
+        self.list_returns = list_returns or {}
+        self.get_returns = get_returns or {}
+        self.import_calls = []
+        self.trash_calls = []
+
+    def users(self):
+        return _FakeUsers(self)
+
+
+class _FakeUsers:
+    def __init__(self, svc):
+        self._svc = svc
+
+    def messages(self):
+        return _FakeMessages(self._svc)
+
+
+class _FakeMessages:
+    def __init__(self, svc):
+        self._svc = svc
+
+    def list(self, userId, q=None, labelIds=None, maxResults=None,
+             includeSpamTrash=None, pageToken=None):
+        stubs = self._svc.list_returns.get(q, [])
+        return _FakeReq({"messages": stubs})
+
+    def get(self, userId, id, format=None, metadataHeaders=None):
+        return _FakeReq(self._svc.get_returns.get(id, {"id": id, "payload": {}}))
+
+    def import_(self, userId, body, **kwargs):
+        self._svc.import_calls.append({"body": body, "kwargs": kwargs})
+        return _FakeReq({"id": "imported-" + str(len(self._svc.import_calls))})
+
+    def trash(self, userId, id):
+        self._svc.trash_calls.append(id)
+        return _FakeReq({"id": id, "labelIds": ["TRASH"]})
+
+
+class _FakeReq:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def execute(self):
+        return self._payload
+
+
+class TestFindGmailCopies:
+    def test_returns_full_resources_for_each_match(self, bf):
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}, {"id": "m2"}]},
+            get_returns={
+                "m1": {"id": "m1", "payload": {"mimeType": "text/plain"}},
+                "m2": {"id": "m2", "payload": {"mimeType": "text/plain"}},
+            },
+        )
+        copies = bf.find_gmail_copies(svc, "Label_5", "abc@penn.edu")
+        assert {c["id"] for c in copies} == {"m1", "m2"}
+
+    def test_returns_empty_when_no_match(self, bf):
+        svc = _FakeGmailService(list_returns={})
+        assert bf.find_gmail_copies(svc, "Label_5", "missing@penn.edu") == []

@@ -117,3 +117,29 @@ def build_emlx_index(em):
             folder[p.name] = p
         index[folder_path] = folder
     return index
+
+
+def find_gmail_copies(service, label_id, bare_message_id):
+    """Return the list of full Gmail message resources whose RFC822
+    Message-ID matches `bare_message_id`, scoped to `label_id`.
+
+    Uses q="rfc822msgid:..." (AND-combined with labelIds). Trash is
+    excluded (includeSpamTrash defaults to false) — intentional: a
+    body-only copy we want to repair lives on the label, not in Trash.
+    """
+    query = f"rfc822msgid:{bare_message_id}"
+    resp = (
+        service.users().messages()
+        .list(userId="me", q=query, labelIds=[label_id], maxResults=100)
+        .execute()
+    )
+    stubs = resp.get("messages", []) or []
+    copies = []
+    for stub in stubs:
+        msg = (
+            service.users().messages()
+            .get(userId="me", id=stub["id"], format="full")
+            .execute()
+        )
+        copies.append(msg)
+    return copies
