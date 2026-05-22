@@ -208,6 +208,6 @@ direct question deserves a full conversational answer.
 
 For recurring tasks, use `schedule_task`. Add a `script` when a simple check can determine if action is needed -- this minimizes API credit usage.
 
-**How it works:** Provide a bash `script` alongside the `prompt`. Script runs first (30s timeout), prints `{ "wakeAgent": true/false, "data": {...} }`. If false, task waits for next run. If true, agent wakes with data + prompt. Always test scripts in your sandbox before scheduling.
+**How it works:** Provide a bash `script` alongside the `prompt`. The script runs first (15s timeout) and the scheduler decides whether to wake the agent from the script's **process exit code** (`src/task-scheduler.ts:171`): `exit 0` runs the agent, `exit 1` skips it quietly (the legitimate "nothing to do" signal), and any other failure (timeout, crash, `exit 2+`, ENOENT, EACCES) fails OPEN — the agent runs and an alert fires so the broken guard gets attention. Script stdout/stderr is captured for logging/triage but is NOT passed to the agent; the agent just receives its prompt. **Fail-open discipline:** `exit 1` is reserved for *positively confirmed* "nothing to do"; on any error or indeterminate result, `exit 0` so signal is never silently dropped. Always test scripts in your sandbox before scheduling.
 
 Skip scripts when judgment is needed every time (briefings, reminders). For tasks >2x daily, restructure with condition-checking scripts to reduce wake-ups.
