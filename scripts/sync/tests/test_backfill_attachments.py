@@ -521,3 +521,97 @@ class TestRunBackfill:
         assert counts["MISSING"] == 1
         assert svc.import_calls == []
         assert svc.trash_calls == []
+
+    def test_import_failed_increments_only_import_failed_bucket(self, bf, monkeypatch):
+        # A WOULD_REPAIR candidate whose repair_one fails: IMPORT_FAILED++,
+        # WOULD_REPAIR stays 0.
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}]},
+            get_returns={"m1": {"id": "m1", "labelIds": ["L"],
+                                "payload": {"mimeType": "text/plain"}}},
+        )
+        monkeypatch.setattr(bf, "repair_one",
+                            lambda *a, **kw: "IMPORT_FAILED")
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="1.partial.emlx",
+                         label_id="L", bare_mid="abc@penn.edu",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["IMPORT_FAILED"] == 1
+        assert counts["WOULD_REPAIR"] == 0
+
+    def test_repaired_trash_failed_double_counts(self, bf, monkeypatch):
+        # repair_one returning REPAIRED_TRASH_FAILED increments BOTH the
+        # WOULD_REPAIR bucket and the REPAIRED_TRASH_FAILED bucket.
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}]},
+            get_returns={"m1": {"id": "m1", "labelIds": ["L"],
+                                "payload": {"mimeType": "text/plain"}}},
+        )
+        monkeypatch.setattr(bf, "repair_one",
+                            lambda *a, **kw: "REPAIRED_TRASH_FAILED")
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="1.partial.emlx",
+                         label_id="L", bare_mid="abc@penn.edu",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["WOULD_REPAIR"] == 1
+        assert counts["REPAIRED_TRASH_FAILED"] == 1
+
+    def test_would_repair_trash_only_routed_through_run_backfill(self, bf, monkeypatch):
+        # A candidate whose Gmail state is 1 body-only + 1 attachment-bearing
+        # copy classifies WOULD_REPAIR_TRASH_ONLY; run_backfill calls
+        # trash_only and counts the bucket on REPAIRED.
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}, {"id": "m2"}]},
+            get_returns={
+                "m1": {"id": "m1", "payload": {"mimeType": "text/plain"}},
+                "m2": {"id": "m2", "payload": {"mimeType": "multipart/mixed",
+                       "parts": [{"mimeType": "application/pdf",
+                                  "filename": "x.pdf",
+                                  "body": {"size": 9000, "attachmentId": "a"}}]}},
+            },
+        )
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="1.partial.emlx",
+                         label_id="L", bare_mid="abc@penn.edu",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["WOULD_REPAIR_TRASH_ONLY"] == 1
+        # trash_only was used: the body-only copy m1 was trashed, no import
+        assert svc.trash_calls == ["m1"]
+        assert svc.import_calls == []
+
+    def test_execute_mode_already_done_and_ambiguous_pass_through(self, bf):
+        # ALREADY_DONE and AMBIGUOUS are counted via the early-continue
+        # branch in execute mode — no import, no trash.
+        attach_part = {"mimeType": "application/pdf", "filename": "x.pdf",
+                       "body": {"size": 9000, "attachmentId": "a"}}
+        svc = _FakeGmailService(
+            list_returns={
+                "rfc822msgid:done@y": [{"id": "d1"}],
+                "rfc822msgid:ambig@y": [{"id": "a1"}, {"id": "a2"}],
+            },
+            get_returns={
+                "d1": {"id": "d1", "payload": {"mimeType": "multipart/mixed",
+                       "parts": [attach_part]}},
+                "a1": {"id": "a1", "payload": {"mimeType": "text/plain"}},
+                "a2": {"id": "a2", "payload": {"mimeType": "text/plain"}},
+            },
+        )
+        candidates = [
+            bf.Candidate(folder="Inbox", basename="d.partial.emlx",
+                         label_id="L", bare_mid="done@y",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+            bf.Candidate(folder="Inbox", basename="a.partial.emlx",
+                         label_id="L", bare_mid="ambig@y",
+                         reinflated_bytes=b"X", reinflated_has_attachments=True),
+        ]
+        counts = bf.run_backfill(svc, candidates, execute=True, rate_limit_s=0)
+        assert counts["ALREADY_DONE"] == 1
+        assert counts["AMBIGUOUS"] == 1
+        assert svc.import_calls == []
+        assert svc.trash_calls == []

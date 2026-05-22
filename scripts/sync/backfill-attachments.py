@@ -314,6 +314,15 @@ def run_backfill(service, candidates, execute, rate_limit_s=0.3):
     cleanly — partial progress is fine because re-runs are idempotent.
     """
     counts = {b: 0 for b in BUCKETS}
+    # Count accounting: in DRY-RUN every candidate lands in exactly one
+    # bucket (the classify bucket), so the bucket sum == candidate count.
+    # In EXECUTE mode WOULD_REPAIR / WOULD_REPAIR_TRASH_ONLY count only
+    # SUCCESSES — a candidate whose repair_one returns IMPORT_FAILED moves
+    # to the IMPORT_FAILED bucket instead. So execute-mode WOULD_REPAIR can
+    # be lower than the dry-run WOULD_REPAIR; the difference is in
+    # IMPORT_FAILED. REPAIRED_TRASH_FAILED additionally double-counts (the
+    # WOULD_REPAIR bucket AND REPAIRED_TRASH_FAILED both increment) because
+    # the import succeeded but a recoverable duplicate was left.
 
     for cand in candidates:
         if not cand.reinflated_has_attachments:
