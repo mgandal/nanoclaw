@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import email as _email
 import importlib.util
 import logging
 import os
@@ -29,6 +30,12 @@ log = logging.getLogger("backfill-attachments")
 
 MIGRATE_USER = "mikejg1838@gmail.com"
 _MIGRATE_PATH = Path(__file__).resolve().parent / "email-migrate.py"
+
+# Default backfill scope. The migration ledger holds ~13,291 .partial.emlx
+# across all 12 Penn folders (Archive ~8,729, Sent Items ~4,280); a default
+# run must NOT touch those. Only Inbox + Inbox/PennWide (~253 partials) are
+# in scope by default. --folder <name> overrides this to one named folder.
+DEFAULT_SCOPE_FOLDERS = ("Inbox", "Inbox/PennWide")
 
 
 def strip_message_id(mid):
@@ -366,3 +373,144 @@ def run_backfill(service, candidates, execute, rate_limit_s=0.3):
             time.sleep(rate_limit_s)
 
     return counts
+
+
+def _rfc822_has_attachment(rfc822_bytes):
+    """True if the rfc822 message has a MIME part with a non-empty
+    attachment payload (filename + decoded bytes)."""
+    try:
+        msg = _email.message_from_bytes(rfc822_bytes)
+    except Exception:
+        return False
+    for part in msg.walk():
+        if part.get_filename() and (part.get_payload(decode=True) or b""):
+            return True
+    return False
+
+
+def _rfc822_message_id(rfc822_bytes):
+    """Read the Message-ID header straight from the rfc822 bytes.
+
+    The backfill resolves the Gmail copy by rfc822msgid, so the id must come
+    from the same bytes about to be (re)imported — parsing the header here
+    keeps that single source of truth instead of trusting a sidecar value.
+    """
+    try:
+        msg = _email.message_from_bytes(rfc822_bytes)
+    except Exception:
+        return None
+    return msg.get("Message-ID")
+
+
+def build_candidates(em, emlx_index, state, uploader, folder_filter):
+    """Build the list of Candidate objects from the migration ledger.
+
+    Only `.partial.emlx` files are candidates (full .emlx never had stubs).
+    Resolves each basename to a full disk path via emlx_index, runs
+    parse_emlx (attachment-aware), and resolves the folder's Gmail label.
+
+    Folder scope: when `folder_filter` is None the scan is restricted to
+    `DEFAULT_SCOPE_FOLDERS` (Inbox + Inbox/PennWide, ~253 partials) — the
+    other Penn folders (Archive, Sent Items, etc.) are out of scope for a
+    default run. A non-None `folder_filter` overrides this to that one
+    named folder, which may be any folder including a normally-out-of-scope
+    one.
+    """
+    candidates = []
+    if folder_filter:
+        in_scope = {folder_filter}
+    else:
+        in_scope = set(DEFAULT_SCOPE_FOLDERS)
+    for folder, fstate in state.get("folders", {}).items():
+        if folder not in in_scope:
+            continue
+        label_name = em.folder_to_label(folder)
+        label_id = uploader._ensure_label(label_name)
+        folder_index = emlx_index.get(folder, {})
+        for basename in fstate.get("migrated_files", []):
+            if ".partial." not in basename:
+                continue
+            full_path = folder_index.get(basename)
+            if full_path is None:
+                log.warning("  %s/%s in ledger but not on disk — skipping",
+                            folder, basename)
+                continue
+            parsed = em.parse_emlx(full_path)
+            if parsed is None:
+                log.warning("  parse_emlx failed for %s/%s", folder, basename)
+                continue
+            rfc822, _is_read, _ts = parsed
+            mid = strip_message_id(_rfc822_message_id(rfc822))
+            if not mid:
+                log.warning("  no Message-ID for %s/%s — skipping",
+                            folder, basename)
+                continue
+            candidates.append(Candidate(
+                folder=folder,
+                basename=basename,
+                label_id=label_id,
+                bare_mid=mid,
+                reinflated_bytes=rfc822,
+                reinflated_has_attachments=_rfc822_has_attachment(rfc822),
+            ))
+    return candidates
+
+
+def _print_report(counts, execute):
+    """Print the bucket-count report.
+
+    WOULD_REPAIR and IMPORT_FAILED are printed adjacently: in execute mode
+    a WOULD_REPAIR candidate that fails import moves to IMPORT_FAILED, so
+    the two together explain any shrink vs. the dry-run WOULD_REPAIR count.
+    """
+    mode = "EXECUTE" if execute else "DRY RUN"
+    log.info("")
+    log.info("=== Backfill report (%s) ===", mode)
+    for bucket in BUCKETS:
+        log.info("  %-26s %d", bucket, counts.get(bucket, 0))
+    log.info("")
+    if not execute and counts.get("WOULD_REPAIR", 0):
+        log.info("Re-run with --execute to repair %d message(s).",
+                 counts["WOULD_REPAIR"])
+    if counts.get("MISSING", 0):
+        log.info("NOTE: %d message(s) have no Gmail copy at all — these are "
+                 "migration gaps, not backfill candidates.", counts["MISSING"])
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description="Penn email attachment backfill")
+    parser.add_argument("--execute", action="store_true",
+                        help="Perform the repair (default: dry-run report)")
+    parser.add_argument("--folder", default=None,
+                        help="Restrict to one folder (e.g. Inbox)")
+    args = parser.parse_args()
+
+    try:
+        em = _load_migrate_module()
+    except SystemExit:
+        log.error("Could not load email-migrate.py (missing Gmail token?)")
+        return 1
+
+    creds = em.load_gmail_api_credentials()
+    uploader = em.GmailApiUploader(creds)
+    service = uploader._admin_service
+
+    state = em.load_state()
+    emlx_index = build_emlx_index(em)
+    candidates = build_candidates(em, emlx_index, state, uploader, args.folder)
+    log.info("Found %d .partial.emlx candidate(s) across the ledger.",
+             len(candidates))
+
+    try:
+        counts = run_backfill(service, candidates, execute=args.execute)
+    except em.GmailLimitReached as e:
+        log.warning("Gmail quota reached — stopping. Re-run to resume. %s", e)
+        return 0
+
+    _print_report(counts, args.execute)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

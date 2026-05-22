@@ -615,3 +615,136 @@ class TestRunBackfill:
         assert counts["AMBIGUOUS"] == 1
         assert svc.import_calls == []
         assert svc.trash_calls == []
+
+
+class TestBuildCandidates:
+    def test_skips_non_partial_emlx(self, bf, tmp_path):
+        """Only .partial.emlx files become candidates; full .emlx skipped."""
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder):
+                return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                rfc = (b"Message-ID: <m@penn.edu>\r\n"
+                       b'Content-Type: multipart/mixed; boundary="b"\r\n\r\n'
+                       b"--b\r\nContent-Disposition: attachment; filename=x.pdf\r\n"
+                       b"Content-Transfer-Encoding: base64\r\n\r\n"
+                       b"ZGF0YQ==\r\n--b--\r\n")
+                return (rfc, True, 0)
+
+        emlx_index = {
+            "Inbox": {
+                "100.emlx": tmp_path / "100.emlx",
+                "101.partial.emlx": tmp_path / "101.partial.emlx",
+            }
+        }
+        state = {"folders": {"Inbox": {"migrated_files": [
+            "100.emlx", "101.partial.emlx"]}}}
+
+        class FakeUploader:
+            def _ensure_label(self, name):
+                return "Label_for_" + name
+
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter=None)
+        assert len(cands) == 1
+        assert cands[0].basename == "101.partial.emlx"
+        assert cands[0].folder == "Inbox"
+        assert cands[0].bare_mid == "m@penn.edu"
+
+    def test_folder_filter_restricts_candidates(self, bf, tmp_path):
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder):
+                return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return (b"Message-ID: <m@penn.edu>\r\n\r\nbody\r\n", True, 0)
+
+        emlx_index = {
+            "Inbox": {"1.partial.emlx": tmp_path / "1.partial.emlx"},
+            "Sent Items": {"2.partial.emlx": tmp_path / "2.partial.emlx"},
+        }
+        state = {"folders": {
+            "Inbox": {"migrated_files": ["1.partial.emlx"]},
+            "Sent Items": {"migrated_files": ["2.partial.emlx"]},
+        }}
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter="Inbox")
+        assert {c.folder for c in cands} == {"Inbox"}
+
+    def test_basename_in_ledger_but_not_on_disk_is_skipped(self, bf, tmp_path):
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder): return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return (b"Message-ID: <m@penn.edu>\r\n\r\nbody\r\n", True, 0)
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        # ledger lists a .partial.emlx the disk index does not contain
+        emlx_index = {"Inbox": {}}
+        state = {"folders": {"Inbox": {"migrated_files": ["ghost.partial.emlx"]}}}
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter=None)
+        assert cands == []
+
+    def test_default_scope_excludes_archive_and_sent(self, bf, tmp_path):
+        # With folder_filter=None, only Inbox + Inbox/PennWide are scanned;
+        # Archive and Sent Items partials must NOT become candidates.
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder): return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return (b"Message-ID: <m@penn.edu>\r\n\r\nbody\r\n", True, 0)
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        emlx_index = {
+            "Inbox": {"1.partial.emlx": tmp_path / "1.partial.emlx"},
+            "Inbox/PennWide": {"2.partial.emlx": tmp_path / "2.partial.emlx"},
+            "Archive": {"3.partial.emlx": tmp_path / "3.partial.emlx"},
+            "Sent Items": {"4.partial.emlx": tmp_path / "4.partial.emlx"},
+        }
+        state = {"folders": {
+            "Inbox": {"migrated_files": ["1.partial.emlx"]},
+            "Inbox/PennWide": {"migrated_files": ["2.partial.emlx"]},
+            "Archive": {"migrated_files": ["3.partial.emlx"]},
+            "Sent Items": {"migrated_files": ["4.partial.emlx"]},
+        }}
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter=None)
+        assert {c.folder for c in cands} == {"Inbox", "Inbox/PennWide"}
+
+    def test_folder_filter_can_target_an_out_of_scope_folder(self, bf, tmp_path):
+        # --folder Archive explicitly targets a normally-out-of-scope folder.
+        class FakeEm:
+            @staticmethod
+            def folder_to_label(folder): return "Outlook/" + folder
+            @staticmethod
+            def parse_emlx(path):
+                return (b"Message-ID: <m@penn.edu>\r\n\r\nbody\r\n", True, 0)
+
+        class FakeUploader:
+            def _ensure_label(self, name): return "L"
+
+        emlx_index = {
+            "Inbox": {"1.partial.emlx": tmp_path / "1.partial.emlx"},
+            "Archive": {"3.partial.emlx": tmp_path / "3.partial.emlx"},
+        }
+        state = {"folders": {
+            "Inbox": {"migrated_files": ["1.partial.emlx"]},
+            "Archive": {"migrated_files": ["3.partial.emlx"]},
+        }}
+        cands = bf.build_candidates(FakeEm(), emlx_index, state,
+                                    FakeUploader(), folder_filter="Archive")
+        assert {c.folder for c in cands} == {"Archive"}
