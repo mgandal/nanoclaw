@@ -123,16 +123,23 @@ def find_gmail_copies(service, label_id, bare_message_id):
     """Return the list of full Gmail message resources whose RFC822
     Message-ID matches `bare_message_id`, scoped to `label_id`.
 
-    Uses q="rfc822msgid:..." (AND-combined with labelIds). Trash is
-    excluded (includeSpamTrash defaults to false) — intentional: a
-    body-only copy we want to repair lives on the label, not in Trash.
+    Uses q="rfc822msgid:..." (AND-combined with labelIds). includeSpamTrash
+    is passed explicitly as False — a body-only copy we want to repair lives
+    on the label, not in Trash; this exclusion is load-bearing for the
+    caller's match-gate, so it is not left to an API default.
     """
     query = f"rfc822msgid:{bare_message_id}"
     resp = (
         service.users().messages()
-        .list(userId="me", q=query, labelIds=[label_id], maxResults=100)
+        .list(userId="me", q=query, labelIds=[label_id], maxResults=100,
+              includeSpamTrash=False)
         .execute()
     )
+    if resp.get("nextPageToken"):
+        raise RuntimeError(
+            f"find_gmail_copies: >100 matches for {bare_message_id!r} — "
+            "the caller's exact-count gate cannot be trusted"
+        )
     stubs = resp.get("messages", []) or []
     copies = []
     for stub in stubs:

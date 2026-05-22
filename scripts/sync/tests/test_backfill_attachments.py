@@ -192,6 +192,7 @@ class _FakeGmailService:
         self.get_returns = get_returns or {}
         self.import_calls = []
         self.trash_calls = []
+        self.list_calls = []
 
     def users(self):
         return _FakeUsers(self)
@@ -211,6 +212,10 @@ class _FakeMessages:
 
     def list(self, userId, q=None, labelIds=None, maxResults=None,
              includeSpamTrash=None, pageToken=None):
+        self._svc.list_calls.append({
+            "q": q, "labelIds": labelIds, "includeSpamTrash": includeSpamTrash,
+            "maxResults": maxResults,
+        })
         stubs = self._svc.list_returns.get(q, [])
         return _FakeReq({"messages": stubs})
 
@@ -249,3 +254,15 @@ class TestFindGmailCopies:
     def test_returns_empty_when_no_match(self, bf):
         svc = _FakeGmailService(list_returns={})
         assert bf.find_gmail_copies(svc, "Label_5", "missing@penn.edu") == []
+
+    def test_passes_label_query_and_trash_exclusion_to_list(self, bf):
+        svc = _FakeGmailService(
+            list_returns={"rfc822msgid:abc@penn.edu": [{"id": "m1"}]},
+            get_returns={"m1": {"id": "m1", "payload": {}}},
+        )
+        bf.find_gmail_copies(svc, "Label_5", "abc@penn.edu")
+        assert len(svc.list_calls) == 1
+        call = svc.list_calls[0]
+        assert call["q"] == "rfc822msgid:abc@penn.edu"
+        assert call["labelIds"] == ["Label_5"]
+        assert call["includeSpamTrash"] is False
