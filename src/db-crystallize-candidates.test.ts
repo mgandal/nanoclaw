@@ -189,6 +189,38 @@ describe('crystallize_candidates helpers', () => {
     expect(row?.responded_at).toBe('2026-05-23T19:00:00Z');
   });
 
+  it('updateCrystallizeCandidateStatus preserves pending_action_id when omitted', () => {
+    const db = _getTestDb();
+    insertCrystallizeCandidate(db, {
+      id: 'cc-aaa111',
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'j',
+      sessionId: 's',
+      traceSummary: 't',
+      toolSequence: '[]',
+      contentHash: 'h1',
+      createdAt: '2026-05-23T18:00:00Z',
+      expiresAt: '2026-05-30T18:00:00Z',
+    });
+    updateCrystallizeCandidateStatus(
+      db,
+      'cc-aaa111',
+      'accepted',
+      '2026-05-23T19:00:00Z',
+      'pa-123',
+    );
+    updateCrystallizeCandidateStatus(
+      db,
+      'cc-aaa111',
+      'crystallized',
+      '2026-05-23T20:00:00Z',
+    );
+    expect(getCrystallizeCandidate(db, 'cc-aaa111')?.pending_action_id).toBe(
+      'pa-123',
+    );
+  });
+
   it('setCrystallizeCandidateDm updates dm_message_id', () => {
     const db = _getTestDb();
     insertCrystallizeCandidate(db, {
