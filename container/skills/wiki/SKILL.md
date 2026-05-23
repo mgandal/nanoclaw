@@ -2,44 +2,7 @@
 
 You maintain a persistent, compounding wiki knowledge base. The wiki sits between the user and raw sources — you read sources, extract knowledge, and integrate it into structured, interlinked markdown pages.
 
-## Architecture
-
-Three layers:
-
-1. **Sources** (`/workspace/extra/claire-vault/98-nanoKB/sources/`) — immutable raw material. You read but never modify these.
-2. **Wiki** (`/workspace/extra/claire-vault/98-nanoKB/wiki/`) — your domain. You create, update, and cross-reference pages here.
-3. **Schema** (this file) — how you maintain the wiki.
-
-Two special files:
-
-- `98-nanoKB/wiki/index.md` — content catalog. Every page listed with link, one-line summary, category. Update on every ingest.
-- `98-nanoKB/wiki/log.md` — append-only chronological log. Every operation gets an entry: `## [YYYY-MM-DD] operation | Description`
-
-## Wiki Page Conventions
-
-Every wiki page has YAML frontmatter:
-
-```yaml
----
-title: Page Title
-type: entity | concept | synthesis | comparison | summary | note
-created: 2026-04-05
-updated: 2026-04-05
-sources:
-  - sources/papers/2026-04-05_example.pdf
-tags: [neuroscience, genomics]
----
-```
-
-Page types:
-- **entity** — a person, organization, tool, dataset, gene, brain region
-- **concept** — an idea, method, theory, technique
-- **synthesis** — cross-cutting analysis spanning multiple sources
-- **comparison** — structured comparison table (tools, methods, approaches)
-- **summary** — condensed version of a single source
-- **note** — informal observation, open question, or working thought
-
-Cross-reference with wiki-links: `[Related Page](wiki/related-page.md)`. Build a web of connections.
+**Data schema reference:** See `@CONVENTIONS.md` (in this skill directory) for vault layout, folder routing, frontmatter requirements, and tag conventions. This file defines the WHAT; SKILL.md below defines the HOW.
 
 ## Operations
 
@@ -47,7 +10,7 @@ Cross-reference with wiki-links: `[Related Page](wiki/related-page.md)`. Build a
 
 When the user provides a new source (URL, PDF, file, image, voice note, text):
 
-1. **Save the source** to the appropriate `sources/` subfolder. Name: `YYYY-MM-DD_descriptive-title.ext`
+1. **Save the source** to the appropriate `sources/` subfolder per CONVENTIONS.md vault layout. Name: `YYYY-MM-DD_descriptive-title.ext`
    - URLs: use `curl -sLo` to download full content (not WebFetch, which summarizes)
    - Webpages: use `agent-browser` to extract full text if curl gets blocked
    - PDFs: save to `sources/papers/`
@@ -55,13 +18,14 @@ When the user provides a new source (URL, PDF, file, image, voice note, text):
 2. **Read and understand** the source thoroughly
 3. **Discuss takeaways** with the user — what's interesting, what's new, what contradicts existing knowledge
 4. **Update the wiki:**
-   - Create or update entity pages for people, tools, concepts mentioned
+   - Create or update entity pages for people, tools, concepts mentioned (route per CONVENTIONS.md page-types table)
    - Create a summary page for the source itself
    - Update existing concept/synthesis pages that this source informs
    - Add cross-references between new and existing pages
    - Flag contradictions with existing wiki content
-5. **Update `wiki/index.md`** — add new pages, update summaries
-6. **Append to `wiki/log.md`** — record what was ingested and what changed
+5. **Stamp every page you write with `skill_version: production`** in its frontmatter (per CONVENTIONS.md). NEVER omit this key; it is required for vault-blame queries during rollback.
+6. **Update `wiki/index.md`** — add new pages, update summaries
+7. **Append to `wiki/log.md`** — record what was ingested and what changed
 
 A single source may touch 5-15 wiki pages. That's normal and expected.
 
@@ -72,7 +36,7 @@ When the user asks a question:
 1. Read `wiki/index.md` to locate relevant pages
 2. Read relevant wiki pages (not raw sources — the wiki has the synthesized knowledge)
 3. Synthesize an answer with citations to wiki pages
-4. If the answer is substantial and reusable, offer to file it as a new wiki page
+4. If the answer is substantial and reusable, offer to file it as a new wiki page (and stamp `skill_version: production`)
 
 ### Lint
 
@@ -106,3 +70,4 @@ Report findings and suggest: sources to seek, pages to create, connections to ma
 - Prefer updating existing pages over creating new ones when the topic overlaps
 - Flag contradictions explicitly rather than silently overwriting
 - The user curates sources and asks questions; you handle all the bookkeeping
+- Every page write includes `skill_version:` frontmatter (per CONVENTIONS.md) — no exceptions
