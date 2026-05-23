@@ -39,6 +39,7 @@ groups/global/state/current.md
 groups/global/state/followups.md
 groups/global/state/bugs.md
 groups/global/state/*.archived-*.md
+groups/global/state/*-report.md
 !groups/telegram_claire/CLAUDE.md
 !groups/telegram_claire/memory_guardian/
 groups/telegram_claire/memory_guardian/**/__pycache__/
