@@ -62,7 +62,7 @@ def load_anthropic_base_url() -> str:
     if env_file.exists():
         for line in env_file.read_text().splitlines():
             if line.startswith("ANTHROPIC_BASE_URL="):
-                return line.split("=", 1)[1].strip()
+                return line.split("=", 1)[1].strip().strip("\"'")
     raise RuntimeError(
         "ANTHROPIC_BASE_URL not set in env or .env. "
         "OneCLI routing is mandatory — see spec Credentials section."
