@@ -63,6 +63,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
+  createTask,
   deleteSession,
   getAllTasks,
   getDb,
@@ -120,6 +121,10 @@ import {
   handleSessionCommand,
   isSessionCommandAllowed,
 } from './session-commands.js';
+import {
+  extractCrystallizeCommand,
+  handleCrystallizeCommand,
+} from './commands/crystallize-command.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -416,6 +421,38 @@ export async function handleApprovalSlashCommand(opts: {
 }
 
 /**
+ * R2 slash commands for crystallize candidates (spec 2026-05-23).
+ * Mirrors the /approve preprocessor shape: prefix-match, delegate to the
+ * helper in src/commands/crystallize-command.ts, reply through the channel.
+ *
+ * Returns true if the message was consumed as a /crystallize-yes or
+ * /crystallize-skip command (caller advances cursor and skips remaining
+ * pipeline). Main-group gated by the caller — the DM lands in CLAIRE which
+ * is main, so the /yes reply naturally lands in main too.
+ */
+async function maybeHandleCrystallize(
+  text: string,
+  sendMessage: (text: string) => Promise<void>,
+): Promise<boolean> {
+  const trimmed = text.trim();
+  if (!/^\/crystallize-(yes|skip)(\s|$)/.test(trimmed)) return false;
+  const cmd = extractCrystallizeCommand(trimmed);
+  if (!cmd) {
+    await sendMessage(
+      'Usage: /crystallize-yes <cc-id> or /crystallize-skip <cc-id> (cc-id is `cc-` plus 6 lowercase alphanumeric chars).',
+    );
+    return true;
+  }
+  const reply = await handleCrystallizeCommand(cmd, {
+    db: getDb(),
+    createTask,
+    now: () => new Date().toISOString(),
+  });
+  await sendMessage(reply);
+  return true;
+}
+
+/**
  * Process all pending messages for a group.
  * Called by the GroupQueue when it's this group's turn.
  */
@@ -522,6 +559,25 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       lastAgentSeq[chatJid] = m.seq;
       saveState();
       return true;
+    }
+  }
+
+  // --- /crystallize-yes, /crystallize-skip (spec 2026-05-23) ---
+  // Main-group only (mirrors /approve). The DM lands in CLAIRE which is main,
+  // so the /yes reply also lands in main. After /approve so that the prefix
+  // checks don't interfere.
+  if (isMainGroup) {
+    for (const m of missedMessages) {
+      const text = m.content.trim().replace(groupTriggerPattern, '').trim();
+      const handled = await maybeHandleCrystallize(text, async (reply) => {
+        const formatted = formatOutbound(reply, channel.name as ChannelType);
+        if (formatted) await channel.sendMessage(chatJid, formatted);
+      });
+      if (handled) {
+        lastAgentSeq[chatJid] = m.seq;
+        saveState();
+        return true;
+      }
     }
   }
 
