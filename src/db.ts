@@ -1687,3 +1687,113 @@ function migrateJsonState(): void {
     fs.renameSync(from, to);
   }
 }
+
+// --- crystallize_candidates helpers ---
+
+export interface CrystallizeCandidateInsert {
+  id: string;
+  agent: string;
+  sourceGroup: string;
+  sourceJid: string;
+  sessionId: string;
+  traceSummary: string;
+  toolSequence: string;
+  contentHash: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface CrystallizeCandidateRow {
+  id: string;
+  agent: string;
+  source_group: string;
+  source_jid: string;
+  session_id: string;
+  trace_summary: string;
+  tool_sequence: string;
+  content_hash: string;
+  status: 'pending' | 'accepted' | 'skipped' | 'expired' | 'crystallized';
+  dm_message_id: string | null;
+  pending_action_id: string | null;
+  created_at: string;
+  responded_at: string | null;
+  expires_at: string;
+}
+
+export function insertCrystallizeCandidate(
+  database: Database,
+  row: CrystallizeCandidateInsert,
+): boolean {
+  const result = database
+    .prepare(
+      `INSERT OR IGNORE INTO crystallize_candidates
+         (id, agent, source_group, source_jid, session_id, trace_summary,
+          tool_sequence, content_hash, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      row.id,
+      row.agent,
+      row.sourceGroup,
+      row.sourceJid,
+      row.sessionId,
+      row.traceSummary,
+      row.toolSequence,
+      row.contentHash,
+      row.createdAt,
+      row.expiresAt,
+    );
+  return result.changes === 1;
+}
+
+export function getCrystallizeCandidate(
+  database: Database,
+  id: string,
+): CrystallizeCandidateRow | null {
+  const row = database
+    .prepare(`SELECT * FROM crystallize_candidates WHERE id = ?`)
+    .get(id) as CrystallizeCandidateRow | undefined;
+  return row ?? null;
+}
+
+export function updateCrystallizeCandidateStatus(
+  database: Database,
+  id: string,
+  status: CrystallizeCandidateRow['status'],
+  respondedAt: string,
+  pendingActionId?: string,
+): void {
+  database
+    .prepare(
+      `UPDATE crystallize_candidates
+         SET status = ?, responded_at = ?, pending_action_id = COALESCE(?, pending_action_id)
+       WHERE id = ?`,
+    )
+    .run(status, respondedAt, pendingActionId ?? null, id);
+}
+
+export function setCrystallizeCandidateDm(
+  database: Database,
+  id: string,
+  dmMessageId: string,
+): void {
+  database
+    .prepare(`UPDATE crystallize_candidates SET dm_message_id = ? WHERE id = ?`)
+    .run(dmMessageId, id);
+}
+
+export function countTodayCandidatesWithDm(
+  database: Database,
+  agent: string,
+  nowIso: string,
+): number {
+  const row = database
+    .prepare(
+      `SELECT COUNT(*) AS n FROM crystallize_candidates
+        WHERE agent = ?
+          AND substr(created_at, 1, 10) = substr(?, 1, 10)
+          AND dm_message_id IS NOT NULL`,
+    )
+    .get(agent, nowIso) as { n: number };
+  return row.n;
+}
