@@ -59,6 +59,7 @@ describe('dashboardQueryHandler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -325,6 +326,7 @@ describe('dispatcher Rule 1: failure-file on execute throw', () => {
     _initTestDatabase();
     _resetHandlersForTests();
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -420,6 +422,7 @@ describe('dispatcher Rule 4: off-allowlist skipGate violation audit', () => {
     _initTestDatabase();
     _resetHandlersForTests();
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,

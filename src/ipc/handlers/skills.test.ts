@@ -53,6 +53,7 @@ describe('skill_search handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -388,6 +389,7 @@ describe('skill_invoked handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -644,6 +646,7 @@ describe('save_skill handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -1185,6 +1188,7 @@ describe('crystallize_skill handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,

@@ -1960,6 +1960,7 @@ async function main(): Promise<void> {
     },
   });
   const ipcDeps: IpcDeps = {
+    db: getDb(),
     sendMessage: (jid, rawText) => {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);

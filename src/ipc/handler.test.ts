@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import {
@@ -18,6 +19,7 @@ import type { RegisteredGroup } from '../types.js';
 
 function fakeDeps(overrides: Partial<IpcDeps> = {}): IpcDeps {
   return {
+    db: new Database(':memory:'),
     sendMessage: async () => {},
     registeredGroups: () => ({}),
     registerGroup: () => {},

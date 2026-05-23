@@ -4,7 +4,7 @@ import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { DATA_DIR } from '../../config.js';
-import { _initTestDatabase, setRegisteredGroup } from '../../db.js';
+import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
 import {
   _resetHandlersForTests,
@@ -46,6 +46,7 @@ describe('deployMiniAppHandler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
