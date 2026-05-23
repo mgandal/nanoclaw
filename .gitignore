@@ -110,3 +110,5 @@ scripts/markitdown/venv/
 # but this rule makes sure the stray file can't accidentally get force-added
 # even if groups/* is ever opened up.
 groups/*/knowledge-base/**/CLAUDE.md
+scripts/skill-evolve/venv/
+scripts/skill-evolve/runs/*/scratch/
