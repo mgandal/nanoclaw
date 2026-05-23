@@ -19,8 +19,42 @@ import {
   skillInvokedHandler,
   saveSkillHandler,
   crystallizeSkillHandler,
+  crystallizeCandidateHandler,
   _resetBuiltinSkillsCacheForTests,
 } from './skills.js';
+import type { IpcHandlerContext } from '../handler.js';
+
+/**
+ * Build a minimal IpcHandlerContext for direct-execute tests (Task 5).
+ * The crystallize_candidate handler reads ctx.deps.db and ctx.deps.sendMessage
+ * directly — no dispatcher round-trip — so we hand-roll a context here.
+ */
+function buildTestCtx(opts: {
+  sourceGroup: string;
+  agentName: string | null;
+  sendMessage?: (jid: string, text: string) => Promise<void>;
+}): IpcHandlerContext {
+  const ctx: IpcHandlerContext = {
+    sourceGroup: opts.sourceGroup,
+    isMain: false,
+    baseGroup: opts.sourceGroup,
+    agentName: opts.agentName,
+    requestId: null,
+    registeredGroups: {},
+    deps: {
+      db: getDb(),
+      sendMessage: opts.sendMessage ?? (async () => undefined),
+      registeredGroups: () => ({}),
+      registerGroup: () => undefined,
+      syncGroups: async () => undefined,
+      getAvailableGroups: () => [],
+      writeGroupsSnapshot: () => undefined,
+      onTasksChanged: () => undefined,
+    },
+    dataDir: '/tmp/test-data',
+  };
+  return ctx;
+}
 
 /**
  * skill_search handler tests. Migrated from src/ipc.ts:1444-1532
@@ -2043,5 +2077,207 @@ describe('SKIP_GATE_ALLOWLIST — crystallize candidate types', () => {
   });
   it('contains crystallize_candidate_fetch (regression pin C5a)', () => {
     expect(SKIP_GATE_ALLOWLIST.has('crystallize_candidate_fetch')).toBe(true);
+  });
+});
+
+/**
+ * crystallize_candidate handler tests (Task 5 of R1). Notify-kind IPC that
+ * lands the candidate row written by the Stop hook (Task 6) and DMs Telegram
+ * CLAIRE. Eight tests pinning the adversarial-review fixes:
+ *  - C1: DM to Telegram CLAIRE jid `tg:8475020901`
+ *  - C2: race-safe via UNIQUE INDEX + INSERT OR IGNORE
+ *  - C6: sha256 content_hash dedup key (not user-prompt)
+ *  - I1: per-day DM cap (3/agent/day) — overflow persists, dm_message_id NULL
+ *  - I7: swarm-safe — use data.agent (payload) NOT ctx.agentName
+ *  - I8: sourceGroup verification — deny on mismatch with ctx.sourceGroup
+ */
+describe('crystallize_candidate handler', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('parses valid payload', () => {
+    const parsed = crystallizeCandidateHandler.parse({
+      type: 'crystallize_candidate',
+      agent: 'marvin',
+      sourceGroup: 'telegram_lab-claw',
+      sourceJid: 'tg:-1003892106437',
+      sessionId: 'sess-1',
+      traceSummary: 'A'.repeat(600),
+      toolSequence: [
+        { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+      ],
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.agent).toBe('marvin');
+  });
+
+  it('parse rejects missing fields', () => {
+    expect(crystallizeCandidateHandler.parse({})).toBeNull();
+    expect(
+      crystallizeCandidateHandler.parse({
+        type: 'crystallize_candidate',
+        agent: 'm',
+      }),
+    ).toBeNull();
+  });
+
+  it('authorize is skipGate=true notify-only', () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+    });
+    const auth = crystallizeCandidateHandler.authorize(
+      {
+        agent: 'm',
+        sourceGroup: 'g',
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: '',
+        toolSequence: [],
+      },
+      ctx,
+    );
+    expect(auth?.skipGate).toBe(true);
+    expect(auth?.notifySummary).toBe('');
+    expect(auth?.payloadForStaging.type).toBe('crystallize_candidate');
+  });
+
+  it('responseKind is notify, not result', () => {
+    expect(crystallizeCandidateHandler.responseKind).toBe('notify');
+  });
+
+  it('rejects sourceGroup mismatch (I8)', async () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'telegram_lab-claw',
+      agentName: 'marvin',
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'marvin',
+        sourceGroup: 'telegram_other', // mismatch
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+        ],
+      },
+      ctx,
+    );
+    const rows = ctx.deps.db
+      .prepare('SELECT * FROM crystallize_candidates')
+      .all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('uses data.agent over ctx.agentName (I7 swarm-safe)', async () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'telegram_lab-claw',
+      agentName: 'claire',
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'marvin', // payload says marvin
+        sourceGroup: 'telegram_lab-claw',
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+        ],
+      },
+      ctx,
+    );
+    const rows = ctx.deps.db
+      .prepare(`SELECT agent FROM crystallize_candidates`)
+      .all() as Array<{ agent: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].agent).toBe('marvin'); // payload, not ctx
+  });
+
+  it('INSERT OR IGNOREs duplicates (C2)', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    const payload = {
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'j',
+      sessionId: 's',
+      traceSummary: 'A'.repeat(600),
+      toolSequence: [
+        { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+      ],
+    };
+    await crystallizeCandidateHandler.execute(payload, ctx);
+    await crystallizeCandidateHandler.execute(payload, ctx); // same content
+    const rows = ctx.deps.db
+      .prepare(`SELECT * FROM crystallize_candidates`)
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('skips DM when day-cap (3) reached, persists row (I1)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    for (let i = 0; i < 4; i++) {
+      await crystallizeCandidateHandler.execute(
+        {
+          agent: 'm',
+          sourceGroup: 'g',
+          sourceJid: 'j',
+          sessionId: `s-${i}`,
+          traceSummary: `A${i}`.repeat(300), // differ to avoid dedup
+          toolSequence: [
+            { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+            { tool: `mcp__x${i}__y`, argSummary: 'a', resultSummary: 'b' },
+            { tool: `mcp__y${i}__z`, argSummary: 'a', resultSummary: 'b' },
+          ],
+        },
+        ctx,
+      );
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(3); // cap at 3
+    const overflowRows = ctx.deps.db
+      .prepare(
+        `SELECT * FROM crystallize_candidates WHERE dm_message_id IS NULL`,
+      )
+      .all();
+    expect(overflowRows).toHaveLength(1); // 4th row persisted, no DM
+  });
+
+  it('sends DM to Telegram CLAIRE jid (L3)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'm',
+        sourceGroup: 'g',
+        sourceJid: 'tg:-1234',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+          { tool: 'mcp__honcho__profile', argSummary: 'a', resultSummary: 'b' },
+          { tool: 'mcp__gmail__search', argSummary: 'c', resultSummary: 'd' },
+        ],
+      },
+      ctx,
+    );
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0][0]).toBe('tg:8475020901'); // CLAIRE
   });
 });
