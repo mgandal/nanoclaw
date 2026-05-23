@@ -2445,4 +2445,31 @@ describe('crystallize_candidate_fetch handler', () => {
     expect(result.result.message).toContain('not_found');
     expect(result.result.data).toBeUndefined();
   });
+
+  // Mutation-pin: drop the try/catch around JSON.parse and this test fails.
+  // Corrupted rows surface as not_found:-prefixed failures (intentional —
+  // agent retry path treats both identically; row is unrecoverable either way).
+  it('returns success:false when tool_sequence JSON is malformed', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    insertCrystallizeCandidate(ctx.deps.db, {
+      id: 'cc-bbb222',
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'tg:-1',
+      sessionId: 's',
+      traceSummary: 't',
+      toolSequence: '{not valid json',
+      contentHash: 'h',
+      createdAt: '2026-05-23T20:00:00Z',
+      expiresAt: '2026-05-30T20:00:00Z',
+    });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-bbb222' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain('not_found');
+    expect(result.result.data).toBeUndefined();
+  });
 });
