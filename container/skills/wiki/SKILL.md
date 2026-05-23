@@ -16,7 +16,7 @@ When the user provides a new source (URL, PDF, file, image, voice note, text):
    - PDFs: save to `sources/papers/`
    - Images: save to `sources/media/`
 2. **Read and understand** the source thoroughly
-3. **Discuss takeaways** with the user — what's interesting, what's new, what contradicts existing knowledge
+3. **In your response, summarize takeaways:** what's interesting, what's new, what contradicts existing knowledge
 4. **Update the wiki:**
    - Create or update entity pages for people, tools, concepts mentioned (route per CONVENTIONS.md page-types table)
    - Create a summary page for the source itself
@@ -25,7 +25,7 @@ When the user provides a new source (URL, PDF, file, image, voice note, text):
    - Flag contradictions with existing wiki content
 5. **Stamp every page you write with `skill_version: production`** in its frontmatter (per CONVENTIONS.md). NEVER omit this key; it is required for vault-blame queries during rollback.
 6. **Update `wiki/index.md`** — add new pages, update summaries
-7. **Append to `wiki/log.md`** — record what was ingested and what changed
+7. **Append to `wiki/log.md`** using the format `## [YYYY-MM-DD] ingest | <one-line description>` (per CONVENTIONS.md log conventions)
 
 A single source may touch 5-15 wiki pages. That's normal and expected.
 
@@ -58,7 +58,7 @@ Report findings and suggest: sources to seek, pages to create, connections to ma
 | URL (article) | `curl -sLo sources/articles/YYYY-MM-DD_title.md` or `agent-browser` for JS-heavy sites |
 | URL (PDF) | `curl -sLo sources/papers/YYYY-MM-DD_title.pdf` |
 | PDF attachment | Save to `sources/papers/`, extract text with `pdftotext` |
-| Image | Save to `sources/media/`, describe content using vision |
+| Image | Save to `sources/media/`, describe content using your vision capability; if no vision available, note filename and defer to user |
 | Voice note | Transcription arrives as text, save transcript to `sources/transcripts/` |
 | Book/chapter | Save to `sources/books/` |
 | Raw text | Save to appropriate subfolder based on content |
