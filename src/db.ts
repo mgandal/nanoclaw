@@ -209,6 +209,31 @@ function createSchema(database: Database): void {
     -- addTask. Only applies to open rows, so archive+re-add still works.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_open_title
       ON tasks(lower(title)) WHERE status = 'open';
+
+    CREATE TABLE IF NOT EXISTS crystallize_candidates (
+      id TEXT PRIMARY KEY,
+      agent TEXT NOT NULL,
+      source_group TEXT NOT NULL,
+      source_jid TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      trace_summary TEXT NOT NULL,
+      tool_sequence TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      dm_message_id TEXT,
+      pending_action_id TEXT,
+      created_at TEXT NOT NULL,
+      responded_at TEXT,
+      expires_at TEXT NOT NULL,
+      CHECK (status IN ('pending','accepted','skipped','expired','crystallized'))
+    );
+    -- Race-safe dedup: prevents two overlapping host processes from both
+    -- INSERTing the same (agent, content_hash, day) candidate after each
+    -- reads "no recent row". Spec C2 — pair with INSERT OR IGNORE.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cc_dedup
+      ON crystallize_candidates(agent, content_hash, substr(created_at, 1, 10));
+    CREATE INDEX IF NOT EXISTS idx_cc_status_created
+      ON crystallize_candidates(status, created_at);
   `);
 
   // Helper: add a column if it doesn't exist (SQLite throws on duplicate)
