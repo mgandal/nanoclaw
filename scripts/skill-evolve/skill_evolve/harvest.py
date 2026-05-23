@@ -27,6 +27,8 @@ class RealPrompt:
     source_path: Path
 
 
+# TODO(v2): consider redacting `sk-...` API keys and `/Users/<name>/` paths
+# (out of v1 spec scope; spec N5 = emails + phones only).
 def _redact(text: str) -> str:
     text = EMAIL_RE.sub("[REDACTED_EMAIL]", text)
     text = PHONE_RE.sub("[REDACTED_PHONE]", text)
@@ -63,7 +65,8 @@ def _first_user_message(events: list[dict]) -> str | None:
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     return block.get("text", "")
-        return None
+        # Fall through to next user event if this one has no extractable text
+        continue
     return None
 
 
