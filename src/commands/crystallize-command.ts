@@ -30,9 +30,7 @@ export function extractCrystallizeCommand(
  */
 export interface CrystallizeDeps {
   db: Database;
-  createTask: (
-    task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
-  ) => void;
+  createTask: (task: Omit<ScheduledTask, 'last_run' | 'last_result'>) => void;
   now: () => string;
 }
 
