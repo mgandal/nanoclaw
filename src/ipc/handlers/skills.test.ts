@@ -2010,6 +2010,8 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
     // added, removed, or renamed without updating this list, the test
     // breaks loudly. Sorted-array compare so ordering changes do not break.
     const expected = [
+      'crystallize_candidate',
+      'crystallize_candidate_fetch',
       'dashboard_query',
       'imessage_list_contacts',
       'imessage_read',
@@ -2032,5 +2034,14 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
 
   it('41. skill_invoked is on SKIP_GATE_ALLOWLIST (skipGate is load-bearing per R1 High 2)', () => {
     expect([...SKIP_GATE_ALLOWLIST]).toContain('skill_invoked');
+  });
+});
+
+describe('SKIP_GATE_ALLOWLIST — crystallize candidate types', () => {
+  it('contains crystallize_candidate (regression pin C3)', () => {
+    expect(SKIP_GATE_ALLOWLIST.has('crystallize_candidate')).toBe(true);
+  });
+  it('contains crystallize_candidate_fetch (regression pin C5a)', () => {
+    expect(SKIP_GATE_ALLOWLIST.has('crystallize_candidate_fetch')).toBe(true);
   });
 });
