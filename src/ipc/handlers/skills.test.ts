@@ -2275,7 +2275,9 @@ describe('crystallize_candidate handler', () => {
       ) => Promise<void>,
     });
     // Spy on logger.error to capture the leak-risk message.
-    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const errorSpy = vi
+      .spyOn(logger, 'error')
+      .mockImplementation(() => undefined);
     // Spy on db.prepare to intercept the UPDATE statement used by
     // setCrystallizeCandidateDm and force it to throw on .run().
     const originalPrepare = ctx.deps.db.prepare.bind(ctx.deps.db);
