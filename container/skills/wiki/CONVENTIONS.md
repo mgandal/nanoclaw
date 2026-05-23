@@ -6,7 +6,7 @@ This file defines the data schema for wiki pages. Procedural instructions for HO
 
 The vault is rooted at `/workspace/extra/claire-vault/98-nanoKB/`:
 
-- `sources/` — immutable raw material (PDFs, articles, transcripts). Agents read, never modify.
+- `sources/` — raw material (PDFs, articles, transcripts). Agents add new files when ingesting; never modify or delete existing ones.
   - `sources/papers/` — academic PDFs
   - `sources/articles/` — webpage downloads
   - `sources/media/` — images
