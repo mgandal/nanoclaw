@@ -79,6 +79,113 @@ export function appendCrystallizeOffer(
 
 const sessionToolCalls: ToolCallRecord[] = [];
 
+// Test seam: lets unit tests redirect IPC file writes to a tmpdir.
+let STOP_HOOK_TASK_DIR = '/workspace/ipc/tasks';
+export function __setStopHookTaskDirForTests(dir: string): void {
+  STOP_HOOK_TASK_DIR = dir;
+}
+
+export interface ToolSeqEntry {
+  tool: string;
+  argSummary: string;
+  resultSummary: string;
+}
+
+/**
+ * Parse a JSONL transcript file and extract a structural sequence of
+ * tool_use / tool_result pairs. Used by the Stop hook to build a
+ * trace summary for crystallize candidates. Truncates arg + result
+ * to 80 chars each to keep traces bounded.
+ *
+ * Returns empty array on missing or unreadable file.
+ */
+export function extractToolSequence(transcriptPath: string): ToolSeqEntry[] {
+  let raw: string;
+  try { raw = fs.readFileSync(transcriptPath, 'utf-8'); }
+  catch { return []; }
+
+  const out: ToolSeqEntry[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      const blocks = entry?.message?.content;
+      if (!Array.isArray(blocks)) continue;
+      for (const b of blocks) {
+        if (b?.type === 'tool_use' && typeof b.name === 'string') {
+          out.push({
+            tool: b.name,
+            argSummary: JSON.stringify(b.input ?? {}).slice(0, 80),
+            resultSummary: '',
+          });
+        } else if (b?.type === 'tool_result' && typeof b.content === 'string') {
+          if (out.length > 0) {
+            out[out.length - 1].resultSummary = b.content.slice(0, 80);
+          }
+        }
+      }
+    } catch { /* malformed line, skip */ }
+  }
+  return out;
+}
+
+/**
+ * Stop hook — when an agent session turn ends, fire a `crystallize_candidate`
+ * IPC if the turn looks like a recipe worth crystallizing. Gates:
+ *   1. R3 re-entry guard (stop_hook_active=true → skip)
+ *   2. Must have an agentName (only crystallize for known agents)
+ *   3. Assistant message >= 500 chars (verbosity)
+ *   4. >= 3 distinct meaningful tools (mcp__* or Skill)
+ *   5. No sentence-start failure phrases ("I couldn't", "we cannot", etc.)
+ *   6. No "unclear whether/if/how" patterns
+ *
+ * Filename includes group+agent+ts+rand for I8 collision/spoofing
+ * resistance. Fire-and-forget — host IPC watcher picks up the file and
+ * routes it to crystallizeCandidateHandler.
+ */
+export function createStopHook(
+  agentName: string | undefined,
+  sourceGroup: string,
+  sourceJid: string,
+): HookCallback {
+  return async (input) => {
+    const stop = input as { stop_hook_active?: boolean; last_assistant_message?: string;
+                            transcript_path?: string; session_id?: string };
+    if (stop.stop_hook_active === true) return {};            // R3 re-entry guard
+    if (!agentName) return {};
+
+    const lastMsg = stop.last_assistant_message ?? '';
+    if (lastMsg.length < 500) return {};
+
+    const tools = stop.transcript_path ? extractToolSequence(stop.transcript_path) : [];
+    const meaningful = tools.filter(t => t.tool.startsWith('mcp__') || t.tool === 'Skill');
+    if (new Set(meaningful.map(t => t.tool)).size < 3) return {};
+
+    // I2: word-boundary at sentence start
+    if (/(^|[.!?]\s+)(I|we)\s+(couldn't|cannot|failed)\b/i.test(lastMsg)) return {};
+    if (/\bunclear (whether|if|how)\b/i.test(lastMsg)) return {};
+
+    const rand = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
+    const fname = `crystallize-candidate-${sourceGroup}-${agentName}-${Date.now()}-${rand}.json`;
+    const taskFile = path.join(STOP_HOOK_TASK_DIR, fname);
+
+    try {
+      fs.writeFileSync(taskFile, JSON.stringify({
+        type: 'crystallize_candidate',
+        agent: agentName,
+        sourceGroup,
+        sourceJid,
+        sessionId: stop.session_id ?? '',
+        traceSummary: lastMsg.slice(0, 2048),
+        toolSequence: meaningful.slice(-20),
+      }));
+    } catch (err) {
+      log(`crystallize_candidate IPC write failed: ${err}`);
+    }
+    return {};
+  };
+}
+
 function hashToolParams(params: unknown): string {
   const sorted = JSON.stringify(params, Object.keys((params ?? {}) as Record<string, unknown>).sort());
   return crypto.createHash('sha256').update(sorted).digest('hex').slice(0, 16);
@@ -827,6 +934,17 @@ async function runQuery(
               createPreToolUseHook(
                 containerInput.agentName,
                 crystallizedSkillNames,
+              ),
+            ],
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
+              createStopHook(
+                containerInput.agentName,
+                containerInput.groupFolder,
+                containerInput.chatJid,
               ),
             ],
           },
