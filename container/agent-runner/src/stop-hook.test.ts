@@ -73,10 +73,37 @@ describe('createStopHook gate', () => {
     expect(fs.readdirSync(tmpDir)).toHaveLength(0);
   });
 
+  // Boundary pin: catches `< 500` → `< N (N<500)` mutation
+  it('skips at length===499 (gate boundary)', async () => {
+    const hook = createStopHook('marvin', 'g', 'j');
+    await hook({ hook_event_name: 'Stop', stop_hook_active: false,
+      transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__honcho__profile', 'mcp__gmail__search']),
+      last_assistant_message: 'A'.repeat(499), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
+    expect(fs.readdirSync(tmpDir)).toHaveLength(0);
+  });
+
+  // Boundary pin: catches `< 500` → `<= 500` mutation
+  it('passes length gate at length===500', async () => {
+    const hook = createStopHook('marvin', 'g', 'j');
+    await hook({ hook_event_name: 'Stop', stop_hook_active: false,
+      transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__honcho__profile', 'mcp__gmail__search']),
+      last_assistant_message: 'A'.repeat(500), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
+    expect(fs.readdirSync(tmpDir)).toHaveLength(1);
+  });
+
   it('skips when <3 distinct MCP tools', async () => {
     const hook = createStopHook('marvin', 'g', 'j');
     await hook({ hook_event_name: 'Stop', stop_hook_active: false,
       transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__qmd__query']),
+      last_assistant_message: 'A'.repeat(600), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
+    expect(fs.readdirSync(tmpDir)).toHaveLength(0);
+  });
+
+  // Boundary pin: catches `< 3` → `< 2` mutation (2 distinct still skips)
+  it('skips at distinct===2 (gate boundary)', async () => {
+    const hook = createStopHook('marvin', 'g', 'j');
+    await hook({ hook_event_name: 'Stop', stop_hook_active: false,
+      transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__honcho__profile']),
       last_assistant_message: 'A'.repeat(600), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
     expect(fs.readdirSync(tmpDir)).toHaveLength(0);
   });
