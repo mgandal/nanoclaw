@@ -3,7 +3,12 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
+import {
+  _initTestDatabase,
+  getDb,
+  insertCrystallizeCandidate,
+  setRegisteredGroup,
+} from '../../db.js';
 import { DATA_DIR } from '../../config.js';
 import { IpcDeps } from '../../ipc.js';
 import { logger } from '../../logger.js';
@@ -20,6 +25,7 @@ import {
   saveSkillHandler,
   crystallizeSkillHandler,
   crystallizeCandidateHandler,
+  crystallizeCandidateFetchHandler,
   _resetBuiltinSkillsCacheForTests,
 } from './skills.js';
 import type { IpcHandlerContext } from '../handler.js';
@@ -2357,5 +2363,86 @@ describe('crystallize_candidate handler', () => {
     );
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(sendMessage.mock.calls[0][0]).toBe('tg:8475020901'); // CLAIRE
+  });
+});
+
+/**
+ * crystallize_candidate_fetch handler tests (Task 8 of R2). Read-only
+ * result-kind IPC; the body-gen one-shot task hydrates the candidate row
+ * from inside the container via this handler (the container has no
+ * file-mount of store/messages.db, so direct DB reads aren't possible).
+ *
+ * Contract pins:
+ *  - responseKind: 'result' (agent needs the data back, not a notify)
+ *  - skipGate: true (read-only, on SKIP_GATE_ALLOWLIST from Task 4)
+ *  - ccId validation: strict `cc-[a-z0-9]{6}` pattern
+ *  - not_found path returns success:false with `not_found:` prefix message
+ *  - tool_sequence (JSON string in DB) is parsed back to array for response
+ */
+describe('crystallize_candidate_fetch handler', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('responseKind is result, skipGate true', () => {
+    expect(crystallizeCandidateFetchHandler.responseKind).toBe('result');
+    const auth = crystallizeCandidateFetchHandler.authorize(
+      {} as never,
+      {} as never,
+    );
+    expect(auth?.skipGate).toBe(true);
+  });
+
+  it('parse rejects missing or malformed ccId', () => {
+    expect(crystallizeCandidateFetchHandler.parse({})).toBeNull();
+    expect(
+      crystallizeCandidateFetchHandler.parse({ ccId: 'not-a-ccid' }),
+    ).toBeNull();
+    expect(crystallizeCandidateFetchHandler.parse({ ccId: 'cc-' })).toBeNull();
+    expect(
+      crystallizeCandidateFetchHandler.parse({ ccId: 'cc-aaa111' }),
+    ).not.toBeNull();
+  });
+
+  it('returns hydrated row by ccId', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    insertCrystallizeCandidate(ctx.deps.db, {
+      id: 'cc-aaa111',
+      agent: 'marvin',
+      sourceGroup: 'telegram_ops-claw',
+      sourceJid: 'tg:-1234',
+      sessionId: 'sess-1',
+      traceSummary: 'aggregated grant deadlines',
+      toolSequence:
+        '[{"tool":"mcp__qmd__query","argSummary":"x","resultSummary":"y"}]',
+      contentHash: 'h1',
+      createdAt: '2026-05-23T20:00:00Z',
+      expiresAt: '2026-05-30T20:00:00Z',
+    });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-aaa111' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(true);
+    expect(result.result.data?.agent).toBe('marvin');
+    expect(result.result.data?.sourceGroup).toBe('telegram_ops-claw');
+    expect(result.result.data?.traceSummary).toBe('aggregated grant deadlines');
+    expect(result.result.data?.toolSequence).toEqual([
+      { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+    ]);
+    expect(result.result.data?.status).toBe('pending');
+  });
+
+  it('returns not_found on missing ccId', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-zzz999' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain('not_found');
+    expect(result.result.data).toBeUndefined();
   });
 });

@@ -17,6 +17,7 @@ import {
   saveSkillHandler,
   crystallizeSkillHandler,
   crystallizeCandidateHandler,
+  crystallizeCandidateFetchHandler,
 } from './skills.js';
 import {
   taskAddHandler,
@@ -74,6 +75,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(saveSkillHandler);
   registerIpcHandler(crystallizeSkillHandler);
   registerIpcHandler(crystallizeCandidateHandler);
+  registerIpcHandler(crystallizeCandidateFetchHandler);
   registered = true;
 }
 

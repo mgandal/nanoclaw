@@ -6,6 +6,7 @@ import { AGENTS_DIR } from '../../config.js';
 import { getBridgeToken } from '../../bridge-auth.js';
 import {
   countTodayCandidatesWithDm,
+  getCrystallizeCandidate,
   insertCrystallizeCandidate,
   setCrystallizeCandidateDm,
 } from '../../db.js';
@@ -1069,5 +1070,136 @@ export const crystallizeCandidateHandler: IpcHandler<
         );
       }
     }
+  },
+};
+
+/**
+ * crystallize_candidate_fetch — read-only IPC for body-gen one-shot tasks.
+ *
+ * Spawned by `/crystallize-yes cc-xxx` slash command (Tasks 10-11). The
+ * one-shot agent task lives in the originating group's container; the
+ * container has no file-mount of store/messages.db so the agent calls
+ * this IPC (via the MCP tool wrapper in Task 9) to hydrate the candidate
+ * row before generating the SKILL.md body.
+ *
+ * Contract pins:
+ *  - responseKind: 'result' — agent needs the data back, not a notify
+ *  - skipGate: true — read-only, on SKIP_GATE_ALLOWLIST (Task 4)
+ *  - resultsDirName: 'crystallize_candidate_results' — container reads
+ *    from /workspace/ipc/<sourceGroup>/crystallize_candidate_results/
+ *  - ccId is validated strictly in parse() against the same `cc-[a-z0-9]{6}`
+ *    pattern used at row creation (skills.ts crystallizeCandidateHandler).
+ *
+ * Returns { success: true, data } on found row, { success: false,
+ * message: 'not_found: cc-xxx' } on missing or on malformed-JSON
+ * tool_sequence. Both are "executed: true" so the dispatcher writes a
+ * result file either way; the agent reads the success boolean.
+ */
+interface CrystallizeCandidateFetchInput {
+  ccId: string;
+}
+
+interface CrystallizeCandidateFetchData {
+  agent: string;
+  sourceGroup: string;
+  traceSummary: string;
+  toolSequence: Array<{
+    tool: string;
+    argSummary: string;
+    resultSummary: string;
+  }>;
+  status: string;
+}
+
+export const crystallizeCandidateFetchHandler: IpcHandler<
+  CrystallizeCandidateFetchInput,
+  {
+    executed: true;
+    result: {
+      success: boolean;
+      message: string;
+      data?: CrystallizeCandidateFetchData;
+    };
+  }
+> = {
+  type: 'crystallize_candidate_fetch',
+  responseKind: 'result',
+  resultsDirName: 'crystallize_candidate_results',
+
+  parse(raw) {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.ccId !== 'string' || !/^cc-[a-z0-9]{6}$/.test(r.ccId)) {
+      return null;
+    }
+    return { ccId: r.ccId };
+  },
+
+  authorize() {
+    return {
+      target: '',
+      notifySummary: '',
+      payloadForStaging: { type: 'crystallize_candidate_fetch' },
+      skipGate: true,
+    };
+  },
+
+  async execute(input, ctx) {
+    const db = ctx.deps.db;
+    const row = getCrystallizeCandidate(db, input.ccId);
+    if (!row) {
+      logger.debug(
+        { ccId: input.ccId, requestId: ctx.requestId },
+        'crystallize_candidate_fetch: not found',
+      );
+      return {
+        executed: true,
+        result: {
+          success: false,
+          message: `not_found: candidate ${input.ccId}`,
+        },
+      };
+    }
+
+    // Defensive: tool_sequence is stored as a JSON string (Task 5 handler
+    // stringifies the array before INSERT). If a row was hand-inserted or
+    // corrupted, JSON.parse would throw and surface as an unhelpful
+    // dispatcher catch-path error. Treat malformed JSON as not_found-shaped
+    // so the agent sees a clean failure boolean.
+    let toolSequence: CrystallizeCandidateFetchData['toolSequence'];
+    try {
+      toolSequence = JSON.parse(row.tool_sequence);
+    } catch (err) {
+      logger.error(
+        {
+          ccId: input.ccId,
+          requestId: ctx.requestId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'crystallize_candidate_fetch: tool_sequence JSON malformed',
+      );
+      return {
+        executed: true,
+        result: {
+          success: false,
+          message: `not_found: candidate ${input.ccId} (corrupted tool_sequence)`,
+        },
+      };
+    }
+
+    return {
+      executed: true,
+      result: {
+        success: true,
+        message: 'ok',
+        data: {
+          agent: row.agent,
+          sourceGroup: row.source_group,
+          traceSummary: row.trace_summary,
+          toolSequence,
+          status: row.status,
+        },
+      },
+    };
   },
 };
