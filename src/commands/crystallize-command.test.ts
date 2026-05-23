@@ -30,6 +30,13 @@ describe('extractCrystallizeCommand', () => {
     expect(extractCrystallizeCommand('/crystallize-yes garbage')).toBeNull();
     expect(extractCrystallizeCommand('plain text')).toBeNull();
   });
+
+  // Mutation-pin: catches relaxation of cc-[a-z0-9]{6} length quantifier
+  // (e.g. {6} -> +, or dropping the \b end-anchor).
+  it('rejects ccIds with wrong length', () => {
+    expect(extractCrystallizeCommand('/crystallize-yes cc-aaa')).toBeNull();
+    expect(extractCrystallizeCommand('/crystallize-yes cc-aaa1112')).toBeNull();
+  });
 });
 
 describe('handleCrystallizeCommand /crystallize-yes', () => {
@@ -161,5 +168,42 @@ describe('handleCrystallizeCommand /crystallize-skip', () => {
     expect(reply).toContain('Skipped');
     const row = getCrystallizeCandidate(db, 'cc-aaa111');
     expect(row?.status).toBe('skipped');
+  });
+
+  it('skip on missing ccId returns error reply', async () => {
+    const db = _getTestDb();
+    const reply = await handleCrystallizeCommand(
+      { kind: 'skip', ccId: 'cc-missing' },
+      { db, createTask: vi.fn(), now: () => '2026-05-23T19:00:00Z' },
+    );
+    expect(reply).toContain('not found');
+  });
+
+  it('skip on already-skipped returns error, no mutation', async () => {
+    const db = _getTestDb();
+    insertCrystallizeCandidate(db, {
+      id: 'cc-aaa111',
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'j',
+      sessionId: 's',
+      traceSummary: 't',
+      toolSequence: '[]',
+      contentHash: 'h',
+      createdAt: '2026-05-23T18:00:00Z',
+      expiresAt: '2026-05-30T18:00:00Z',
+    });
+    db.prepare(
+      `UPDATE crystallize_candidates SET status='skipped' WHERE id='cc-aaa111'`,
+    ).run();
+    const reply = await handleCrystallizeCommand(
+      { kind: 'skip', ccId: 'cc-aaa111' },
+      { db, createTask: vi.fn(), now: () => '2026-05-23T19:00:00Z' },
+    );
+    expect(reply).toContain('not pending');
+    // responded_at should be unchanged (no UPDATE on non-pending)
+    const row = getCrystallizeCandidate(db, 'cc-aaa111');
+    expect(row?.status).toBe('skipped');
+    expect(row?.responded_at).toBeNull();
   });
 });
