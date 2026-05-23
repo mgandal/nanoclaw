@@ -19,6 +19,8 @@ The vault is rooted at `/workspace/extra/claire-vault/98-nanoKB/`:
   - `wiki/concepts/` — ideas, methods, theories, techniques
   - `wiki/entities/` — people, organizations, genes, brain regions
   - `wiki/comparisons/` — structured comparisons (tools/methods/approaches)
+  - `wiki/articles/` — non-academic article summaries (blog posts, news, magazine pieces)
+  - `wiki/notes/` — informal observations, open questions, working thoughts
 - `10-daily/meetings/` — meeting notes, dated; live OUTSIDE the wiki root
 
 ## Two special files
@@ -31,7 +33,7 @@ The vault is rooted at `/workspace/extra/claire-vault/98-nanoKB/`:
 ```yaml
 ---
 title: Page Title
-type: entity | concept | synthesis | comparison | summary | note
+type: entity | concept | synthesis | comparison | paper | summary | note
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 sources:
@@ -46,7 +48,7 @@ skill_version: production
 
 ## Tag conventions
 
-Every page MUST have a `wiki/<type>` tag matching its `type:` value (e.g., `wiki/papers` for a paper page). Domain tags (`neuroscience`, `genomics`, `single-cell`, etc.) come after.
+Every page MUST have a `wiki/<type>` tag matching its `type:` field value (e.g., `wiki/paper` for a paper page). Domain tags (`neuroscience`, `genomics`, `single-cell`, etc.) come after.
 
 ## Page types → folder routing
 
@@ -56,17 +58,17 @@ Every page MUST have a `wiki/<type>` tag matching its `type:` value (e.g., `wiki
 | `concept` | `wiki/concepts/` | Ideas, methods, theories, techniques |
 | `synthesis` | `wiki/syntheses/` | Cross-cutting analysis spanning multiple sources |
 | `comparison` | `wiki/comparisons/` | Structured comparison tables |
-| `summary` | `wiki/papers/` (if paper) or `wiki/articles/` | Condensed version of a single source |
+| `paper` | `wiki/papers/` | Academic paper page (one per paper) |
+| `summary` | `wiki/articles/` | Condensed version of a non-academic source |
 | `note` | `wiki/notes/` | Informal observation, open question |
 
 **Special-case routes (not driven by `type:`):**
 - Meeting notes (any prompt mentioning a meeting, lab discussion, call) → `10-daily/meetings/YYYY-MM-DD_<topic>.md`, NOT under `wiki/`
 - Software/dataset entities → `wiki/tools/` (not `wiki/entities/`)
-- Academic papers → `wiki/papers/` regardless of summary vs critical-read
 
 ## Cross-references
 
-Use markdown links: `[Related Page](wiki/related-page.md)`. Build a web of connections. Cross-references are as valuable as content.
+Use markdown links: `[Related Page](wiki/related-page.md)`. Build a web of connections. Cross-references are as valuable as content. Paths are relative to the vault root (`/workspace/extra/claire-vault/98-nanoKB/`).
 
 ## skill_version
 
