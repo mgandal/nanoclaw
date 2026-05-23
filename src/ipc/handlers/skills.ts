@@ -976,14 +976,14 @@ export const crystallizeCandidateHandler: IpcHandler<
     const now = new Date().toISOString();
     const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
 
+    // C-R2: db is required on IpcDeps (Task 3 made it non-optional). The
+    // previous defensive null-check was dead code — typecheck enforces
+    // presence — and dangerous: silent return on the dead branch left no
+    // dispatcher catch path, no audit row, no notify, just a vanish.
+    // Trust the type. If wiring breaks at runtime, let the destructure
+    // throw so the dispatcher catch path (handler.ts:475-488) logs full
+    // context including requestId.
     const db = ctx.deps.db;
-    if (!db) {
-      logger.error(
-        { requestId: ctx.requestId },
-        'crystallize_candidate: ctx.deps.db missing',
-      );
-      return;
-    }
 
     // C2 race-safe: INSERT OR IGNORE returns false on UNIQUE INDEX collision
     // (agent, content_hash, day). Early-return without DM-ing a duplicate.
@@ -1026,28 +1026,48 @@ export const crystallizeCandidateHandler: IpcHandler<
     // even if the channel-side send returns void — using ccId as a stable
     // local handle is sufficient to mark "DM was attempted for this row"
     // so the day-cap and digest queries can distinguish DM'd from queued.
+    //
+    // C-R1: split sendMessage and setDm into separate try-blocks. If
+    // sendMessage SUCCEEDS but setDm THROWS (DB lock, disk full), the
+    // single-try version swallowed both and left dm_message_id=NULL —
+    // countTodayCandidatesWithDm filters IS NOT NULL, so the next call
+    // would under-count and leak DM #4 past the day-cap. Two separate
+    // try-blocks log the failure modes distinctly and surface the
+    // "day-cap leak risk" condition at error level for operator triage.
+    const dmText = formatCandidateDm(
+      ccId,
+      input.agent,
+      input.sourceGroup,
+      input.toolSequence,
+      input.traceSummary,
+    );
+    let dmResult: string | undefined | void;
+    let dmSucceeded = false;
     try {
-      const dmText = formatCandidateDm(
-        ccId,
-        input.agent,
-        input.sourceGroup,
-        input.toolSequence,
-        input.traceSummary,
-      );
       // IpcDeps.sendMessage is typed `(jid, text) => Promise<void>`. The
       // Telegram channel implementation may internally return a message id;
       // we accept either shape via a runtime check.
-      const result = (await ctx.deps.sendMessage(CLAIRE_JID, dmText)) as
+      dmResult = (await ctx.deps.sendMessage(CLAIRE_JID, dmText)) as
         | string
         | undefined
         | void;
-      const msgId = typeof result === 'string' ? result : ccId;
-      setCrystallizeCandidateDm(db, ccId, msgId);
+      dmSucceeded = true;
     } catch (err) {
       logger.error(
         { err, ccId, requestId: ctx.requestId },
         'crystallize_candidate: DM failed',
       );
+    }
+    if (dmSucceeded) {
+      const msgId = typeof dmResult === 'string' ? dmResult : ccId;
+      try {
+        setCrystallizeCandidateDm(db, ccId, msgId);
+      } catch (err) {
+        logger.error(
+          { err, ccId, requestId: ctx.requestId },
+          'crystallize_candidate: dm_message_id update FAILED — day-cap leak risk (DM sent but row not marked)',
+        );
+      }
     }
   },
 };

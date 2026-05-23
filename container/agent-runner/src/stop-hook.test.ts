@@ -135,19 +135,46 @@ describe('createStopHook gate', () => {
   });
 
   it('writes IPC file with group+agent+ts+rand in filename (I8)', async () => {
-    const hook = createStopHook('marvin', 'telegram_lab-claw', 'tg:-1234');
+    const hook = createStopHook('marvin', 'telegram_ops-claw', 'tg:-1234');
     await hook({ hook_event_name: 'Stop', stop_hook_active: false,
       transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__honcho__profile', 'mcp__gmail__search']),
       last_assistant_message: 'A'.repeat(600), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
     const files = fs.readdirSync(tmpDir);
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/^crystallize-candidate-telegram_lab-claw-marvin-\d+-[a-z0-9]{6}\.json$/);
+    expect(files[0]).toMatch(/^crystallize-candidate-telegram_ops-claw-marvin-\d+-[a-z0-9]{6}\.json$/);
     const body = JSON.parse(fs.readFileSync(path.join(tmpDir, files[0]), 'utf-8'));
     expect(body.type).toBe('crystallize_candidate');
     expect(body.agent).toBe('marvin');
-    expect(body.sourceGroup).toBe('telegram_lab-claw');
+    expect(body.sourceGroup).toBe('telegram_ops-claw');
     expect(body.sourceJid).toBe('tg:-1234');
     expect(body.traceSummary.length).toBeLessThanOrEqual(2048);
     expect(Array.isArray(body.toolSequence)).toBe(true);
+    // I-R1 pin: atomic write via .tmp+rename — no .tmp sibling lingers
+    // after a successful write. If the host IPC watcher polled mid-
+    // writeFileSync, it could read partial JSON, fail to parse, and
+    // shunt the file to errors/.
+    expect(files.some((f) => f.endsWith('.tmp'))).toBe(false);
+  });
+
+  // I-R2 pin: swarm groups (LAB-claw, SCIENCE-claw, HOME-claw,
+  // CODE-claw, COACH-claw) skip the Stop hook entirely. In these
+  // groups containerInput.agentName is the spawn agent ("claire"),
+  // not the sub-agent that ran the turn, so per-agent day-cap
+  // counters would mis-attribute. R2 will inspect transcript for
+  // sub-agent identity; until then, skip.
+  it('skips when sourceGroup is a swarm group (I-R2)', async () => {
+    for (const swarm of [
+      'telegram_lab-claw',
+      'telegram_science-claw',
+      'telegram_home-claw',
+      'telegram_code-claw',
+      'telegram_coach-claw',
+    ]) {
+      const hook = createStopHook('marvin', swarm, 'tg:-1234');
+      await hook({ hook_event_name: 'Stop', stop_hook_active: false,
+        transcript_path: transcriptWith(['mcp__qmd__query', 'mcp__honcho__profile', 'mcp__gmail__search']),
+        last_assistant_message: 'A'.repeat(600), session_id: 's' } as any, undefined, { signal: new AbortController().signal });
+    }
+    expect(fs.readdirSync(tmpDir)).toHaveLength(0);
   });
 });

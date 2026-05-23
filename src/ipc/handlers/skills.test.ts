@@ -2252,6 +2252,82 @@ describe('crystallize_candidate handler', () => {
     expect(overflowRows).toHaveLength(1); // 4th row persisted, no DM
   });
 
+  // C-R1 regression pin: when sendMessage SUCCEEDS but
+  // setCrystallizeCandidateDm THROWS (DB lock, disk full, etc.), the
+  // day-cap counter must NOT leak. Pre-R1, both calls lived in one try
+  // and the catch swallowed both errors silently — the DM physically
+  // went out, but dm_message_id stayed NULL, so the count never
+  // incremented and the cap leaked DM #4. Post-fix: setDm failure is
+  // logged at error level ("day-cap leak risk") but, crucially, the
+  // sendMessage call counted toward the cap because of the row's row
+  // (since the count query is what gates the cap). The row exists
+  // with NULL — still leaks. This test pins the BEHAVIORAL invariant
+  // the operator can trust: setDm failure surfaces a Critical-level
+  // log line so we *see* the leak instead of vanishing silently.
+  it('logs critical when setDm throws after successful DM (C-R1)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    // Spy on logger.error to capture the leak-risk message.
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    // Spy on db.prepare to intercept the UPDATE statement used by
+    // setCrystallizeCandidateDm and force it to throw on .run().
+    const originalPrepare = ctx.deps.db.prepare.bind(ctx.deps.db);
+    const prepareSpy = vi
+      .spyOn(ctx.deps.db, 'prepare')
+      .mockImplementation((sql: string) => {
+        const stmt = originalPrepare(sql);
+        if (/UPDATE crystallize_candidates SET dm_message_id/i.test(sql)) {
+          return {
+            ...stmt,
+            run: () => {
+              throw new Error('disk full');
+            },
+          } as unknown as ReturnType<typeof originalPrepare>;
+        }
+        return stmt;
+      });
+    try {
+      await crystallizeCandidateHandler.execute(
+        {
+          agent: 'm',
+          sourceGroup: 'g',
+          sourceJid: 'tg:-1234',
+          sessionId: 's-leak',
+          traceSummary: 'A'.repeat(600),
+          toolSequence: [
+            { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+            {
+              tool: 'mcp__honcho__profile',
+              argSummary: 'a',
+              resultSummary: 'b',
+            },
+            { tool: 'mcp__gmail__search', argSummary: 'c', resultSummary: 'd' },
+          ],
+        },
+        ctx,
+      );
+      // DM was attempted exactly once (split try-blocks did not swallow
+      // sendMessage twice or short-circuit it).
+      expect(sendMessage).toHaveBeenCalledOnce();
+      // setDm failure surfaced at error level with "day-cap leak risk"
+      // in the message — operator can grep for it.
+      const leakLog = errorSpy.mock.calls.find((call) =>
+        /day-cap leak risk/i.test(String(call[1] ?? '')),
+      );
+      expect(leakLog).toBeDefined();
+    } finally {
+      prepareSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it('sends DM to Telegram CLAIRE jid (L3)', async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const ctx = buildTestCtx({

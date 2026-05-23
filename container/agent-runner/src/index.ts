@@ -143,6 +143,20 @@ export function extractToolSequence(transcriptPath: string): ToolSeqEntry[] {
  * resistance. Fire-and-forget — host IPC watcher picks up the file and
  * routes it to crystallizeCandidateHandler.
  */
+// I-R2: groups that use the Telegram swarm bots (per MEMORY.md "Agent
+// Swarm" section). In these groups `containerInput.agentName` is the
+// spawn agent ("claire" usually), not the sub-agent that actually ran
+// the turn — so per-agent day-cap counters would mis-attribute. Skip
+// the Stop hook entirely until R2 inspects transcript content to
+// identify the sub-agent.
+const SWARM_GROUPS = new Set<string>([
+  'telegram_lab-claw',
+  'telegram_science-claw',
+  'telegram_home-claw',
+  'telegram_code-claw',
+  'telegram_coach-claw',
+]);
+
 export function createStopHook(
   agentName: string | undefined,
   sourceGroup: string,
@@ -153,6 +167,7 @@ export function createStopHook(
                             transcript_path?: string; session_id?: string };
     if (stop.stop_hook_active === true) return {};            // R3 re-entry guard
     if (!agentName) return {};
+    if (SWARM_GROUPS.has(sourceGroup)) return {};             // I-R2 swarm-skip
 
     const lastMsg = stop.last_assistant_message ?? '';
     if (lastMsg.length < 500) return {};
@@ -169,8 +184,12 @@ export function createStopHook(
     const fname = `crystallize-candidate-${sourceGroup}-${agentName}-${Date.now()}-${rand}.json`;
     const taskFile = path.join(STOP_HOOK_TASK_DIR, fname);
 
+    // I-R1: atomic write via .tmp+rename. Host IPC watcher polls the
+    // dir; a partial write race would shunt the file to errors/ and
+    // lose the candidate. Rename is atomic on the same filesystem.
+    const tmpPath = `${taskFile}.tmp`;
     try {
-      fs.writeFileSync(taskFile, JSON.stringify({
+      fs.writeFileSync(tmpPath, JSON.stringify({
         type: 'crystallize_candidate',
         agent: agentName,
         sourceGroup,
@@ -179,8 +198,10 @@ export function createStopHook(
         traceSummary: lastMsg.slice(0, 2048),
         toolSequence: meaningful.slice(-20),
       }));
+      fs.renameSync(tmpPath, taskFile);
     } catch (err) {
       log(`crystallize_candidate IPC write failed: ${err}`);
+      try { fs.unlinkSync(tmpPath); } catch { /* tmp may not exist */ }
     }
     return {};
   };
@@ -938,17 +959,25 @@ async function runQuery(
             ],
           },
         ],
-        Stop: [
-          {
-            hooks: [
-              createStopHook(
-                containerInput.agentName,
-                containerInput.groupFolder,
-                containerInput.chatJid,
-              ),
-            ],
-          },
-        ],
+        // C-R3 kill switch: operator can flip the Stop hook off without a
+        // rebuild by setting CRYSTALLIZE_CANDIDATE_ENABLED=0. Default is
+        // ON (any value !== '0' keeps the hook registered, including
+        // unset).
+        ...(process.env.CRYSTALLIZE_CANDIDATE_ENABLED !== '0'
+          ? {
+              Stop: [
+                {
+                  hooks: [
+                    createStopHook(
+                      containerInput.agentName,
+                      containerInput.groupFolder,
+                      containerInput.chatJid,
+                    ),
+                  ],
+                },
+              ],
+            }
+          : {}),
       },
     },
   })) {
