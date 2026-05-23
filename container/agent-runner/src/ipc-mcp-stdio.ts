@@ -818,6 +818,7 @@ Returns: "Group <name> registered. It will start receiving messages immediately.
 // Uses same IPC pattern: write task file, poll for result.
 
 const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
+const CRYSTALLIZE_CANDIDATE_RESULTS_DIR = path.join(IPC_DIR, 'crystallize_candidate_results');
 const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
 const KG_RESULTS_DIR = path.join(IPC_DIR, 'kg_results');
 const KNOWLEDGE_RESULTS_DIR = path.join(IPC_DIR, 'knowledge_results');
@@ -2013,6 +2014,45 @@ Returns: matching skills from QMD's skill-catalog collection with install instru
       return { content: [{ type: 'text' as const, text: msg }] };
     }
     return { content: [{ type: 'text' as const, text: (result as any).message }] };
+  },
+);
+
+// crystallize_candidate_fetch — hydrate a crystallize candidate row during body generation
+server.tool(
+  'crystallize_candidate_fetch',
+  `Fetch a single crystallize_candidates row by ID and return its trace_summary + tool_sequence as JSON. Read-only.
+
+Use when:
+- You are the body-generation one-shot agent spawned by /crystallize-yes <cc-xxx> and need to hydrate the candidate row before writing the SKILL.md body.
+
+Do not use for:
+- Listing candidates — that surface lives in the host-side weekly digest (Task 13), not here.
+- General skill discovery — use skill_search instead.
+
+Inputs:
+- ccId: candidate ID matching ^cc-[a-z0-9]{6}$ (the ID passed into the /crystallize-yes invocation).
+
+Returns: JSON string of { success, message, data? }. On success, data has { agent, sourceGroup, traceSummary, toolSequence[] }. On miss/corruption, success=false with a "not_found: ..." message. 10-second timeout.`,
+  {
+    ccId: z
+      .string()
+      .regex(/^cc-[a-z0-9]{6}$/)
+      .describe('Candidate ID, format cc-XXXXXX (lowercase alphanumeric)'),
+  },
+  async (args) => {
+    const requestId = `ccf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, {
+      type: 'crystallize_candidate_fetch',
+      ccId: args.ccId,
+      requestId,
+      groupFolder,
+    });
+    const result = await waitForIpcResult(
+      CRYSTALLIZE_CANDIDATE_RESULTS_DIR,
+      requestId,
+      10000,
+    );
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
   },
 );
 
