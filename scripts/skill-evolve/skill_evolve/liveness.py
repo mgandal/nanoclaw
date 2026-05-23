@@ -35,6 +35,7 @@ def count_wiki_writes(jsonl_paths: Iterable[Path]) -> int:
                     isinstance(block, dict)
                     and block.get("type") == "tool_use"
                     and block.get("name") in WRITE_TOOL_NAMES
+                    and isinstance(block.get("input"), dict)
                     and WIKI_PATH_MARKER in str(block.get("input", {}).get("file_path", ""))
                 ):
                     total += 1
@@ -45,7 +46,7 @@ def liveness_report(sessions_dir: Path) -> dict[str, int]:
     """Per-group write counts. Returns {group_name: count}."""
     report: dict[str, int] = {}
     for group_dir in sessions_dir.iterdir():
-        if not group_dir.is_dir():
+        if not group_dir.is_dir() or group_dir.name.startswith("."):
             continue
         jsonls = list(group_dir.glob(".claude/projects/-workspace-group/*.jsonl"))
         report[group_dir.name] = count_wiki_writes(jsonls)

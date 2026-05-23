@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from skill_evolve.liveness import count_wiki_writes
+from skill_evolve.liveness import count_wiki_writes, liveness_report
 
 
 def make_jsonl(path: Path, events: list[dict]) -> None:
@@ -46,3 +46,23 @@ def test_multiple_writes_summed(tmp_path):
         ]}},
     ])
     assert count_wiki_writes([f]) == 2
+
+
+def test_liveness_report_per_group_counts(tmp_path):
+    g1 = tmp_path / "telegram_vault-claw" / ".claude" / "projects" / "-workspace-group"
+    g1.mkdir(parents=True)
+    g1_session = g1 / "s.jsonl"
+    make_jsonl(g1_session, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Write", "input": {"file_path": "98-nanoKB/wiki/papers/x.md"}}
+        ]}},
+    ])
+    g2 = tmp_path / "telegram_other" / ".claude" / "projects" / "-workspace-group"
+    g2.mkdir(parents=True)
+    # g2 has no jsonl files
+    hidden = tmp_path / ".cache"
+    hidden.mkdir()  # should NOT appear in report
+    report = liveness_report(tmp_path)
+    assert report["telegram_vault-claw"] == 1
+    assert report["telegram_other"] == 0
+    assert ".cache" not in report
