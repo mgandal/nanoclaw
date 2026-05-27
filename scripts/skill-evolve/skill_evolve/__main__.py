@@ -78,7 +78,7 @@ def main(skill: str, num_variants: int, max_budget: float,
     with preflight_lock(lock):
         from .evolve import run_evolve
         from .report import render_report, ReportInputs
-        from .deploy import open_pr, stamp_run_id_into_skill
+        from .deploy import open_pr, stamp_run_id_into_skill, ForbiddenRemote
 
         run_root = runs_dir / "_scratch_current"
         result = run_evolve(
@@ -109,8 +109,32 @@ def main(skill: str, num_variants: int, max_budget: float,
         ))
         click.echo(report_text[:400])
 
+        pr_url: str | None = None
+        if result.winner_text:
+            stamped_winner = stamp_run_id_into_skill(result.winner_text, result.run_id)
+            target_skill_path = config.wiki_skill_path()
+            report_path = run_root / "report.md"
+            report_path.write_text(report_text)
+            try:
+                pr_url = open_pr(
+                    skill_name=skill,
+                    run_id=result.run_id,
+                    repo_root=config.REPO_ROOT,
+                    variant_text=stamped_winner,
+                    target_skill_path=target_skill_path,
+                    report_path=report_path,
+                    pr_body=report_text,
+                )
+                click.echo(f"PR opened: {pr_url}")
+            except ForbiddenRemote as e:
+                click.echo(f"ERROR: {e}", err=True)
+                sys.exit(4)
+            except subprocess.CalledProcessError as e:
+                click.echo(f"WARN: PR step failed ({e.cmd[0]}); report written, no PR opened.", err=True)
+                pr_url = None
+
         entry = {"run_id": result.run_id, "merged": False,
-                 "pr_url": None, "cost_usd": 0.0,
+                 "pr_url": pr_url, "cost_usd": 0.0,
                  "winner_score": result.winner_score,
                  "baseline_score": result.baseline_score}
         append_history_entry(history, entry)
