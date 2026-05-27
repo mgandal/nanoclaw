@@ -71,9 +71,14 @@ def generate_variants(
         f"Produce {n} variants per the system instructions."
     )
 
+    # Each variant capped at 15KB ~= 4096 tokens. Scale max_tokens with N
+    # so 8192 doesn't truncate the tail variant on N>=3. Anthropic Sonnet 4.6
+    # supports up to 64000 output tokens.
+    max_tokens = min(4096 * n + 2048, 64000)
+
     resp = client.messages.create(
         model=config.DEFAULT_MODEL,
-        max_tokens=8192,
+        max_tokens=max_tokens,
         temperature=config.DEFAULT_TEMPERATURE,
         system=MUTATOR_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
