@@ -1,0 +1,25 @@
+skill_name: wiki
+scored_axes:
+  - name: folder_routing
+    description: "Did the agent write the page to the expected folder?"
+    weight: 1.0
+  - name: frontmatter_parse
+    description: "YAML frontmatter parses, contains required keys, has wiki/<type> tag prefix"
+    weight: 1.0
+    required_keys: [title, type, created, updated, tags, skill_version]
+  - name: tag_set
+    description: "expected_tags_subset present in frontmatter tags list"
+    weight: 1.0
+  # duplicate_collision: DEFERRED to v2 — real workflow is QMD-search-then-maybe-write;
+  # sandbox has no MCPs, so v1 sandbox cannot measure this faithfully.
+preflight_gate:
+  name: body_structure
+  description: "Variant must produce structurally-valid wiki page or it is ineligible (not scored)"
+  required_sections_by_type:
+    paper: ["## Sources"]
+    synthesis: ["## Related"]
+    summary: []
+    note: []
+    concept: ["## Related"]
+    comparison: []
+    entity: []

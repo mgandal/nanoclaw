@@ -1,0 +1,23 @@
+# scripts/skill-evolve/rubrics/wiki-golden.yaml
+# Operator-authored. Each case has a hand-pinned expected_path_regex and tags.
+# NEVER generated. NEVER copied into the synthetic set.
+cases:
+  - prompt: "Add Tang et al 2024 paper on cortical microcircuit GWAS findings"
+    expected_path_regex: "^wiki/papers/.*tang.*\\.md$"
+    expected_tags_subset: ["wiki/papers"]
+
+  - prompt: "Summarize today's meeting with Connor about iso-seq isoform clustering progress"
+    expected_path_regex: "^10-daily/meetings/.*\\.md$"
+    expected_tags_subset: ["meetings"]
+
+  - prompt: "Write a synthesis comparing colocalization, TWAS, and SMR for fine-mapping eQTLs"
+    expected_path_regex: "^wiki/syntheses/.*\\.md$"
+    expected_tags_subset: ["wiki/syntheses"]
+
+  - prompt: "New entity page for the BICCN consortium"
+    expected_path_regex: "^wiki/entities/.*biccn.*\\.md$"
+    expected_tags_subset: ["wiki/entities"]
+
+  - prompt: "Add Seurat as a single-cell analysis tool"
+    expected_path_regex: "^wiki/tools/.*seurat.*\\.md$"
+    expected_tags_subset: ["wiki/tools"]

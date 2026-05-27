@@ -1,0 +1,33 @@
+# scripts/skill-evolve/rubrics/wiki-adversarial.yaml
+# Operator-authored. Prompts where routing is NOT obvious from English nouns.
+# These discriminate skill quality, not noun-matching.
+cases:
+  - prompt: "Thoughts on yesterday's casual chat with Liqing about iso-seq"
+    # Ambiguous: meeting vs synthesis. Per CONVENTIONS.md special-case rule,
+    # informal-mention-of-meeting routes to 10-daily/meetings/.
+    expected_path_regex: "^10-daily/meetings/.*\\.md$"
+    expected_tags_subset: ["meetings"]
+
+  - prompt: "Quick comparison of three new GWAS findings I want to think about side-by-side"
+    # Multi-paper-comparison → comparison page in wiki/comparisons/, not papers/
+    expected_path_regex: "^wiki/comparisons/.*\\.md$"
+    expected_tags_subset: ["wiki/comparisons"]
+
+  - prompt: "The mTOR paper everyone is talking about — can we add it to the wiki"
+    # Underspecified paper reference. Skill should EITHER (a) ask the user
+    # which mTOR paper, OR (b) route to wiki/papers/ as a placeholder.
+    # We score (b) as correct because (a) requires no file write.
+    expected_path_regex: "^wiki/papers/.*mtor.*\\.md$"
+    expected_tags_subset: ["wiki/papers"]
+
+  - prompt: "Some background notes on cortical layer specification I want to keep handy"
+    # Could be: notes/ (informal), concepts/ (formal concept page), or
+    # syntheses/. CONVENTIONS.md route for informal notes is wiki/notes/.
+    expected_path_regex: "^wiki/notes/.*\\.md$"
+    expected_tags_subset: ["wiki/notes"]
+
+  - prompt: "Add documentation for the AnnData format we're standardizing on"
+    # AnnData is a data format/spec. Tool vs concept ambiguity. Per
+    # CONVENTIONS.md, software/dataset goes to wiki/tools/.
+    expected_path_regex: "^wiki/tools/.*anndata.*\\.md$"
+    expected_tags_subset: ["wiki/tools"]
