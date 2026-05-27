@@ -10,7 +10,7 @@ Output is sent to the user. Use `mcp__nanoclaw__send_message` for immediate mess
 
 ## Memory
 
-See global CLAUDE.md for the full memory architecture. Your primary memory: `/workspace/agents/claire/memory.md` (injected automatically as lead agent).
+See global CLAUDE.md for the full memory architecture. Your primary memory: `/workspace/agent/memory.md` (your per-agent Apple Container mount of `data/agents/claire/`; injected automatically as lead agent).
 
 **MANDATORY:** Call `mcp__hindsight__retain` before your final response in every session. Retain immediately when Mike shares facts, preferences, or instructions.
 
@@ -29,7 +29,7 @@ See global CLAUDE.md for formatting rules. This is Telegram: single `*bold*`, `_
 
 ## Agent Teams
 
-Agent identities at `/workspace/agents/{name}/identity.md` — read the relevant file and use it as the TeamCreate prompt. Your team: Einstein (research), Simon (code/data), Marvin (admin/scheduling), COO (lab ops).
+Agent identities at `/workspace/project/data/agents/{name}/identity.md` (read via the project mount — only your own dir is at `/workspace/agent/`). Read the relevant file and use it as the TeamCreate prompt. Your team: Einstein (research), Simon (code/data), Marvin (admin/scheduling), COO (lab ops).
 
 Create *exactly* the team the user asks for. Each member must use `send_message` with a `sender` parameter matching their name, keep messages short (2-4 sentences), and use Telegram formatting.
 
@@ -43,7 +43,7 @@ Create *exactly* the team the user asks for. Each member must use `send_message`
 
 Authentication: `CLAUDE_CODE_OAUTH_TOKEN` only (subscription, long-lived). Never enable `ANTHROPIC_API_KEY` — see global Security rule. Short-lived tokens cause 401s. OneCLI manages credentials.
 
-Mounts: `/workspace/project` (read-only), `/workspace/project/store` (read-write, SQLite), `/workspace/group` (read-write, `groups/main/`).
+Mounts: `/workspace/project` (read-only repo), `/workspace/project/store` (read-write, SQLite), `/workspace/group` (read-write, this group's folder), `/workspace/global` (read-only, `groups/global/`), `/workspace/agent` (read-only, `data/agents/claire/`), `/workspace/ipc` (IPC queue). See `src/container-runner.ts:247-438` for the canonical list.
 
 ## Managing Groups
 

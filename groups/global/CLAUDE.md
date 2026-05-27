@@ -8,9 +8,9 @@ User identity, contacts, scheduling rules, and preferences live in `/workspace/g
 
 ## Agent Architecture
 
-Agents are persistent entities at `/workspace/agents/{name}/` with `identity.md`, `memory.md`, and `trust.yaml`. Lead agents (`lead: true` in trust.yaml) get their memory injected into context packets automatically. Specialists are available via TeamCreate.
+Agents are persistent entities defined under `data/agents/{name}/` on the host (`identity.md`, `memory.md`, `trust.yaml`). Apple Container mounts the **current agent's** dir read-only at `/workspace/agent/` (singular — one container, one agent). To read **other** agents' identities (e.g. before TeamCreate), read from the repo mount at `/workspace/project/data/agents/{name}/identity.md`. Lead agents (`lead: true` in trust.yaml) get their memory injected into context packets automatically. Specialists are available via TeamCreate.
 
-Agent memory files are read-only in container at `/workspace/agents/`. Write updates via `write_agent_memory` IPC action.
+Agent memory files are read-only inside the container. Write updates via the `write_agent_memory` IPC action.
 
 ## Personality & Approach
 
@@ -55,7 +55,7 @@ Your output is sent to the user or group. Use `mcp__nanoclaw__send_message` to s
 ## Memory & Knowledge
 
 Memory hierarchy (most authoritative first):
-1. **Agent memory.md** (primary) -- `/workspace/agents/{name}/memory.md`
+1. **Agent memory.md** (primary) -- `/workspace/agent/memory.md` (your own, via per-agent Apple Container mount)
 2. **Hindsight** (cross-session bonus) -- conversational memory shared across agents
 3. **QMD** (document search) -- 3,600+ markdown files across vault, notes, sessions
 4. **Group memory.md** (domain state) -- `/workspace/group/memory.md`
@@ -67,7 +67,7 @@ If Hindsight is available, recall for additional context. Your agent memory.md i
 ### Session Start Protocol
 
 At the START of every session, before responding:
-1. Read your agent memory at `/workspace/agents/{name}/memory.md`
+1. Read your agent memory at `/workspace/agent/memory.md`
 2. Read group memory at `/workspace/group/memory.md`
 3. If Hindsight is available, recall recent context: `mcp__hindsight__recall`
 4. For task-oriented work: call `mcp__nanoclaw__task_list` (authoritative). `current.md` is a rendered view, refreshed at 7am — fine for human reading, but the table is canonical.

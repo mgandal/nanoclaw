@@ -14,7 +14,7 @@ When a technical question or coding task arrives, delegate to Simon (the lab's c
 
 ## Agents
 
-Simon is the primary specialist for this group. His identity and capabilities are defined in `/workspace/agents/simon/identity.md`.
+Simon is the primary specialist for this group. His identity and capabilities are defined in `/workspace/project/data/agents/simon/identity.md` (read via the project mount before TeamCreate; only your own agent dir is at `/workspace/agent/`).
 
 - **Simon** — Computational data scientist. Bioinformatics, single-cell, spatial transcriptomics, statistical genetics, ML, pipeline development. Sender: "Simon"
 
