@@ -9,8 +9,6 @@ containing mcp__ references pre-flight.
 Restricted env per src/pageindex.ts:332-341 pattern.
 """
 from __future__ import annotations
-import os
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -119,8 +117,7 @@ def _list_files_written(scratch_vault: Path) -> list[Path]:
             continue
         if rel.parts[0] not in {"wiki", "10-daily", "sources"}:
             continue
-        # Skip seeded index.md
-        if str(rel) == "wiki/index.md" and p.stat().st_size > 0 and p.stat().st_mtime == (scratch_vault / "wiki" / "index.md").stat().st_mtime:
+        if str(rel) == "wiki/index.md":
             continue
         out.append(p)
     return sorted(out)
