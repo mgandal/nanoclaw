@@ -91,7 +91,7 @@ def main(skill: str, num_variants: int, max_budget: float,
         per_axis_winner: dict[str, float] = {}
         # (Aggregation logic omitted here for brevity — left to subagent to derive from result.variant_scores)
         report_text = render_report(ReportInputs(
-            run_id="latest",
+            run_id=result.run_id,
             skill=skill,
             baseline_score=result.baseline_score,
             winner_score=result.winner_score,
@@ -105,11 +105,11 @@ def main(skill: str, num_variants: int, max_budget: float,
             size_winner_bytes=len(result.winner_text.encode()) if result.winner_text else 0,
             cost_usd=0.0,
             intentional_drops=[],
-            rollback_runbook_run_id="latest",
+            rollback_runbook_run_id=result.run_id,
         ))
         click.echo(report_text[:400])
 
-        entry = {"run_id": "latest", "merged": False,
+        entry = {"run_id": result.run_id, "merged": False,
                  "pr_url": None, "cost_usd": 0.0,
                  "winner_score": result.winner_score,
                  "baseline_score": result.baseline_score}

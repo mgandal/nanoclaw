@@ -29,6 +29,7 @@ class EvolveResult:
     winner_score: float = 0.0
     winner_text: str = ""
     intentional_drops: list[str] = field(default_factory=list)
+    run_id: str = ""
 
 
 def compute_noise_floor(scores_run_a: list[float], scores_run_b: list[float]) -> float:
@@ -194,12 +195,14 @@ def run_evolve(
         return EvolveResult(
             baseline_score=baseline_mean, noise_floor=nf, merge_threshold=threshold,
             variant_scores=variant_scores, winner_id=None, winner_score=0.0,
+            run_id=run_id,
         )
     winner_id, winner_score = winner
     if winner_score - baseline_mean < threshold:
         return EvolveResult(
             baseline_score=baseline_mean, noise_floor=nf, merge_threshold=threshold,
             variant_scores=variant_scores, winner_id=None, winner_score=winner_score,
+            run_id=run_id,
         )
     winner_text = next(v for i, v in enumerate(variants) if f"v{i}" == winner_id)
 
@@ -208,10 +211,12 @@ def run_evolve(
         return EvolveResult(
             baseline_score=baseline_mean, noise_floor=nf, merge_threshold=threshold,
             variant_scores=variant_scores, winner_id=None, winner_score=winner_score,
+            run_id=run_id,
         )
 
     return EvolveResult(
         baseline_score=baseline_mean, noise_floor=nf, merge_threshold=threshold,
         variant_scores=variant_scores, winner_id=winner_id, winner_score=winner_score,
         winner_text=winner_text,
+        run_id=run_id,
     )

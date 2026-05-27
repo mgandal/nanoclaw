@@ -38,3 +38,9 @@ def test_pick_winner_none_eligible_returns_none():
     rr = lambda mean: RubricResult(eligible=False, mean_score=mean)
     variant_scores = [("v0", [rr(0.9), rr(0.9)])]
     assert pick_winner(variant_scores) is None
+
+
+def test_evolve_result_has_run_id_field():
+    from skill_evolve.evolve import EvolveResult
+    r = EvolveResult(baseline_score=0.5, noise_floor=0.0, merge_threshold=0.3, run_id="20260527-1234-deadbeef")
+    assert r.run_id == "20260527-1234-deadbeef"
