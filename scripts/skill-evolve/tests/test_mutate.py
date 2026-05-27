@@ -72,3 +72,16 @@ def test_preservation_passes_if_drops_match_allowlist():
     r = semantic_preservation_check("# base", "# variant",
                                      intentional_drops=["rule X"], client=fake)
     assert r.passes() is True
+
+
+def test_generate_variants_records_to_budget_when_provided():
+    from skill_evolve.budget import BudgetTracker
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = MagicMock(
+        content=[MagicMock(text="VARIANT_1:\n```\nA\n```")],
+        usage=MagicMock(input_tokens=1000, output_tokens=500),
+    )
+    b = BudgetTracker(max_usd=10.0)
+    generate_variants("# B", [], n=1, client=fake_client, budget=b)
+    assert b.total_cost > 0
+    assert "mutate" in b.per_stage_breakdown()

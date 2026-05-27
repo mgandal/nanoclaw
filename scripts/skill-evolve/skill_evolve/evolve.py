@@ -145,7 +145,7 @@ def run_evolve(
     golden_cases = [EvalCase(**c) for c in (_yaml.safe_load(golden_path.read_text()) or {"cases": []})["cases"]]
     adv_cases = [EvalCase(**c) for c in (_yaml.safe_load(adversarial_path.read_text()) or {"cases": []})["cases"]]
 
-    synth_cases_raw = synthesize_cases(conventions_path, golden_path, target_count=15)
+    synth_cases_raw = synthesize_cases(conventions_path, golden_path, target_count=15, budget=budget)
     synth_cases = [EvalCase(prompt=c.prompt, expected_path_regex=c.expected_path_regex,
                             expected_tags_subset=c.expected_tags_subset) for c in synth_cases_raw]
     all_cases = golden_cases + adv_cases + synth_cases
@@ -180,7 +180,7 @@ def run_evolve(
         for ax, vs in axis_means.items()
     ]
 
-    variants = generate_variants(baseline_text, feedback_for_mutator, n=num_variants)
+    variants = generate_variants(baseline_text, feedback_for_mutator, n=num_variants, budget=budget)
     variant_scores: list[tuple[str, list[RubricResult]]] = []
     for i, vtext in enumerate(variants):
         if len(vtext.encode()) > 15000:
@@ -206,7 +206,7 @@ def run_evolve(
         )
     winner_text = next(v for i, v in enumerate(variants) if f"v{i}" == winner_id)
 
-    pres = semantic_preservation_check(baseline_text, winner_text, intentional_drops=[])
+    pres = semantic_preservation_check(baseline_text, winner_text, intentional_drops=[], budget=budget)
     if not pres.passes():
         return EvolveResult(
             baseline_score=baseline_mean, noise_floor=nf, merge_threshold=threshold,

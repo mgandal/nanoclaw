@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from anthropic import Anthropic
 from . import config
+from .budget import BudgetTracker
 
 
 @dataclass
@@ -43,6 +44,7 @@ def synthesize_cases(
     golden_path: Path,
     target_count: int,
     client: Anthropic | None = None,
+    budget: BudgetTracker | None = None,
 ) -> list[SyntheticCase]:
     if client is None:
         client = Anthropic(base_url=config.load_anthropic_base_url(), api_key="placeholder")
@@ -64,6 +66,14 @@ def synthesize_cases(
         system=SYNTH_SYSTEM_PROMPT.format(target_count=target_count),
         messages=[{"role": "user", "content": user_msg}],
     )
+
+    if budget is not None:
+        budget.add(
+            input_tokens=resp.usage.input_tokens,
+            output_tokens=resp.usage.output_tokens,
+            model=config.DEFAULT_MODEL,
+            stage="synthesize",
+        )
 
     text = resp.content[0].text
     start = text.find("[")

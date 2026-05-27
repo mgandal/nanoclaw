@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from anthropic import Anthropic
 from . import config
+from .budget import BudgetTracker
 
 
 @dataclass
@@ -56,6 +57,7 @@ def generate_variants(
     baseline_axis_feedback: list[AxisFeedback],
     n: int,
     client: Anthropic | None = None,
+    budget: BudgetTracker | None = None,
 ) -> list[str]:
     if client is None:
         client = Anthropic(base_url=config.load_anthropic_base_url(), api_key="placeholder")
@@ -83,6 +85,13 @@ def generate_variants(
         system=MUTATOR_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
+    if budget is not None:
+        budget.add(
+            input_tokens=resp.usage.input_tokens,
+            output_tokens=resp.usage.output_tokens,
+            model=config.DEFAULT_MODEL,
+            stage="mutate",
+        )
     text = resp.content[0].text
     matches = _VARIANT_RE.findall(text)
     variants = [body.strip() for _, body in matches]
@@ -117,6 +126,7 @@ def semantic_preservation_check(
     intentional_drops: list[str],
     client: Anthropic | None = None,
     judge_prompt_path: _Path | None = None,
+    budget: BudgetTracker | None = None,
 ) -> PreservationResult:
     if client is None:
         client = Anthropic(base_url=config.load_anthropic_base_url(), api_key="placeholder")
@@ -136,6 +146,13 @@ def semantic_preservation_check(
         system=system,
         messages=[{"role": "user", "content": user}],
     )
+    if budget is not None:
+        budget.add(
+            input_tokens=resp.usage.input_tokens,
+            output_tokens=resp.usage.output_tokens,
+            model=config.DEFAULT_MODEL,
+            stage="semantic_judge",
+        )
     text = resp.content[0].text
     start = text.find("{")
     end = text.rfind("}") + 1

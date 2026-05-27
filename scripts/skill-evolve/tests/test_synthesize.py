@@ -46,3 +46,20 @@ def test_synthesizer_returns_target_count_cases(tmp_path):
     )
     cases = synthesize_cases(conv, golden, target_count=15, client=fake_client)
     assert len(cases) == 15
+
+
+def test_synthesize_records_to_budget_when_provided(tmp_path):
+    from skill_evolve.budget import BudgetTracker
+    conv = tmp_path / "CONVENTIONS.md"
+    conv.write_text("conv")
+    golden = tmp_path / "wiki-golden.yaml"
+    golden.write_text("cases: []\n")
+    fake = MagicMock()
+    fake.messages.create.return_value = MagicMock(
+        content=[MagicMock(text='[{"prompt": "p", "expected_path_regex": "^wiki/.*", "expected_tags_subset": []}]')],
+        usage=MagicMock(input_tokens=500, output_tokens=100),
+    )
+    b = BudgetTracker(max_usd=10.0)
+    synthesize_cases(conv, golden, target_count=1, client=fake, budget=b)
+    assert b.total_cost > 0
+    assert "synthesize" in b.per_stage_breakdown()
