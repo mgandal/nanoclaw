@@ -89,3 +89,61 @@ def generate_variants(
     if len(variants) != n:
         raise RuntimeError(f"expected {n} variants, got {len(variants)}: {text[:200]!r}")
     return variants
+
+
+import json as _json
+from dataclasses import dataclass as _dc
+from pathlib import Path as _Path
+
+
+@_dc
+class PreservationResult:
+    score: int
+    dropped_rules: list[str]
+    contradicted_rules: list[str]
+    summary: str
+    intentional_drops: list[str]
+
+    def passes(self) -> bool:
+        if self.score < 4:
+            return False
+        unallowlisted_drops = [r for r in self.dropped_rules if r not in self.intentional_drops]
+        return not unallowlisted_drops and not self.contradicted_rules
+
+
+def semantic_preservation_check(
+    baseline_skill: str,
+    variant_skill: str,
+    intentional_drops: list[str],
+    client: Anthropic | None = None,
+    judge_prompt_path: _Path | None = None,
+) -> PreservationResult:
+    if client is None:
+        client = Anthropic(base_url=config.load_anthropic_base_url(), api_key="placeholder")
+    if judge_prompt_path is None:
+        judge_prompt_path = config.rubrics_dir() / "semantic-preservation.md"
+    system = judge_prompt_path.read_text()
+    drops_block = ("intentional_drops: " + _json.dumps(intentional_drops)) if intentional_drops else "(none)"
+    user = (
+        f"# BASELINE\n```\n{baseline_skill}\n```\n\n"
+        f"# VARIANT\n```\n{variant_skill}\n```\n\n"
+        f"# intentional_drops\n{drops_block}\n"
+    )
+    resp = client.messages.create(
+        model=config.DEFAULT_MODEL,
+        max_tokens=2048,
+        temperature=config.DEFAULT_TEMPERATURE,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    text = resp.content[0].text
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    data = _json.loads(text[start:end])
+    return PreservationResult(
+        score=int(data["score"]),
+        dropped_rules=data.get("dropped_rules", []),
+        contradicted_rules=data.get("contradicted_rules", []),
+        summary=data.get("summary", ""),
+        intentional_drops=intentional_drops,
+    )
