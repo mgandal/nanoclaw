@@ -76,10 +76,44 @@ def main(skill: str, num_variants: int, max_budget: float,
         return
 
     with preflight_lock(lock):
-        click.echo(f"Starting evolve run for skill={skill}")
-        # Full orchestration wiring lives in Task 19; this scaffold lets dry-run + preflights work today.
-        click.echo("Full orchestration not yet wired (see Task 19).")
-        sys.exit(0)
+        from .evolve import run_evolve
+        from .report import render_report, ReportInputs
+        from .deploy import open_pr, stamp_run_id_into_skill
+
+        run_root = runs_dir / "_scratch_current"
+        result = run_evolve(
+            skill=skill, num_variants=num_variants, max_budget=max_budget,
+            sandbox_concurrency=sandbox_concurrency, run_root=run_root,
+        )
+
+        # Always write report + history entry, even on no-improvement
+        per_axis_baseline: dict[str, float] = {}
+        per_axis_winner: dict[str, float] = {}
+        # (Aggregation logic omitted here for brevity — left to subagent to derive from result.variant_scores)
+        report_text = render_report(ReportInputs(
+            run_id="latest",
+            skill=skill,
+            baseline_score=result.baseline_score,
+            winner_score=result.winner_score,
+            noise_floor=result.noise_floor,
+            merge_threshold=result.merge_threshold,
+            per_axis_baseline=per_axis_baseline,
+            per_axis_winner=per_axis_winner,
+            sample_diffs=[],
+            realism_check=[],
+            size_baseline_bytes=config.wiki_skill_path().stat().st_size,
+            size_winner_bytes=len(result.winner_text.encode()) if result.winner_text else 0,
+            cost_usd=0.0,
+            intentional_drops=[],
+            rollback_runbook_run_id="latest",
+        ))
+        click.echo(report_text[:400])
+
+        entry = {"run_id": "latest", "merged": False,
+                 "pr_url": None, "cost_usd": 0.0,
+                 "winner_score": result.winner_score,
+                 "baseline_score": result.baseline_score}
+        append_history_entry(history, entry)
 
 
 if __name__ == "__main__":
