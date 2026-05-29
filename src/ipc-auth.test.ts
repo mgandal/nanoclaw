@@ -4,6 +4,7 @@ import {
   _initTestDatabase,
   createTask,
   getAllTasks,
+  getDb,
   getRegisteredGroup,
   getTaskById,
   setRegisteredGroup,
@@ -52,6 +53,7 @@ beforeEach(() => {
   setRegisteredGroup('third@g.us', THIRD_GROUP);
 
   deps = {
+    db: getDb(),
     sendMessage: async () => {},
     registeredGroups: () => groups,
     registerGroup: (jid, group) => {

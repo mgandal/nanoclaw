@@ -64,6 +64,7 @@ describe('postHocNotify dispatcher behavior', () => {
 
     sent = [];
     deps = {
+      db: getDb(),
       sendMessage: async (jid, text) => {
         sent.push({ jid, text });
       },

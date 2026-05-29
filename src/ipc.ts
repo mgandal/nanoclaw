@@ -36,6 +36,7 @@ import { isInQuietHours, nextQuietEnd } from './quiet-hours.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
+  db: import('bun:sqlite').Database;
   sendMessage: (jid: string, text: string) => Promise<void>;
   sendFile?: (jid: string, filePath: string, caption?: string) => Promise<void>;
   sendWebAppButton?: (jid: string, label: string, url: string) => Promise<void>;

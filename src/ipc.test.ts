@@ -83,6 +83,7 @@ beforeEach(() => {
   syncGroupsSpy = vi.fn().mockResolvedValue(undefined);
 
   deps = {
+    db: getDb(),
     sendMessage: sendMessageSpy as unknown as IpcDeps['sendMessage'],
     registeredGroups: () => groups,
     registerGroup: registerGroupSpy as unknown as IpcDeps['registerGroup'],

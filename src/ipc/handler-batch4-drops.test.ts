@@ -41,6 +41,7 @@ describe('Batch 4 dispatcher drops', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -460,16 +461,15 @@ describe('Batch 4 dispatcher drops', () => {
       };
       registerIpcHandler(handler);
 
-      await dispatchIpcAction(
-        { type: 'wire_z', requestId: '!!bad!!' },
-        ctx,
-      );
+      await dispatchIpcAction({ type: 'wire_z', requestId: '!!bad!!' }, ctx);
 
       // No rows at all (path B fired, but helper short-circuited).
       // We can't query by agent_name (it's null), so count all rows in fresh
       // _initTestDatabase scope.
       const allRows = getDb()
-        .prepare("SELECT COUNT(*) as c FROM agent_actions WHERE outcome LIKE 'dropped_%'")
+        .prepare(
+          "SELECT COUNT(*) as c FROM agent_actions WHERE outcome LIKE 'dropped_%'",
+        )
         .get() as { c: number };
       expect(allRows.c).toBe(0);
       // Mutation pin: the agent_actions.agent_name NOT NULL constraint means

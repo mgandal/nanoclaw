@@ -45,6 +45,7 @@ describe('actionTypeOverride dispatcher behavior', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,

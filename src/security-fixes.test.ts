@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   _closeDatabase,
+  getDb,
   getLastBotMessageSeq,
   getMessagesSince,
   setRegisteredGroup,
@@ -110,6 +111,7 @@ describe('IPC register_group preserves isMain', () => {
     setRegisteredGroup('tg:123', MAIN_GROUP);
 
     deps = {
+      db: getDb(),
       sendMessage: async () => {},
       registeredGroups: () => groups,
       registerGroup: (jid, group) => {

@@ -3,7 +3,12 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
+import {
+  _initTestDatabase,
+  getDb,
+  insertCrystallizeCandidate,
+  setRegisteredGroup,
+} from '../../db.js';
 import { DATA_DIR } from '../../config.js';
 import { IpcDeps } from '../../ipc.js';
 import { logger } from '../../logger.js';
@@ -19,8 +24,43 @@ import {
   skillInvokedHandler,
   saveSkillHandler,
   crystallizeSkillHandler,
+  crystallizeCandidateHandler,
+  crystallizeCandidateFetchHandler,
   _resetBuiltinSkillsCacheForTests,
 } from './skills.js';
+import type { IpcHandlerContext } from '../handler.js';
+
+/**
+ * Build a minimal IpcHandlerContext for direct-execute tests (Task 5).
+ * The crystallize_candidate handler reads ctx.deps.db and ctx.deps.sendMessage
+ * directly — no dispatcher round-trip — so we hand-roll a context here.
+ */
+function buildTestCtx(opts: {
+  sourceGroup: string;
+  agentName: string | null;
+  sendMessage?: (jid: string, text: string) => Promise<void>;
+}): IpcHandlerContext {
+  const ctx: IpcHandlerContext = {
+    sourceGroup: opts.sourceGroup,
+    isMain: false,
+    baseGroup: opts.sourceGroup,
+    agentName: opts.agentName,
+    requestId: null,
+    registeredGroups: {},
+    deps: {
+      db: getDb(),
+      sendMessage: opts.sendMessage ?? (async () => undefined),
+      registeredGroups: () => ({}),
+      registerGroup: () => undefined,
+      syncGroups: async () => undefined,
+      getAvailableGroups: () => [],
+      writeGroupsSnapshot: () => undefined,
+      onTasksChanged: () => undefined,
+    },
+    dataDir: '/tmp/test-data',
+  };
+  return ctx;
+}
 
 /**
  * skill_search handler tests. Migrated from src/ipc.ts:1444-1532
@@ -53,6 +93,7 @@ describe('skill_search handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -388,6 +429,7 @@ describe('skill_invoked handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -644,6 +686,7 @@ describe('save_skill handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -1185,6 +1228,7 @@ describe('crystallize_skill handler', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,
@@ -2006,6 +2050,8 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
     // added, removed, or renamed without updating this list, the test
     // breaks loudly. Sorted-array compare so ordering changes do not break.
     const expected = [
+      'crystallize_candidate',
+      'crystallize_candidate_fetch',
       'dashboard_query',
       'imessage_list_contacts',
       'imessage_read',
@@ -2028,5 +2074,402 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
 
   it('41. skill_invoked is on SKIP_GATE_ALLOWLIST (skipGate is load-bearing per R1 High 2)', () => {
     expect([...SKIP_GATE_ALLOWLIST]).toContain('skill_invoked');
+  });
+});
+
+describe('SKIP_GATE_ALLOWLIST — crystallize candidate types', () => {
+  it('contains crystallize_candidate (regression pin C3)', () => {
+    expect(SKIP_GATE_ALLOWLIST.has('crystallize_candidate')).toBe(true);
+  });
+  it('contains crystallize_candidate_fetch (regression pin C5a)', () => {
+    expect(SKIP_GATE_ALLOWLIST.has('crystallize_candidate_fetch')).toBe(true);
+  });
+});
+
+/**
+ * crystallize_candidate handler tests (Task 5 of R1). Notify-kind IPC that
+ * lands the candidate row written by the Stop hook (Task 6) and DMs Telegram
+ * CLAIRE. Eight tests pinning the adversarial-review fixes:
+ *  - C1: DM to Telegram CLAIRE jid `tg:8475020901`
+ *  - C2: race-safe via UNIQUE INDEX + INSERT OR IGNORE
+ *  - C6: sha256 content_hash dedup key (not user-prompt)
+ *  - I1: per-day DM cap (3/agent/day) — overflow persists, dm_message_id NULL
+ *  - I7: swarm-safe — use data.agent (payload) NOT ctx.agentName
+ *  - I8: sourceGroup verification — deny on mismatch with ctx.sourceGroup
+ */
+describe('crystallize_candidate handler', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('parses valid payload', () => {
+    const parsed = crystallizeCandidateHandler.parse({
+      type: 'crystallize_candidate',
+      agent: 'marvin',
+      sourceGroup: 'telegram_lab-claw',
+      sourceJid: 'tg:-1003892106437',
+      sessionId: 'sess-1',
+      traceSummary: 'A'.repeat(600),
+      toolSequence: [
+        { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+      ],
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.agent).toBe('marvin');
+  });
+
+  it('parse rejects missing fields', () => {
+    expect(crystallizeCandidateHandler.parse({})).toBeNull();
+    expect(
+      crystallizeCandidateHandler.parse({
+        type: 'crystallize_candidate',
+        agent: 'm',
+      }),
+    ).toBeNull();
+  });
+
+  it('authorize is skipGate=true notify-only', () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+    });
+    const auth = crystallizeCandidateHandler.authorize(
+      {
+        agent: 'm',
+        sourceGroup: 'g',
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: '',
+        toolSequence: [],
+      },
+      ctx,
+    );
+    expect(auth?.skipGate).toBe(true);
+    expect(auth?.notifySummary).toBe('');
+    expect(auth?.payloadForStaging.type).toBe('crystallize_candidate');
+  });
+
+  it('responseKind is notify, not result', () => {
+    expect(crystallizeCandidateHandler.responseKind).toBe('notify');
+  });
+
+  it('rejects sourceGroup mismatch (I8)', async () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'telegram_lab-claw',
+      agentName: 'marvin',
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'marvin',
+        sourceGroup: 'telegram_other', // mismatch
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+        ],
+      },
+      ctx,
+    );
+    const rows = ctx.deps.db
+      .prepare('SELECT * FROM crystallize_candidates')
+      .all();
+    expect(rows).toHaveLength(0);
+  });
+
+  it('uses data.agent over ctx.agentName (I7 swarm-safe)', async () => {
+    const ctx = buildTestCtx({
+      sourceGroup: 'telegram_lab-claw',
+      agentName: 'claire',
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'marvin', // payload says marvin
+        sourceGroup: 'telegram_lab-claw',
+        sourceJid: 'j',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+        ],
+      },
+      ctx,
+    );
+    const rows = ctx.deps.db
+      .prepare(`SELECT agent FROM crystallize_candidates`)
+      .all() as Array<{ agent: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].agent).toBe('marvin'); // payload, not ctx
+  });
+
+  it('INSERT OR IGNOREs duplicates (C2)', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    const payload = {
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'j',
+      sessionId: 's',
+      traceSummary: 'A'.repeat(600),
+      toolSequence: [
+        { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+      ],
+    };
+    await crystallizeCandidateHandler.execute(payload, ctx);
+    await crystallizeCandidateHandler.execute(payload, ctx); // same content
+    const rows = ctx.deps.db
+      .prepare(`SELECT * FROM crystallize_candidates`)
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('skips DM when day-cap (3) reached, persists row (I1)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    for (let i = 0; i < 4; i++) {
+      await crystallizeCandidateHandler.execute(
+        {
+          agent: 'm',
+          sourceGroup: 'g',
+          sourceJid: 'j',
+          sessionId: `s-${i}`,
+          traceSummary: `A${i}`.repeat(300), // differ to avoid dedup
+          toolSequence: [
+            { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+            { tool: `mcp__x${i}__y`, argSummary: 'a', resultSummary: 'b' },
+            { tool: `mcp__y${i}__z`, argSummary: 'a', resultSummary: 'b' },
+          ],
+        },
+        ctx,
+      );
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(3); // cap at 3
+    const overflowRows = ctx.deps.db
+      .prepare(
+        `SELECT * FROM crystallize_candidates WHERE dm_message_id IS NULL`,
+      )
+      .all();
+    expect(overflowRows).toHaveLength(1); // 4th row persisted, no DM
+  });
+
+  // C-R1 regression pin: when sendMessage SUCCEEDS but
+  // setCrystallizeCandidateDm THROWS (DB lock, disk full, etc.), the
+  // day-cap counter must NOT leak. Pre-R1, both calls lived in one try
+  // and the catch swallowed both errors silently — the DM physically
+  // went out, but dm_message_id stayed NULL, so the count never
+  // incremented and the cap leaked DM #4. Post-fix: setDm failure is
+  // logged at error level ("day-cap leak risk") but, crucially, the
+  // sendMessage call counted toward the cap because of the row's row
+  // (since the count query is what gates the cap). The row exists
+  // with NULL — still leaks. This test pins the BEHAVIORAL invariant
+  // the operator can trust: setDm failure surfaces a Critical-level
+  // log line so we *see* the leak instead of vanishing silently.
+  it('logs critical when setDm throws after successful DM (C-R1)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    // Spy on logger.error to capture the leak-risk message.
+    const errorSpy = vi
+      .spyOn(logger, 'error')
+      .mockImplementation(() => undefined);
+    // Spy on db.prepare to intercept the UPDATE statement used by
+    // setCrystallizeCandidateDm and force it to throw on .run().
+    const originalPrepare = ctx.deps.db.prepare.bind(ctx.deps.db);
+    const prepareSpy = vi
+      .spyOn(ctx.deps.db, 'prepare')
+      .mockImplementation((sql: string) => {
+        const stmt = originalPrepare(sql);
+        if (/UPDATE crystallize_candidates SET dm_message_id/i.test(sql)) {
+          return {
+            ...stmt,
+            run: () => {
+              throw new Error('disk full');
+            },
+          } as unknown as ReturnType<typeof originalPrepare>;
+        }
+        return stmt;
+      });
+    try {
+      await crystallizeCandidateHandler.execute(
+        {
+          agent: 'm',
+          sourceGroup: 'g',
+          sourceJid: 'tg:-1234',
+          sessionId: 's-leak',
+          traceSummary: 'A'.repeat(600),
+          toolSequence: [
+            { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+            {
+              tool: 'mcp__honcho__profile',
+              argSummary: 'a',
+              resultSummary: 'b',
+            },
+            { tool: 'mcp__gmail__search', argSummary: 'c', resultSummary: 'd' },
+          ],
+        },
+        ctx,
+      );
+      // DM was attempted exactly once (split try-blocks did not swallow
+      // sendMessage twice or short-circuit it).
+      expect(sendMessage).toHaveBeenCalledOnce();
+      // setDm failure surfaced at error level with "day-cap leak risk"
+      // in the message — operator can grep for it.
+      const leakLog = errorSpy.mock.calls.find((call) =>
+        /day-cap leak risk/i.test(String(call[1] ?? '')),
+      );
+      expect(leakLog).toBeDefined();
+    } finally {
+      prepareSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('sends DM to Telegram CLAIRE jid (L3)', async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const ctx = buildTestCtx({
+      sourceGroup: 'g',
+      agentName: 'm',
+      sendMessage: sendMessage as unknown as (
+        jid: string,
+        text: string,
+      ) => Promise<void>,
+    });
+    await crystallizeCandidateHandler.execute(
+      {
+        agent: 'm',
+        sourceGroup: 'g',
+        sourceJid: 'tg:-1234',
+        sessionId: 's',
+        traceSummary: 'A'.repeat(600),
+        toolSequence: [
+          { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+          { tool: 'mcp__honcho__profile', argSummary: 'a', resultSummary: 'b' },
+          { tool: 'mcp__gmail__search', argSummary: 'c', resultSummary: 'd' },
+        ],
+      },
+      ctx,
+    );
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0][0]).toBe('tg:8475020901'); // CLAIRE
+  });
+});
+
+/**
+ * crystallize_candidate_fetch handler tests (Task 8 of R2). Read-only
+ * result-kind IPC; the body-gen one-shot task hydrates the candidate row
+ * from inside the container via this handler (the container has no
+ * file-mount of store/messages.db, so direct DB reads aren't possible).
+ *
+ * Contract pins:
+ *  - responseKind: 'result' (agent needs the data back, not a notify)
+ *  - skipGate: true (read-only, on SKIP_GATE_ALLOWLIST from Task 4)
+ *  - ccId validation: strict `cc-[a-z0-9]{6}` pattern
+ *  - not_found path returns success:false with `not_found:` prefix message
+ *  - tool_sequence (JSON string in DB) is parsed back to array for response
+ */
+describe('crystallize_candidate_fetch handler', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('responseKind is result, skipGate true', () => {
+    expect(crystallizeCandidateFetchHandler.responseKind).toBe('result');
+    const auth = crystallizeCandidateFetchHandler.authorize(
+      {} as never,
+      {} as never,
+    );
+    expect(auth?.skipGate).toBe(true);
+  });
+
+  it('parse rejects missing or malformed ccId', () => {
+    expect(crystallizeCandidateFetchHandler.parse({})).toBeNull();
+    expect(
+      crystallizeCandidateFetchHandler.parse({ ccId: 'not-a-ccid' }),
+    ).toBeNull();
+    expect(crystallizeCandidateFetchHandler.parse({ ccId: 'cc-' })).toBeNull();
+    expect(
+      crystallizeCandidateFetchHandler.parse({ ccId: 'cc-aaa111' }),
+    ).not.toBeNull();
+  });
+
+  it('returns hydrated row by ccId', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    insertCrystallizeCandidate(ctx.deps.db, {
+      id: 'cc-aaa111',
+      agent: 'marvin',
+      sourceGroup: 'telegram_ops-claw',
+      sourceJid: 'tg:-1234',
+      sessionId: 'sess-1',
+      traceSummary: 'aggregated grant deadlines',
+      toolSequence:
+        '[{"tool":"mcp__qmd__query","argSummary":"x","resultSummary":"y"}]',
+      contentHash: 'h1',
+      createdAt: '2026-05-23T20:00:00Z',
+      expiresAt: '2026-05-30T20:00:00Z',
+    });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-aaa111' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(true);
+    expect(result.result.data?.agent).toBe('marvin');
+    expect(result.result.data?.sourceGroup).toBe('telegram_ops-claw');
+    expect(result.result.data?.traceSummary).toBe('aggregated grant deadlines');
+    expect(result.result.data?.toolSequence).toEqual([
+      { tool: 'mcp__qmd__query', argSummary: 'x', resultSummary: 'y' },
+    ]);
+    expect(result.result.data?.status).toBe('pending');
+  });
+
+  it('returns not_found on missing ccId', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-zzz999' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain('not_found');
+    expect(result.result.data).toBeUndefined();
+  });
+
+  // Mutation-pin: drop the try/catch around JSON.parse and this test fails.
+  // Corrupted rows surface as not_found:-prefixed failures (intentional —
+  // agent retry path treats both identically; row is unrecoverable either way).
+  it('returns success:false when tool_sequence JSON is malformed', async () => {
+    const ctx = buildTestCtx({ sourceGroup: 'g', agentName: 'm' });
+    insertCrystallizeCandidate(ctx.deps.db, {
+      id: 'cc-bbb222',
+      agent: 'm',
+      sourceGroup: 'g',
+      sourceJid: 'tg:-1',
+      sessionId: 's',
+      traceSummary: 't',
+      toolSequence: '{not valid json',
+      contentHash: 'h',
+      createdAt: '2026-05-23T20:00:00Z',
+      expiresAt: '2026-05-30T20:00:00Z',
+    });
+    const result = await crystallizeCandidateFetchHandler.execute(
+      { ccId: 'cc-bbb222' },
+      ctx,
+    );
+    expect(result.executed).toBe(true);
+    expect(result.result.success).toBe(false);
+    expect(result.result.message).toContain('not_found');
+    expect(result.result.data).toBeUndefined();
   });
 });

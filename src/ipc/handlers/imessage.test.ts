@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { _initTestDatabase, setRegisteredGroup } from '../../db.js';
+import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
 import { logger } from '../../logger.js';
 import {
@@ -62,6 +62,7 @@ describe('imessage_* cluster handlers', () => {
     });
 
     deps = {
+      db: getDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({}),
       registerGroup: () => undefined,

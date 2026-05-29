@@ -2,7 +2,7 @@
 
 Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
 
-Primary languages: TypeScript (main), Python (sync/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), QMD (semantic search), Honcho (user modeling), Hindsight (cross-session memory), Todoist API, Slack/Telegram bots, Apple Container, Ollama for local LLMs.
+Primary languages: TypeScript (main), Python (sync/ML), Shell (ops). Key infrastructure: NanoClaw (Bun/Node agent framework), QMD (semantic search), Honcho (user modeling), Hindsight (cross-session memory), Slack/Telegram bots, Apple Container, Ollama & mlx-server for local LLMs.
 
 ## Response Length
 
@@ -22,9 +22,9 @@ Do NOT make changes beyond what was requested. When asked for status checks, onl
 
 ## Wiki Knowledge Base
 
-Path: `/Volumes/sandisk4TB/marvin-vault/98-nanoKB`
+Path: `/Volumes/sandisk4TB/marvin-vault/98-nanoKB` (host) — main-channel agents access it at `/workspace/extra/claire-vault/98-nanoKB/` via the conditional Apple Container mount
 
-Persistent, cross-referenced wiki (~398 pages) covering Gandal Lab science, AI tooling, papers, tools, concepts, and syntheses. Feeds NanoClaw agents as the canonical reference when their local memory isn't enough.
+Persistent, cross-referenced wiki covering Gandal Lab science, AI tooling, papers, tools, concepts, and syntheses. Feeds NanoClaw agents as the canonical reference when their local memory isn't enough.
 
 When you need context not already in this project's files/conversation:
 1. Read `wiki/hot.md` first (~500 words of recent context)
@@ -78,6 +78,7 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 | `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
 | `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
 | `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
+| `/crystallize` | Save a reusable skill from a completed task (container-runtime; Stop hook fires `crystallize_candidate` IPC) |
 
 ## Contributing
 
@@ -101,18 +102,12 @@ Service restart:
 ```bash
 # macOS
 launchctl kickstart -k gui/$(id -u)/com.nanoclaw
-# Linux
-systemctl --user restart nanoclaw
 ```
-
-## Troubleshooting
-
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate skill, not bundled in core. Run `/add-whatsapp` (or `bun scripts/apply-skill.ts .claude/skills/add-whatsapp && bun run build`) to install it. Existing auth credentials and groups are preserved.
 
 ## Infrastructure / Services
 
 - Before attempting to fix or restart a service, first confirm its actual status. Do not assume a service is broken — check if it's already running (e.g., in Docker) before creating local configs or starting duplicate instances
-- Honcho runs in Docker (shared with Hermes) on port 8010 — workspace "nanoclaw"
+- Honcho runs in Docker (shared with Hermes) — workspace "nanoclaw"
 - QMD must bind to IPv4 (0.0.0.0), not just IPv6
 - Todoist uses REST API v1 (not v2)
 - When checking service status, report what you find — do NOT attempt to fix services that are already running correctly

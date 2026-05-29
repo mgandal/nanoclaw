@@ -393,6 +393,7 @@ describe('scheduleWakeupHandler integration (via dispatchIpcAction)', () => {
     });
 
     deps = {
+      db: _getTestDb(),
       sendMessage: async () => undefined,
       registeredGroups: () => ({
         '8475020901': {

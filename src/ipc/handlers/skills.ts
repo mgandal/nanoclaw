@@ -1,8 +1,15 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
 import { AGENTS_DIR } from '../../config.js';
 import { getBridgeToken } from '../../bridge-auth.js';
+import {
+  countTodayCandidatesWithDm,
+  getCrystallizeCandidate,
+  insertCrystallizeCandidate,
+  setCrystallizeCandidateDm,
+} from '../../db.js';
 import { frontmatterDeclaresBash } from '../../skill-frontmatter.js';
 import { logger } from '../../logger.js';
 import type { IpcHandler } from '../handler.js';
@@ -793,5 +800,406 @@ export const crystallizeSkillHandler: IpcHandler<
         },
       };
     }
+  },
+};
+
+/**
+ * crystallize_candidate — notify-kind IPC fired by the container Stop hook
+ * (Task 6) when an agent's session looks reusable. Lands a candidate row in
+ * the `crystallize_candidates` table and DMs Telegram CLAIRE with two reply
+ * commands (/crystallize-yes <ccId> / /crystallize-skip <ccId>).
+ *
+ * Spec: docs/superpowers/specs/2026-05-23-crystallize-skill-operationalization.md
+ * Plan: docs/superpowers/plans/2026-05-23-crystallize-skill-impl.md (Task 5)
+ *
+ * Contract pins (DO NOT change without redesign):
+ *  - responseKind: 'notify' — fire-and-forget. The DM is the user-facing
+ *    surface; no result file.
+ *  - skipGate: true — on SKIP_GATE_ALLOWLIST. Read-only-ish telemetry; the
+ *    body-generation that *creates* a SKILL.md still goes through the
+ *    existing crystallize_skill gate.
+ *  - I7 swarm-safe: trust `input.agent` (payload), NOT `ctx.agentName`
+ *    (dispatch context). In swarm groups multiple agents share one container
+ *    process; agentName reflects the dispatch caller, agent reflects the
+ *    actual session subject.
+ *  - I8 deny-on-mismatch: reject when `input.sourceGroup !== ctx.sourceGroup`
+ *    to prevent a compromised container from writing rows on behalf of other
+ *    groups.
+ *  - C2 race-safe dedup via UNIQUE INDEX
+ *    (agent, content_hash, substr(created_at, 1, 10)) — INSERT OR IGNORE
+ *    returns false on dedup hit and we early-return.
+ *  - C6 content hash: sha256 over JSON(toolSequence) + traceSummary prefix.
+ *    NOT user-prompt (cheap to forge by appending whitespace) and NOT just
+ *    toolSequence (would over-collapse "same tools, different question").
+ *  - I1 day-cap: at most 3 DMs per agent per day. Overflow rows persist
+ *    with `dm_message_id IS NULL` so the weekly digest (Task 13) can pick
+ *    them up.
+ *  - L3: DM target is the Telegram CLAIRE jid (`tg:8475020901`). Hardcoded
+ *    because the operational lock-in (Section 6.2 of the spec) pins this
+ *    surface; a config knob would let a runtime misconfiguration silently
+ *    redirect candidate notifications to the wrong chat.
+ */
+const CLAIRE_JID = 'tg:8475020901'; // Section 6.2 lock-in L3
+const CC_DAY_CAP = 3; // I1
+const TRACE_SUMMARY_MAX = 2048;
+const TOOL_SEQ_MAX_ENTRIES = 20;
+const HASH_TRACE_PREFIX = 300;
+
+interface CrystallizeCandidateInput {
+  agent: string;
+  sourceGroup: string;
+  sourceJid: string;
+  sessionId: string;
+  traceSummary: string;
+  toolSequence: Array<{
+    tool: string;
+    argSummary: string;
+    resultSummary: string;
+  }>;
+}
+
+function randBase36(n: number): string {
+  let s = '';
+  while (s.length < n) s += Math.random().toString(36).slice(2);
+  return s.slice(0, n);
+}
+
+function formatCandidateDm(
+  ccId: string,
+  agent: string,
+  sourceGroup: string,
+  toolSeq: CrystallizeCandidateInput['toolSequence'],
+  traceSummary: string,
+): string {
+  const toolNames = Array.from(
+    new Set(
+      toolSeq.map((t) => t.tool.replace(/^mcp__/, '').replace(/__/g, '.')),
+    ),
+  );
+  const preview = traceSummary.slice(0, 200).replace(/\n/g, ' ');
+  return (
+    `Crystallize candidate — ${agent} in ${sourceGroup}\n\n` +
+    `Tools used (${toolNames.length}): ${toolNames.join(' · ')}\n\n` +
+    `Last message (first 200): "${preview}${traceSummary.length > 200 ? '…' : ''}"\n\n` +
+    `Reply:\n` +
+    `  /crystallize-yes ${ccId}    → spawn body-gen, stage for /approve\n` +
+    `  /crystallize-skip ${ccId}   → drop candidate`
+  );
+}
+
+export const crystallizeCandidateHandler: IpcHandler<
+  CrystallizeCandidateInput,
+  void
+> = {
+  type: 'crystallize_candidate',
+  responseKind: 'notify',
+
+  parse(raw) {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.agent !== 'string') return null;
+    if (typeof r.sourceGroup !== 'string') return null;
+    if (typeof r.sourceJid !== 'string') return null;
+    if (typeof r.sessionId !== 'string') return null;
+    if (typeof r.traceSummary !== 'string') return null;
+    if (!Array.isArray(r.toolSequence)) return null;
+    return {
+      agent: r.agent,
+      sourceGroup: r.sourceGroup,
+      sourceJid: r.sourceJid,
+      sessionId: r.sessionId,
+      traceSummary: r.traceSummary.slice(0, TRACE_SUMMARY_MAX),
+      toolSequence: (r.toolSequence as unknown[])
+        .slice(0, TOOL_SEQ_MAX_ENTRIES)
+        .filter(
+          (e): e is Record<string, unknown> =>
+            e !== null &&
+            typeof e === 'object' &&
+            typeof (e as Record<string, unknown>).tool === 'string',
+        )
+        .map((e) => ({
+          tool: String(e.tool),
+          argSummary:
+            typeof e.argSummary === 'string' ? e.argSummary.slice(0, 80) : '',
+          resultSummary:
+            typeof e.resultSummary === 'string'
+              ? e.resultSummary.slice(0, 80)
+              : '',
+        })),
+    };
+  },
+
+  authorize() {
+    return {
+      target: '',
+      notifySummary: '',
+      payloadForStaging: { type: 'crystallize_candidate' },
+      skipGate: true,
+    };
+  },
+
+  async execute(input, ctx) {
+    // I8 deny-on-mismatch: payload-claimed sourceGroup must equal dispatcher's
+    // ctx.sourceGroup (which is derived from the IPC file path, not the
+    // payload). A compromised container cannot forge cross-group writes.
+    if (input.sourceGroup !== ctx.sourceGroup) {
+      logger.warn(
+        {
+          claimed: input.sourceGroup,
+          actual: ctx.sourceGroup,
+          requestId: ctx.requestId,
+        },
+        'crystallize_candidate: sourceGroup mismatch, rejected',
+      );
+      return;
+    }
+
+    const agentRe = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+    if (!agentRe.test(input.agent)) {
+      logger.warn(
+        { agent: input.agent, requestId: ctx.requestId },
+        'crystallize_candidate: invalid agent',
+      );
+      return;
+    }
+
+    // C6 content hash: tool sequence + trace prefix. NOT user-prompt (cheap
+    // to forge) and NOT just toolSequence (would collide on "same tools,
+    // different question"). 300-char prefix is enough to differentiate
+    // semantically-different sessions without making trivial whitespace
+    // changes break dedup.
+    const contentHash = createHash('sha256')
+      .update(JSON.stringify(input.toolSequence))
+      .update(input.traceSummary.slice(0, HASH_TRACE_PREFIX))
+      .digest('hex');
+
+    const ccId = `cc-${randBase36(6)}`;
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 7 * 86400_000).toISOString();
+
+    // C-R2: db is required on IpcDeps (Task 3 made it non-optional). The
+    // previous defensive null-check was dead code — typecheck enforces
+    // presence — and dangerous: silent return on the dead branch left no
+    // dispatcher catch path, no audit row, no notify, just a vanish.
+    // Trust the type. If wiring breaks at runtime, let the destructure
+    // throw so the dispatcher catch path (handler.ts:475-488) logs full
+    // context including requestId.
+    const db = ctx.deps.db;
+
+    // C2 race-safe: INSERT OR IGNORE returns false on UNIQUE INDEX collision
+    // (agent, content_hash, day). Early-return without DM-ing a duplicate.
+    const inserted = insertCrystallizeCandidate(db, {
+      id: ccId,
+      agent: input.agent,
+      sourceGroup: input.sourceGroup,
+      sourceJid: input.sourceJid,
+      sessionId: input.sessionId,
+      traceSummary: input.traceSummary,
+      toolSequence: JSON.stringify(input.toolSequence),
+      contentHash,
+      createdAt: now,
+      expiresAt,
+    });
+    if (!inserted) {
+      logger.debug(
+        {
+          agent: input.agent,
+          contentHash,
+          requestId: ctx.requestId,
+        },
+        'crystallize_candidate: dedup hit',
+      );
+      return;
+    }
+
+    // I1 day cap: count today's already-DM'd candidates for this agent. If
+    // ≥ CC_DAY_CAP, persist the row (already inserted) but skip the DM.
+    // The weekly digest (Task 13) sweeps `dm_message_id IS NULL` rows.
+    if (countTodayCandidatesWithDm(db, input.agent, now) >= CC_DAY_CAP) {
+      logger.info(
+        { agent: input.agent, ccId, requestId: ctx.requestId },
+        'crystallize_candidate: day-cap hit, queued for digest',
+      );
+      return;
+    }
+
+    // L3: DM Telegram CLAIRE. We record the candidate row's dm_message_id
+    // even if the channel-side send returns void — using ccId as a stable
+    // local handle is sufficient to mark "DM was attempted for this row"
+    // so the day-cap and digest queries can distinguish DM'd from queued.
+    //
+    // C-R1: split sendMessage and setDm into separate try-blocks. If
+    // sendMessage SUCCEEDS but setDm THROWS (DB lock, disk full), the
+    // single-try version swallowed both and left dm_message_id=NULL —
+    // countTodayCandidatesWithDm filters IS NOT NULL, so the next call
+    // would under-count and leak DM #4 past the day-cap. Two separate
+    // try-blocks log the failure modes distinctly and surface the
+    // "day-cap leak risk" condition at error level for operator triage.
+    const dmText = formatCandidateDm(
+      ccId,
+      input.agent,
+      input.sourceGroup,
+      input.toolSequence,
+      input.traceSummary,
+    );
+    let dmResult: string | undefined | void;
+    let dmSucceeded = false;
+    try {
+      // IpcDeps.sendMessage is typed `(jid, text) => Promise<void>`. The
+      // Telegram channel implementation may internally return a message id;
+      // we accept either shape via a runtime check.
+      dmResult = (await ctx.deps.sendMessage(CLAIRE_JID, dmText)) as
+        | string
+        | undefined
+        | void;
+      dmSucceeded = true;
+    } catch (err) {
+      logger.error(
+        { err, ccId, requestId: ctx.requestId },
+        'crystallize_candidate: DM failed',
+      );
+    }
+    if (dmSucceeded) {
+      const msgId = typeof dmResult === 'string' ? dmResult : ccId;
+      try {
+        setCrystallizeCandidateDm(db, ccId, msgId);
+      } catch (err) {
+        logger.error(
+          { err, ccId, requestId: ctx.requestId },
+          'crystallize_candidate: dm_message_id update FAILED — day-cap leak risk (DM sent but row not marked)',
+        );
+      }
+    }
+  },
+};
+
+/**
+ * crystallize_candidate_fetch — read-only IPC for body-gen one-shot tasks.
+ *
+ * Spawned by `/crystallize-yes cc-xxx` slash command (Tasks 10-11). The
+ * one-shot agent task lives in the originating group's container; the
+ * container has no file-mount of store/messages.db so the agent calls
+ * this IPC (via the MCP tool wrapper in Task 9) to hydrate the candidate
+ * row before generating the SKILL.md body.
+ *
+ * Contract pins:
+ *  - responseKind: 'result' — agent needs the data back, not a notify
+ *  - skipGate: true — read-only, on SKIP_GATE_ALLOWLIST (Task 4)
+ *  - resultsDirName: 'crystallize_candidate_results' — container reads
+ *    from /workspace/ipc/<sourceGroup>/crystallize_candidate_results/
+ *  - ccId is validated strictly in parse() against the same `cc-[a-z0-9]{6}`
+ *    pattern used at row creation (skills.ts crystallizeCandidateHandler).
+ *
+ * Returns { success: true, data } on found row, { success: false,
+ * message: 'not_found: cc-xxx' } on missing or on malformed-JSON
+ * tool_sequence. Both are "executed: true" so the dispatcher writes a
+ * result file either way; the agent reads the success boolean.
+ */
+interface CrystallizeCandidateFetchInput {
+  ccId: string;
+}
+
+interface CrystallizeCandidateFetchData {
+  agent: string;
+  sourceGroup: string;
+  traceSummary: string;
+  toolSequence: Array<{
+    tool: string;
+    argSummary: string;
+    resultSummary: string;
+  }>;
+  status: string;
+}
+
+export const crystallizeCandidateFetchHandler: IpcHandler<
+  CrystallizeCandidateFetchInput,
+  {
+    executed: true;
+    result: {
+      success: boolean;
+      message: string;
+      data?: CrystallizeCandidateFetchData;
+    };
+  }
+> = {
+  type: 'crystallize_candidate_fetch',
+  responseKind: 'result',
+  resultsDirName: 'crystallize_candidate_results',
+
+  parse(raw) {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const r = raw as Record<string, unknown>;
+    if (typeof r.ccId !== 'string' || !/^cc-[a-z0-9]{6}$/.test(r.ccId)) {
+      return null;
+    }
+    return { ccId: r.ccId };
+  },
+
+  authorize() {
+    return {
+      target: '',
+      notifySummary: '',
+      payloadForStaging: { type: 'crystallize_candidate_fetch' },
+      skipGate: true,
+    };
+  },
+
+  async execute(input, ctx) {
+    const db = ctx.deps.db;
+    const row = getCrystallizeCandidate(db, input.ccId);
+    if (!row) {
+      logger.debug(
+        { ccId: input.ccId, requestId: ctx.requestId },
+        'crystallize_candidate_fetch: not found',
+      );
+      return {
+        executed: true,
+        result: {
+          success: false,
+          message: `not_found: candidate ${input.ccId}`,
+        },
+      };
+    }
+
+    // Defensive: tool_sequence is stored as a JSON string (Task 5 handler
+    // stringifies the array before INSERT). If a row was hand-inserted or
+    // corrupted, JSON.parse would throw and surface as an unhelpful
+    // dispatcher catch-path error. Treat malformed JSON as not_found-shaped
+    // so the agent sees a clean failure boolean.
+    let toolSequence: CrystallizeCandidateFetchData['toolSequence'];
+    try {
+      toolSequence = JSON.parse(row.tool_sequence);
+    } catch (err) {
+      logger.error(
+        {
+          ccId: input.ccId,
+          requestId: ctx.requestId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+        'crystallize_candidate_fetch: tool_sequence JSON malformed',
+      );
+      return {
+        executed: true,
+        result: {
+          success: false,
+          message: `not_found: candidate ${input.ccId} (corrupted tool_sequence)`,
+        },
+      };
+    }
+
+    return {
+      executed: true,
+      result: {
+        success: true,
+        message: 'ok',
+        data: {
+          agent: row.agent,
+          sourceGroup: row.source_group,
+          traceSummary: row.trace_summary,
+          toolSequence,
+          status: row.status,
+        },
+      },
+    };
   },
 };

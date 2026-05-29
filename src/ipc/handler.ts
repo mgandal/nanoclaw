@@ -55,6 +55,11 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   // scheduleWakeupHandler.authorize; handler writes its own audit row.
   // Phase 1.1 — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md
   'schedule_wakeup',
+  // Crystallize candidate flow (spec 2026-05-23). Both are notify or
+  // read-only telemetry; the body-generation that *creates* a SKILL.md
+  // still goes through the existing crystallize_skill gate.
+  'crystallize_candidate',
+  'crystallize_candidate_fetch',
 ]);
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
