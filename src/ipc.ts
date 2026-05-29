@@ -1,21 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 
-import {
-  AGENTS_DIR,
-  DATA_DIR,
-  IPC_POLL_INTERVAL,
-  PROACTIVE_PAUSE_PATH,
-} from './config.js';
+import { AGENTS_DIR, DATA_DIR, PROACTIVE_PAUSE_PATH } from './config.js';
 import { parseCompoundKey, fsPathToCompoundKey } from './compound-key.js';
 import { AvailableGroup } from './container-runner.js';
 import { loadAgentTrust } from './agent-registry.js';
 import { checkTrustAndStage } from './trust-enforcement.js';
 import { firePostHocNotify } from './trust-notify.js';
-import {
-  logFdPressureDiagnostic,
-  scanIpcGroupFolders,
-} from './ipc/fd-diagnostic.js';
 import {
   isValidAgentName,
   isFileCredentialLike,
@@ -54,11 +45,12 @@ export interface IpcDeps {
   messageBus?: import('./message-bus.js').MessageBus;
 }
 
-let ipcWatcherRunning = false;
-
 // FD-pressure diagnostic + IPC group-folder scan moved to ipc/fd-diagnostic.ts.
 // Re-exported here so existing importers (and tests) keep using ./ipc.js.
-export { logFdPressureDiagnostic, scanIpcGroupFolders };
+export {
+  logFdPressureDiagnostic,
+  scanIpcGroupFolders,
+} from './ipc/fd-diagnostic.js';
 
 // recentIpcSends tracker (markIpcSend/hasRecentIpcSend/clearIpcSend) moved
 // to ipc/delivery.ts.
@@ -78,42 +70,6 @@ export {
   isSenderAllowedForPool,
 };
 
-function cleanupStaleProcessing(ipcBaseDir: string): void {
-  try {
-    const errorDir = path.join(ipcBaseDir, 'errors');
-    for (const groupDir of fs.readdirSync(ipcBaseDir)) {
-      const groupPath = path.join(ipcBaseDir, groupDir);
-      if (!fs.statSync(groupPath).isDirectory() || groupDir === 'errors')
-        continue;
-      for (const subDir of ['messages', 'tasks']) {
-        const dirPath = path.join(groupPath, subDir);
-        if (!fs.existsSync(dirPath)) continue;
-        const stale = fs
-          .readdirSync(dirPath)
-          .filter((f) => f.endsWith('.processing'));
-        for (const file of stale) {
-          fs.mkdirSync(errorDir, { recursive: true });
-          try {
-            fs.renameSync(
-              path.join(dirPath, file),
-              path.join(errorDir, `${groupDir}-stale-${file}`),
-            );
-          } catch {
-            // already moved or gone
-          }
-        }
-        if (stale.length > 0) {
-          logger.warn(
-            { group: groupDir, subDir, count: stale.length },
-            'Moved stale .processing IPC files to errors/',
-          );
-        }
-      }
-    }
-  } catch {
-    // Non-fatal: best-effort cleanup
-  }
-}
 
 /**
  * Process a single IPC message (send_message or send_file).
@@ -312,141 +268,11 @@ export async function processIpcMessage(
   }
 }
 
-export function startIpcWatcher(deps: IpcDeps): void {
-  if (ipcWatcherRunning) {
-    logger.debug('IPC watcher already running, skipping duplicate start');
-    return;
-  }
-  ipcWatcherRunning = true;
-
-  const ipcBaseDir = path.join(DATA_DIR, 'ipc');
-  fs.mkdirSync(ipcBaseDir, { recursive: true });
-
-  // Clean up stale .processing files from previous crashes.
-  // These represent IPC that may or may not have been executed,
-  // so we move them to errors/ for manual inspection rather than replaying.
-  cleanupStaleProcessing(ipcBaseDir);
-
-  const processIpcFiles = async () => {
-    // Scan all group IPC directories (identity determined by directory).
-    // scanIpcGroupFolders wraps the Dir handle in try/finally and emits an
-    // FD-pressure diagnostic on EMFILE/ENFILE before re-throwing.
-    let groupFolders: string[];
-    try {
-      groupFolders = scanIpcGroupFolders(ipcBaseDir);
-    } catch (err) {
-      logger.error({ err }, 'Error reading IPC base directory');
-      setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
-      return;
-    }
-
-    const registeredGroups = deps.registeredGroups();
-
-    // Build folder→isMain lookup from registered groups
-    const folderIsMain = new Map<string, boolean>();
-    for (const group of Object.values(registeredGroups)) {
-      if (group.isMain) folderIsMain.set(group.folder, true);
-    }
-
-    for (const sourceGroup of groupFolders) {
-      const isMain = folderIsMain.get(sourceGroup) === true;
-      const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
-      const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
-
-      // Process messages from this group's IPC directory
-      try {
-        if (fs.existsSync(messagesDir)) {
-          const messageFiles = fs
-            .readdirSync(messagesDir)
-            .filter((f) => f.endsWith('.json'));
-          for (const file of messageFiles) {
-            const filePath = path.join(messagesDir, file);
-            // Claim the file by renaming to .processing before executing
-            // side effects. If we crash after send but before cleanup,
-            // the .processing file won't be re-read on next poll.
-            const processingPath = `${filePath}.processing`;
-            try {
-              fs.renameSync(filePath, processingPath);
-            } catch {
-              continue; // another poll cycle already claimed it
-            }
-            try {
-              const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
-              await processIpcMessage(data, sourceGroup, isMain, deps);
-              fs.unlinkSync(processingPath);
-            } catch (err) {
-              logger.error(
-                { file, sourceGroup, err },
-                'Error processing IPC message',
-              );
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              try {
-                fs.renameSync(
-                  processingPath,
-                  path.join(errorDir, `${sourceGroup}-${file}`),
-                );
-              } catch {
-                // processingPath may already be gone
-              }
-            }
-          }
-        }
-      } catch (err) {
-        logger.error(
-          { err, sourceGroup },
-          'Error reading IPC messages directory',
-        );
-      }
-
-      // Process tasks from this group's IPC directory
-      try {
-        if (fs.existsSync(tasksDir)) {
-          const taskFiles = fs
-            .readdirSync(tasksDir)
-            .filter((f) => f.endsWith('.json'));
-          for (const file of taskFiles) {
-            const filePath = path.join(tasksDir, file);
-            const processingPath = `${filePath}.processing`;
-            try {
-              fs.renameSync(filePath, processingPath);
-            } catch {
-              continue;
-            }
-            try {
-              const data = JSON.parse(fs.readFileSync(processingPath, 'utf-8'));
-              // Pass source group identity to processTaskIpc for authorization
-              await processTaskIpc(data, sourceGroup, isMain, deps);
-              fs.unlinkSync(processingPath);
-            } catch (err) {
-              logger.error(
-                { file, sourceGroup, err },
-                'Error processing IPC task',
-              );
-              const errorDir = path.join(ipcBaseDir, 'errors');
-              fs.mkdirSync(errorDir, { recursive: true });
-              try {
-                fs.renameSync(
-                  processingPath,
-                  path.join(errorDir, `${sourceGroup}-${file}`),
-                );
-              } catch {
-                // processingPath may already be gone
-              }
-            }
-          }
-        }
-      } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');
-      }
-    }
-
-    setTimeout(processIpcFiles, IPC_POLL_INTERVAL);
-  };
-
-  processIpcFiles();
-  logger.info('IPC watcher started (per-group namespaces)');
-}
+// startIpcWatcher + cleanupStaleProcessing + the claim/process loop moved
+// to ipc/watcher.ts (the messages/ and tasks/ blocks are now one
+// claimAndProcessDir helper). Re-exported so index.ts keeps importing
+// startIpcWatcher from ./ipc.js.
+export { startIpcWatcher } from './ipc/watcher.js';
 
 export async function processTaskIpc(
   data: {
@@ -489,9 +315,13 @@ export async function processTaskIpc(
   let handled = false;
   if (typeof data.type === 'string' && data.type.startsWith('x_')) {
     try {
-      const modPath = ['..', '.claude', 'skills', 'x-integration', 'host.js'].join(
-        '/',
-      );
+      const modPath = [
+        '..',
+        '.claude',
+        'skills',
+        'x-integration',
+        'host.js',
+      ].join('/');
       const mod = await import(modPath);
       handled = await mod.handleXIpc(
         data as Record<string, unknown>,
