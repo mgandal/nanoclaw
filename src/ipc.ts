@@ -481,97 +481,53 @@ export async function processTaskIpc(
   );
   if (result.handled) return;
 
-  switch (data.type) {
-    // schedule_task / pause_task / resume_task / cancel_task / update_task
-    // migrated to src/ipc/handlers/ — dispatched above.
-
-    // update_task migrated to src/ipc/handlers/update-task.ts.
-
-    // refresh_groups + register_group migrated to src/ipc/handlers/.
-
-    // publish_to_bus migrated to src/ipc/handlers/publish-to-bus.ts.
-
-    // knowledge_publish migrated to src/ipc/handlers/knowledge-publish.ts.
-
-    // write_agent_memory + write_agent_state migrated to src/ipc/handlers/.
-
-    default: {
-      let handled = false;
-      // deploy_mini_app migrated to src/ipc/handlers/deploy-mini-app.ts.
-      // dashboard_query migrated to src/ipc/handlers/dashboard-query.ts —
-      // both dispatched via the IpcHandler registry above (dispatchIpcAction).
-      // pageindex_* migrated to src/ipc/handlers/pageindex.ts — dispatched
-      // via the IpcHandler registry above. The per-call mount resolution
-      // lives in pageindex.ts:resolveMountsForGroup (execute-time).
-      // kg_query migrated to src/ipc/handlers/kg-query.ts — dispatched via
-      // the IpcHandler registry above (dispatchIpcAction).
-      // task_add / task_list / task_close / task_reopen migrated to
-      // src/ipc/handlers/tasks.ts — dispatched via the IpcHandler registry
-      // above (dispatchIpcAction).
-      // imessage_* migrated to src/ipc/handlers/imessage.ts — dispatched
-      // via the IpcHandler registry above (dispatchIpcAction).
-      // slack_dm_read AND slack_dm migrated to src/ipc/handlers/slack.ts —
-      // both dispatched via the IpcHandler registry above
-      // (dispatchIpcAction). slack_dm uses postHocNotify: true (added in
-      // Batch 2F.1) to fire a Telegram notify after the result file is
-      // written.
-      // save_skill / crystallize_skill / skill_search / skill_invoked
-      // migrated to src/ipc/handlers/skills.ts — all dispatched via the
-      // IpcHandler registry above (dispatchIpcAction). All 4 use
-      // skipGate: true (preserve-bypass per Batch 2G; trust.yaml has 9
-      // dormant save_skill: draft entries that the gate-bypass keeps
-      // inactive — future Batch 4 candidate).
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        data.type.startsWith('x_')
-      ) {
-        try {
-          const modPath = [
-            '..',
-            '.claude',
-            'skills',
-            'x-integration',
-            'host.js',
-          ].join('/');
-          const mod = await import(modPath);
-          handled = await mod.handleXIpc(
-            data as Record<string, unknown>,
-            sourceGroup,
-            isMain,
-            DATA_DIR,
-          );
-        } catch (err) {
-          logger.warn({ err }, 'X integration handler not available');
-        }
-      }
-      if (
-        !handled &&
-        typeof data.type === 'string' &&
-        data.type.startsWith('browser_')
-      ) {
-        try {
-          const modPath = [
-            '..',
-            '.claude',
-            'skills',
-            'browser-automation',
-            'host.js',
-          ].join('/');
-          const mod = await import(modPath);
-          handled = await mod.handleBrowserIpc(
-            data as Record<string, unknown>,
-            sourceGroup,
-            isMain,
-            DATA_DIR,
-          );
-        } catch (err) {
-          logger.warn({ err }, 'Browser automation handler not available');
-        }
-      }
-      if (!handled) {
-        logger.warn({ type: data.type }, 'Unknown IPC task type');
-      }
+  // Everything that isn't on the IpcHandler registry falls through here.
+  // The only live legacy paths are the x-integration and browser-automation
+  // skills, which are loaded by dynamic import (the skill code lives outside
+  // src/ and may not be installed). All other action types were migrated to
+  // src/ipc/handlers/ and were handled by dispatchIpcAction above.
+  let handled = false;
+  if (typeof data.type === 'string' && data.type.startsWith('x_')) {
+    try {
+      const modPath = ['..', '.claude', 'skills', 'x-integration', 'host.js'].join(
+        '/',
+      );
+      const mod = await import(modPath);
+      handled = await mod.handleXIpc(
+        data as Record<string, unknown>,
+        sourceGroup,
+        isMain,
+        DATA_DIR,
+      );
+    } catch (err) {
+      logger.warn({ err }, 'X integration handler not available');
     }
+  }
+  if (
+    !handled &&
+    typeof data.type === 'string' &&
+    data.type.startsWith('browser_')
+  ) {
+    try {
+      const modPath = [
+        '..',
+        '.claude',
+        'skills',
+        'browser-automation',
+        'host.js',
+      ].join('/');
+      const mod = await import(modPath);
+      handled = await mod.handleBrowserIpc(
+        data as Record<string, unknown>,
+        sourceGroup,
+        isMain,
+        DATA_DIR,
+      );
+    } catch (err) {
+      logger.warn({ err }, 'Browser automation handler not available');
+    }
+  }
+  if (!handled) {
+    logger.warn({ type: data.type }, 'Unknown IPC task type');
   }
 }
