@@ -31,7 +31,7 @@ describe('isValidAgentName', () => {
     expect(isValidAgentName('')).toBe(false);
   });
 
-  it('rejects names longer than 64 characters', () => {
+  it('accepts a 64-char name but rejects 65 (length cap)', () => {
     expect(isValidAgentName('a'.repeat(64))).toBe(true);
     expect(isValidAgentName('a'.repeat(65))).toBe(false);
   });

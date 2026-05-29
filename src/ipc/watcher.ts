@@ -18,19 +18,27 @@ import { scanIpcGroupFolders } from './fd-diagnostic.js';
  *
  * On success the `.processing` file is unlinked. On a parse error or a
  * `processor` throw, the file is moved to `errorDir` named
- * `<errorFilePrefix>-<originalName>` for manual inspection.
+ * `<sourceGroup>-<originalName>` for manual inspection.
  *
  * A missing `queueDir` is a no-op. Errors reading the directory propagate to
  * the caller (the watcher logs them per-group).
  *
- * Exported for unit testing. `errorFilePrefix` defaults to empty (tests that
- * don't care about the source-group prefix can omit it).
+ * `sourceGroup` is the per-group namespace (used both as the errors/ filename
+ * prefix and as the `sourceGroup` log field). `kind` ('message' | 'task')
+ * only shapes the failure log message so it reads identically to the original
+ * inline loops ("Error processing IPC message" / "...task"). Both default to
+ * neutral values so the helper is testable without a group context.
+ *
+ * Exported for unit testing.
  */
 export async function claimAndProcessDir(
   queueDir: string,
   errorDir: string,
-  processor: (data: { type: string } & Record<string, unknown>) => Promise<void>,
-  errorFilePrefix = '',
+  processor: (
+    data: { type: string } & Record<string, unknown>,
+  ) => Promise<void>,
+  sourceGroup = '',
+  kind: 'message' | 'task' = 'message',
 ): Promise<void> {
   if (!fs.existsSync(queueDir)) return;
 
@@ -49,12 +57,12 @@ export async function claimAndProcessDir(
       fs.unlinkSync(processingPath);
     } catch (err) {
       logger.error(
-        { file, errorFilePrefix, err },
-        'Error processing IPC file',
+        { file, sourceGroup, err },
+        `Error processing IPC ${kind}`,
       );
       fs.mkdirSync(errorDir, { recursive: true });
       try {
-        const errorName = errorFilePrefix ? `${errorFilePrefix}-${file}` : file;
+        const errorName = sourceGroup ? `${sourceGroup}-${file}` : file;
         fs.renameSync(processingPath, path.join(errorDir, errorName));
       } catch {
         // processingPath may already be gone
@@ -152,6 +160,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
           errorDir,
           (data) => processIpcMessage(data, sourceGroup, isMain, deps),
           sourceGroup,
+          'message',
         );
       } catch (err) {
         logger.error(
@@ -168,6 +177,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
           errorDir,
           (data) => processTaskIpc(data, sourceGroup, isMain, deps),
           sourceGroup,
+          'task',
         );
       } catch (err) {
         logger.error({ err, sourceGroup }, 'Error reading IPC tasks directory');

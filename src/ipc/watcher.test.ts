@@ -74,6 +74,21 @@ describe('claimAndProcessDir', () => {
     expect(errored[0]).toContain('boom.json');
   });
 
+  it('prefixes the errors/ filename with the sourceGroup', async () => {
+    drop('boom.json', { type: 'message' });
+
+    await claimAndProcessDir(
+      queueDir,
+      errorDir,
+      async () => {
+        throw new Error('processor failed');
+      },
+      'telegram_lab-claw',
+    );
+
+    expect(fs.readdirSync(errorDir)).toEqual(['telegram_lab-claw-boom.json']);
+  });
+
   it('moves a file to errors/ when its JSON is malformed', async () => {
     drop('bad.json', '{ not valid json');
 
