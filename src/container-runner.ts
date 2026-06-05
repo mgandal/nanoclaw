@@ -709,6 +709,11 @@ function buildContainerArgs(
     args.push('-e', 'IMPLICIT_CRYSTALLIZE_OFFER=1');
   }
 
+  // Crystallization kill switch: the Stop hook that fires
+  // crystallize_candidate IPCs defaults ON inside the container. Pass the
+  // off-value so no container registers the hook.
+  args.push('-e', 'CRYSTALLIZE_CANDIDATE_ENABLED=0');
+
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
