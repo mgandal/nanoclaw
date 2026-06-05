@@ -959,10 +959,14 @@ async function runQuery(
             ],
           },
         ],
-        // C-R3 kill switch: operator can flip the Stop hook off without a
-        // rebuild by setting CRYSTALLIZE_CANDIDATE_ENABLED=0. Default is
-        // ON (any value !== '0' keeps the hook registered, including
-        // unset).
+        // C-R3 kill switch: the Stop hook is gated on
+        // CRYSTALLIZE_CANDIDATE_ENABLED. In-container default is ON (any
+        // value !== '0' keeps the hook registered, including unset), but the
+        // host spawn path (src/container-runner.ts) currently pushes
+        // `-e CRYSTALLIZE_CANDIDATE_ENABLED=0` unconditionally, so in
+        // production the hook is OFF for every container. To re-enable, change
+        // the host push — setting the env elsewhere won't win against the
+        // explicit `-e`.
         ...(process.env.CRYSTALLIZE_CANDIDATE_ENABLED !== '0'
           ? {
               Stop: [
