@@ -698,6 +698,11 @@ function buildContainerArgs(
     }
   }
 
+  // Run the agent on Opus 4.8. The Claude Agent SDK reads ANTHROPIC_MODEL for
+  // the main model; the fast/background model (ANTHROPIC_SMALL_FAST_MODEL) is
+  // left unset so summarization etc. stays on the cheaper default (Haiku).
+  args.push('-e', 'ANTHROPIC_MODEL=claude-opus-4-8');
+
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
 
