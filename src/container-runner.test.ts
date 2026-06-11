@@ -1244,7 +1244,7 @@ describe('container-runner MCP URL injection', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
-  it('always passes ANTHROPIC_MODEL=claude-opus-4-8 to the agent', async () => {
+  it('always passes ANTHROPIC_MODEL=claude-sonnet-4-6 to the agent', async () => {
     const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
@@ -1252,7 +1252,7 @@ describe('container-runner MCP URL injection', () => {
     const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const modelVar = envVars.find((a) => a.startsWith('ANTHROPIC_MODEL='));
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-opus-4-8');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
