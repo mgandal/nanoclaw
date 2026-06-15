@@ -1,12 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Mock the container runner so we can drive runTask's error/session-clearing
+// path without spawning a real container. Preserve the real ContainerOutput
+// type and writeTasksSnapshot used elsewhere in the module.
+const mockRunContainerAgent = vi.fn();
+vi.mock('./container-runner.js', async (importActual) => {
+  const actual = await importActual<typeof import('./container-runner.js')>();
+  return {
+    ...actual,
+    runContainerAgent: (...args: unknown[]) => mockRunContainerAgent(...args),
+  };
+});
+
 import {
   _initTestDatabase,
   createTask,
-  getDueTasks,
+  getAllSessions,
   getTaskById,
+  getDueTasks,
   getTaskRunLogs,
   logTaskRun,
+  setSession,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
@@ -1090,6 +1104,65 @@ describe('edge cases — concurrent execution and guards', () => {
     await vi.advanceTimersByTimeAsync(10);
     // getDueTasks only returns active tasks, so paused task is excluded
     expect(enqueueTask).not.toHaveBeenCalled();
+  });
+
+  it('clears a group-context session when a scheduled task errors with a poison-image 400', async () => {
+    setSession('telegram_claire', 'poison-session-123');
+    expect(getAllSessions()['telegram_claire']).toBe('poison-session-123');
+
+    createTask({
+      id: 'task-poison-session',
+      group_folder: 'telegram_claire',
+      chat_jid: 'tg:123',
+      prompt: 'screenshot something',
+      schedule_type: 'once',
+      schedule_value: '2026-01-01T00:00:00.000Z',
+      context_mode: 'group',
+      next_run: new Date(Date.now() - 60_000).toISOString(),
+      status: 'active',
+      agent_name: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+    });
+
+    mockRunContainerAgent.mockResolvedValueOnce({
+      status: 'error',
+      error:
+        'Claude Code returned an error result: API Error: 400 could not process image',
+      newSessionId: undefined,
+    });
+
+    // enqueueTask invokes the work fn immediately and waits for it so runTask
+    // completes within the test.
+    const pending: Array<Promise<void>> = [];
+    const enqueueTask = vi.fn(
+      (_groupJid: string, _taskId: string, fn: () => Promise<void>) => {
+        pending.push(fn());
+      },
+    );
+
+    startSchedulerLoop({
+      registeredGroups: () => ({
+        'tg:123': {
+          name: 'CLAIRE',
+          folder: 'telegram_claire',
+          trigger: '@Claire',
+          added_at: new Date().toISOString(),
+          isMain: true,
+          requiresTrigger: false,
+        },
+      }),
+      getSessions: () => getAllSessions(),
+      queue: { enqueueTask, closeStdin: vi.fn(), notifyIdle: vi.fn() } as any,
+      onProcess: () => {},
+      sendMessage: async () => {},
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    await Promise.all(pending);
+
+    expect(mockRunContainerAgent).toHaveBeenCalledTimes(1);
+    // The poison session must be deleted so the next run starts fresh.
+    expect(getAllSessions()['telegram_claire']).toBeUndefined();
   });
 
   it('scheduler enqueues multiple due tasks in a single poll cycle', async () => {

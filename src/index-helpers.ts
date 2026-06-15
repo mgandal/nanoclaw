@@ -84,12 +84,45 @@ export function parseLastAgentSeq(
 }
 
 /**
- * Detect stale/corrupt session errors from container output.
- * The session .jsonl can go missing after a crash, manual deletion, or disk-full.
+ * Detect errors that mean the session is unusable and must be cleared so the
+ * next retry starts fresh:
+ *  - stale/corrupt session: the .jsonl can go missing after a crash, manual
+ *    deletion, or disk-full.
+ *  - poison image block: a malformed/oversized/over-dimension screenshot saved
+ *    into the session triggers a 400/413 image rejection that replays on every
+ *    resume, wedging the session permanently. We match the known image-error
+ *    wordings but deliberately NOT a bare oversize message ("prompt is too
+ *    long" / generic request_too_large), which is recoverable without nuking
+ *    the session.
+ *
+ * Callers should prefer shouldClearSession(), which adds the status gate.
+ * isStaleSessionError stays exported for direct unit coverage.
  */
 export function isStaleSessionError(error: string | null | undefined): boolean {
   if (!error) return false;
-  return /no conversation found|ENOENT.*\.jsonl|session.*not found/i.test(
+  // The phrase "image" appearing alongside an exceed/unsupported/too-large
+  // wording, or the canonical "could not process image", marks a poison block.
+  // Deliberately NOT "invalid": it appears in every API 400 (invalid_request_error)
+  // and in recoverable tool-validation errors like "invalid argument: expected
+  // image url", so matching it near "image" would nuke healthy sessions.
+  return /no conversation found|ENOENT.*\.jsonl|session.*not found|could not process image|image\b[^]{0,40}\b(exceeds|too large|unsupported)|(exceeds|too large|unsupported)\b[^]{0,40}\bimage/i.test(
     error,
   );
+}
+
+/**
+ * Decide whether a failed container turn should clear the session. The host's
+ * final error envelope now carries the clean container error (extractContainerError
+ * parses the stdout marker before falling back to the stderr tail), so checking
+ * output.error alone is sufficient and works for every caller — including
+ * bus-routed turns that pass no streaming onOutput hook. Only fires on
+ * status === 'error' so a *successful* turn whose result text merely mentions an
+ * image error never destroys the session.
+ */
+export function shouldClearSession(output: {
+  status: 'success' | 'error';
+  error?: string | null;
+}): boolean {
+  if (output.status !== 'error') return false;
+  return isStaleSessionError(output.error);
 }

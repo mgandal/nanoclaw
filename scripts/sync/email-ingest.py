@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from email_ingest.types import IngestState, STATE_DIR, LOG_FILE, FollowUp, FOLLOWUPS_FILE
 from email_ingest.gmail_adapter import GmailAdapter
 from email_ingest.exchange_adapter import ExchangeAdapter
-from email_ingest.classifier import should_fast_skip, classify_email
+from email_ingest.classifier import should_fast_skip, classify_email, OLLAMA_MODEL
 from email_ingest.exporter import export_email, retain_in_hindsight
 import email_ingest.followups as _followups_mod
 import email_ingest.extractor as _extractor_mod
@@ -31,6 +31,11 @@ import email_ingest.aging as _aging_mod
 
 RELEVANCE_THRESHOLD = float(os.environ.get("EMAIL_INGEST_THRESHOLD", "0.3"))
 HINDSIGHT_THRESHOLD = 0.7
+# skip_reasons that indicate a transient classifier failure (model/endpoint
+# unhealthy) rather than a deterministic content decision. Emails with these are
+# re-queued for the next run, so a sustained run of them silently backlogs the
+# inbox — we count and surface them separately.
+_TRANSIENT_SKIP_REASONS = {"classification_failed", "ollama_error"}
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8889")
 
 FOLLOWUP_GMAIL_SENDER = "mgandal@gmail.com"
@@ -60,6 +65,11 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
     stats = {
         "total_fetched": 0, "classified": 0, "fast_skipped": 0,
         "exported": 0, "hindsight_retained": 0,
+        # Transient classifier failures (model/endpoint down) — distinct from
+        # deterministic skips. These emails are re-queued, not dropped, but a
+        # sustained run of them means the classifier is unhealthy and the inbox
+        # is silently backlogging. Surfaced loudly at end-of-run.
+        "classify_failed": 0,
     }
     all_classified = []
 
@@ -94,6 +104,8 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
 
             if result.skip_reason:
                 log.warning("Classification failed for %s: %s", email.id, result.skip_reason)
+                if result.skip_reason in _TRANSIENT_SKIP_REASONS:
+                    stats["classify_failed"] += 1
                 # Do NOT mark as processed — retry on next run
                 continue
 
@@ -144,6 +156,9 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
 
             if result.skip_reason:
                 log.warning("Classification failed for %s: %s", email.id, result.skip_reason)
+                if result.skip_reason in _TRANSIENT_SKIP_REASONS:
+                    stats["classify_failed"] += 1
+                # Do NOT mark as processed — retry on next run
                 continue
 
             state.processed_exchange_ids.append(email.id)
@@ -185,10 +200,24 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
     state.save()
 
     log.info(
-        "Done: fetched=%d classified=%d skipped=%d exported=%d hindsight=%d",
+        "Done: fetched=%d classified=%d skipped=%d exported=%d hindsight=%d classify_failed=%d",
         stats["total_fetched"], stats["classified"], stats["fast_skipped"],
-        stats["exported"], stats["hindsight_retained"],
+        stats["exported"], stats["hindsight_retained"], stats["classify_failed"],
     )
+    # Surface a likely classifier outage loudly: if transient failures are a
+    # large fraction of classification attempts, the model/endpoint is probably
+    # down and the inbox is backlogging (emails re-queued, not exported). A
+    # per-email WARNING alone is too easy to miss across a multi-day outage.
+    if stats["classified"] > 0:
+        fail_rate = stats["classify_failed"] / stats["classified"]
+        if stats["classify_failed"] >= 5 and fail_rate >= 0.5:
+            log.error(
+                "Classifier unhealthy: %d/%d classifications failed transiently "
+                "(%.0f%%) — emails are being re-queued, not exported. Check the "
+                "Ollama model/endpoint (%s).",
+                stats["classify_failed"], stats["classified"],
+                fail_rate * 100, OLLAMA_MODEL,
+            )
     return stats
 
 
