@@ -10,6 +10,7 @@ import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
+import { sanitizeScreenshotImage } from './screenshot-image.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -1300,11 +1301,20 @@ Returns: status message + base64-encoded PNG as an image content block. 2-minute
       writeIpcFile(TASKS_DIR, { type: 'browser_screenshot', requestId, url: args.url, selector: args.selector, full_page: args.full_page, groupFolder, timestamp: new Date().toISOString() });
       const result = await waitForBrowserResult(requestId);
       if (result.success && result.data && typeof result.data === 'object' && 'screenshot_base64' in result.data) {
+        // Validate before emitting an image block: a malformed/oversized
+        // screenshot otherwise triggers a 400 "Could not process image" that
+        // replays from session history and wedges the session permanently.
+        const image = sanitizeScreenshotImage((result.data as { screenshot_base64: string }).screenshot_base64);
+        if (image) {
+          return {
+            content: [
+              { type: 'text' as const, text: result.message },
+              { type: 'image' as const, data: image.data, mimeType: image.mimeType },
+            ],
+          };
+        }
         return {
-          content: [
-            { type: 'text' as const, text: result.message },
-            { type: 'image' as const, data: (result.data as { screenshot_base64: string }).screenshot_base64, mimeType: 'image/png' },
-          ],
+          content: [{ type: 'text' as const, text: `${result.message}\n\n[Screenshot could not be processed (invalid, empty, or too large) and was omitted.]` }],
         };
       }
       return { content: [{ type: 'text' as const, text: result.message }], isError: !result.success };

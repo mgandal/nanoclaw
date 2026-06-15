@@ -106,6 +106,7 @@ import {
   checkSessionExpiry,
   parseLastAgentSeq,
   isStaleSessionError,
+  shouldClearSession,
   shouldKillActiveContainer,
 } from './index-helpers.js';
 import { getTriggerPattern, buildTriggerPattern } from './config.js';
@@ -305,6 +306,86 @@ describe('isStaleSessionError', () => {
   it('returns false for null/undefined', () => {
     expect(isStaleSessionError(null)).toBe(false);
     expect(isStaleSessionError(undefined)).toBe(false);
+  });
+
+  it('detects an unprocessable-image 400 so the poison block is cleared', () => {
+    // Real production string: a malformed screenshot block is saved into the
+    // session and replays on every resume, 400-ing forever. Treating it as a
+    // stale-session error clears the session so the next turn starts clean.
+    const realError =
+      'Claude Code returned an error result: API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Could not process image"},"request_id":"req_011Cc3vJp92qCLaZyuhHVhqW"}';
+    expect(isStaleSessionError(realError)).toBe(true);
+  });
+
+  it('detects the bare "Could not process image" message', () => {
+    expect(isStaleSessionError('Could not process image')).toBe(true);
+  });
+
+  it('does not treat a generic 400 as a poison session', () => {
+    expect(
+      isStaleSessionError(
+        'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}',
+      ),
+    ).toBe(false);
+  });
+
+  it('detects other image-rejection variants that also poison the session', () => {
+    // A dimension/oversize rejection slips past the validator's narrow check
+    // and 400s with a different message; it must still clear the session.
+    expect(isStaleSessionError('image exceeds 8000 pixels')).toBe(true);
+    expect(isStaleSessionError('image exceeds maximum allowed size')).toBe(true);
+    expect(isStaleSessionError('unsupported image type: image/tiff')).toBe(true);
+    expect(
+      isStaleSessionError(
+        'API Error: 413 {"type":"error","error":{"type":"request_too_large","message":"image too large"}}',
+      ),
+    ).toBe(true);
+  });
+
+  it('does not match an oversized-prompt 413 (only image-related ones)', () => {
+    expect(
+      isStaleSessionError(
+        'API Error: 413 {"type":"error","error":{"type":"request_too_large","message":"prompt is too long"}}',
+      ),
+    ).toBe(false);
+  });
+
+  it('matches the real production stderr-tail string the host actually evaluates', () => {
+    // The host inspects "Container exited with code 1: <stderr.slice(-200)>",
+    // NOT the clean marker. This is the exact tail observed in nanoclaw.log.
+    const stderrTail =
+      'Container exited with code 1: t error: Claude Code returned an error result: API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Could not process image"},"request_id":"req_011Cc3vJp92qCLaZyuhHVhqW"}';
+    expect(isStaleSessionError(stderrTail)).toBe(true);
+  });
+});
+
+// ---- shouldClearSession: robust against the stderr-tail truncation ----
+
+describe('shouldClearSession', () => {
+  it('clears when the error envelope carries the image marker', () => {
+    // extractContainerError now puts the clean container error here for every
+    // path, so a single source is sufficient.
+    expect(
+      shouldClearSession({
+        status: 'error',
+        error:
+          'Claude Code returned an error result: API Error: 400 {"message":"Could not process image"}',
+      }),
+    ).toBe(true);
+  });
+
+  it('does not clear a healthy (non-poison) error', () => {
+    expect(
+      shouldClearSession({ status: 'error', error: 'Container exited: OOM killed' }),
+    ).toBe(false);
+  });
+
+  it('does not clear when status is not error', () => {
+    // A successful turn whose error field is unset must never be cleared, even
+    // if the result elsewhere mentions an image error.
+    expect(shouldClearSession({ status: 'success', error: undefined })).toBe(
+      false,
+    );
   });
 });
 

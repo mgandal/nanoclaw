@@ -26,6 +26,7 @@ import {
 import { fileURLToPath } from 'url';
 import { createHonchoClient } from './honcho-client.js';
 import { HonchoSession } from './honcho-session.js';
+import type { ImageMediaType } from './screenshot-image.js';
 
 export interface ToolCallRecord {
   tool: string;
@@ -247,8 +248,6 @@ interface SessionEntry {
 interface SessionsIndex {
   entries: SessionEntry[];
 }
-
-type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
 
 type ContentBlock =
   | { type: 'text'; text: string }

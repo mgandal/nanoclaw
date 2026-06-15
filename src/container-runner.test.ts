@@ -143,6 +143,7 @@ import {
   clearStaleSessionContinuity,
   ContainerOutput,
   _redactContainerArgsForTests,
+  extractContainerError,
 } from './container-runner.js';
 import type { RegisteredGroup } from './types.js';
 import { spawn } from 'child_process';
@@ -1904,5 +1905,53 @@ describe('redactContainerArgs', () => {
   it('leaves non-sensitive args untouched', () => {
     const args = ['-e', 'QMD_URL=http://host:8181', '-v', '/host:/container'];
     expect(_redactContainerArgsForTests(args)).toEqual(args);
+  });
+});
+
+describe('extractContainerError', () => {
+  const START = '---NANOCLAW_OUTPUT_START---';
+  const END = '---NANOCLAW_OUTPUT_END---';
+
+  it('prefers the clean error from the last stdout marker over the stderr tail', () => {
+    const stdout = `some logs\n${START}\n${JSON.stringify({
+      status: 'error',
+      result: null,
+      error:
+        'Claude Code returned an error result: API Error: 400 {"message":"Could not process image"}',
+    })}\n${END}\n`;
+    const stderr = 'x'.repeat(500); // tail would NOT contain the phrase
+    const err = extractContainerError(stdout, stderr, 1);
+    expect(err).toContain('Could not process image');
+  });
+
+  it('falls back to the stderr tail when no marker is present', () => {
+    const err = extractContainerError('no markers here', 'boom: OOM killed', 1);
+    expect(err).toContain('OOM killed');
+    expect(err).toContain('exited with code 1');
+  });
+
+  it('falls back to the stderr tail when the marker JSON is truncated', () => {
+    // stdout cut off mid-marker (output size cap) — no valid END
+    const stdout = `${START}\n{"status":"error","error":"Could not pr`;
+    const err = extractContainerError(stdout, 'tail logs', 1);
+    expect(err).toContain('tail logs');
+  });
+
+  it('falls back when the marker has no error field (e.g. a success marker)', () => {
+    const stdout = `${START}\n${JSON.stringify({
+      status: 'success',
+      result: null,
+    })}\n${END}\n`;
+    const err = extractContainerError(stdout, 'stderr detail', 1);
+    expect(err).toContain('stderr detail');
+  });
+
+  it('uses the LAST marker when several are present', () => {
+    const stdout =
+      `${START}\n${JSON.stringify({ status: 'success', result: 'ok' })}\n${END}\n` +
+      `${START}\n${JSON.stringify({ status: 'error', error: 'Could not process image' })}\n${END}\n`;
+    expect(extractContainerError(stdout, 'tail', 1)).toContain(
+      'Could not process image',
+    );
   });
 });

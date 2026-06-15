@@ -140,7 +140,7 @@ import { readEnvFile } from './env.js';
 import YAML from 'yaml';
 import {
   checkSessionExpiry,
-  isStaleSessionError,
+  shouldClearSession,
   parseLastAgentSeq,
   shouldKillActiveContainer,
 } from './index-helpers.js';
@@ -913,16 +913,20 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
-      // Detect stale/corrupt session — clear it so the next retry starts fresh.
-      // The session .jsonl can go missing after a crash mid-write, manual
-      // deletion, or disk-full. The existing backoff in group-queue.ts
-      // handles the retry; we just need to remove the broken session ID.
-      const isStaleSession = sessionId && isStaleSessionError(output.error);
+      // Detect a session that must be cleared so the next retry starts fresh:
+      // a stale/corrupt .jsonl (crash mid-write, manual deletion, disk-full),
+      // or a poison image block that 400s on every resume. We check both the
+      // final (truncated) error envelope and the captured streamed marker text,
+      // since the phrase can fall outside the host's 200-char stderr tail. The
+      // existing backoff in group-queue.ts handles the retry; we just remove
+      // the broken session ID.
+      const isStaleSession =
+        !!sessionId && shouldClearSession(output);
 
       if (isStaleSession) {
         logger.warn(
           { group: group.name, staleSessionId: sessionId, error: output.error },
-          'Stale session detected — clearing for next retry',
+          'Unusable session detected — clearing for next retry',
         );
         delete sessions[effectiveGroupFolder];
         deleteSession(effectiveGroupFolder);

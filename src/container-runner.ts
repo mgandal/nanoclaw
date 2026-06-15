@@ -1101,7 +1101,7 @@ export async function runContainerAgent(
         resolve({
           status: 'error',
           result: null,
-          error: `Container exited with code ${code}: ${stderr.slice(-200)}`,
+          error: extractContainerError(stdout, stderr, code),
           exitCode: code ?? undefined,
         });
         return;
@@ -1246,6 +1246,34 @@ export function clearStaleSessionContinuity(memoryPath: string): void {
   const tmpPath = `${memoryPath}.tmp`;
   fs.writeFileSync(tmpPath, cleaned);
   fs.renameSync(tmpPath, memoryPath);
+}
+
+/**
+ * Build the error string for a non-zero container exit. Prefers the clean
+ * `error` from the last stdout output-marker (which the container writes with
+ * the full API error text) over the lossy `stderr.slice(-200)` tail — the tail
+ * can truncate the error phrase out of view, and callers without an onOutput
+ * streaming hook (e.g. bus-routed turns) otherwise only ever see the tail.
+ * Falls back to the stderr tail when no usable marker error is present (e.g. the
+ * stdout was size-capped mid-marker).
+ */
+export function extractContainerError(
+  stdout: string,
+  stderr: string,
+  code: number | null,
+): string {
+  const tail = `Container exited with code ${code}: ${stderr.slice(-200)}`;
+  const endIdx = stdout.lastIndexOf(OUTPUT_END_MARKER);
+  const startIdx = stdout.lastIndexOf(OUTPUT_START_MARKER, endIdx);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return tail;
+  try {
+    const parsed = JSON.parse(
+      stdout.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim(),
+    ) as ContainerOutput;
+    return parsed.error ? parsed.error : tail;
+  } catch {
+    return tail;
+  }
 }
 
 export interface ToolCallRecord {
