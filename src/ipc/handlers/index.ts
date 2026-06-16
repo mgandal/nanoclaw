@@ -9,6 +9,7 @@ import {
   imessageSendHandler,
 } from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
+import { messageHandler } from './message.js';
 import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 import { slackDmReadHandler, slackDmHandler } from './slack.js';
 import {
@@ -58,6 +59,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(dashboardQueryHandler);
   registerIpcHandler(deployMiniAppHandler);
   registerIpcHandler(kgQueryHandler);
+  registerIpcHandler(messageHandler);
   registerIpcHandler(imessageSearchHandler);
   registerIpcHandler(imessageReadHandler);
   registerIpcHandler(imessageSendHandler);

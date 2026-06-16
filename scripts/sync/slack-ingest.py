@@ -110,24 +110,87 @@ def _bounce_mcp_server() -> bool:
         return False
 
 
-def _single_mcp_call(method: str, params: dict, timeout: int) -> dict:
-    body = {"jsonrpc": "2.0", "method": method, "params": params, "id": int(time.time() * 1000)}
-    r = requests.post(
-        SLACK_MCP_URL,
-        json=body,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        },
-        timeout=timeout,
-    )
+# slack-mcp-server 1.3.0 HTTP transport is SESSION-ful: every request after the
+# first must carry the Mcp-Session-Id returned by `initialize`. A stateless
+# tools/call 404s. Cache the session id and lazily (re)establish it.
+_session_id: str | None = None
+
+
+def _base_headers() -> dict:
+    h = {"Content-Type": "application/json",
+         "Accept": "application/json, text/event-stream"}
+    if _session_id:
+        h["Mcp-Session-Id"] = _session_id
+    return h
+
+
+def _ensure_session(timeout: int) -> None:
+    """Run the MCP initialize handshake, capture Mcp-Session-Id, send the
+    initialized notification. No-op if a session is already established."""
+    global _session_id
+    if _session_id:
+        return
+    init = {"jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "slack-ingest", "version": "1"}}}
+    r = requests.post(SLACK_MCP_URL, json=init,
+                      headers={"Content-Type": "application/json",
+                               "Accept": "application/json, text/event-stream"},
+                      timeout=timeout)
     r.raise_for_status()
-    # Response is "event: message\ndata: {json}\n"
+    sid = r.headers.get("Mcp-Session-Id")
+    if not sid:
+        raise RuntimeError("MCP initialize returned no Mcp-Session-Id")
+    _session_id = sid
+    # Required notification; server rejects tools/call until it arrives. If it
+    # fails, the session is unconfirmed -> invalidate so we don't cache a dead id.
+    try:
+        n = requests.post(SLACK_MCP_URL,
+                          json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                          headers=_base_headers(), timeout=timeout)
+        n.raise_for_status()
+    except Exception:
+        _session_id = None
+        raise
+
+
+def _single_mcp_call(method: str, params: dict, timeout: int) -> dict:
+    global _session_id
+    _ensure_session(timeout)
+    body = {"jsonrpc": "2.0", "method": method, "params": params, "id": int(time.time() * 1000)}
+    r = requests.post(SLACK_MCP_URL, json=body, headers=_base_headers(), timeout=timeout)
+    # A 404 means the cached session expired/was lost. Re-initialize and retry
+    # ONCE in-process — raise_for_status() below would raise HTTPError, which is
+    # NOT in _RETRYABLE, so the outer mcp_call would not recover otherwise.
+    if r.status_code == 404:
+        log.warning("MCP session 404 (%s) — re-initializing and retrying once", method)
+        _session_id = None
+        _ensure_session(timeout)
+        r = requests.post(SLACK_MCP_URL, json=body, headers=_base_headers(), timeout=timeout)
+    # Any other 4xx/5xx may also mean the session is gone (servers don't all
+    # signal expiry with a clean 404 — some return 400/500, or a JSON-RPC error
+    # in a 200 body). Invalidate the cached session before raising so the outer
+    # retry loop re-initializes instead of reusing a dead id for the whole run.
+    if r.status_code >= 400:
+        _session_id = None
+    r.raise_for_status()
     text = r.text
-    m = re.search(r"data:\s*(\{.+\})", text, re.DOTALL)
-    if not m:
+    # Response is EITHER plain JSON (Content-Type: application/json) OR an SSE
+    # frame ("event: message\ndata: {json}\n"), depending on the negotiated
+    # transport. Decide on Content-Type first; fall back to a line-anchored SSE
+    # probe (a JSON body can contain the substring "data:", so don't substring-match).
+    ctype = r.headers.get("Content-Type", "")
+    is_sse = "text/event-stream" in ctype or bool(re.search(r"^\s*event:", text)) \
+        or bool(re.search(r"^data:", text, re.M))
+    if is_sse:
+        m = re.search(r"data:\s*(\{.+\})", text, re.DOTALL)
+        if not m:
+            raise RuntimeError(f"Unexpected MCP response: {text[:200]}")
+        return json.loads(m.group(1))
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
         raise RuntimeError(f"Unexpected MCP response: {text[:200]}")
-    return json.loads(m.group(1))
 
 
 def mcp_call(method: str, params: dict, timeout: int = 30) -> dict:
@@ -136,24 +199,34 @@ def mcp_call(method: str, params: dict, timeout: int = 30) -> dict:
     Retry schedule: 1s, 2s, 4s (exponential). After MAX_RETRIES consecutive
     transient failures, bounce the MCP server via launchd and try once more.
     """
+    global _session_id
     last_err: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
             return _single_mcp_call(method, params, timeout)
-        except _RETRYABLE as e:
+        # RuntimeError covers a transient handshake/protocol hiccup from
+        # _ensure_session (e.g. initialize returned no Mcp-Session-Id, or the
+        # initialized notification failed). Treat it like a transient transport
+        # error: invalidate the (un)confirmed session and retry, rather than
+        # letting it escape and abort the whole ingest run.
+        except (*_RETRYABLE, RuntimeError, requests.exceptions.HTTPError) as e:
             last_err = e
+            _session_id = None  # force a fresh handshake on the next attempt
             if attempt < MAX_RETRIES - 1:
                 backoff = 2**attempt  # 1, 2, 4s
                 log.warning("MCP %s failed (attempt %d/%d): %s — retrying in %ds",
                             method, attempt + 1, MAX_RETRIES, type(e).__name__, backoff)
                 time.sleep(backoff)
 
-    # All retries exhausted — try a server bounce + one final attempt
+    # All retries exhausted — try a server bounce + one final attempt. The new
+    # server process has no record of any prior session, so drop the cached id
+    # before retrying or _ensure_session will skip re-init and POST a dead id.
     log.error("MCP %s exhausted %d retries; attempting server bounce", method, MAX_RETRIES)
     if _bounce_mcp_server():
+        _session_id = None
         try:
             return _single_mcp_call(method, params, timeout)
-        except _RETRYABLE as e:
+        except (*_RETRYABLE, RuntimeError, requests.exceptions.HTTPError) as e:
             last_err = e
             log.error("MCP %s still failing after server bounce: %s", method, type(e).__name__)
 

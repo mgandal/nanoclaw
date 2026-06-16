@@ -333,13 +333,29 @@ describe('isStaleSessionError', () => {
     // A dimension/oversize rejection slips past the validator's narrow check
     // and 400s with a different message; it must still clear the session.
     expect(isStaleSessionError('image exceeds 8000 pixels')).toBe(true);
-    expect(isStaleSessionError('image exceeds maximum allowed size')).toBe(true);
-    expect(isStaleSessionError('unsupported image type: image/tiff')).toBe(true);
+    expect(isStaleSessionError('image exceeds maximum allowed size')).toBe(
+      true,
+    );
+    expect(isStaleSessionError('unsupported image type: image/tiff')).toBe(
+      true,
+    );
     expect(
       isStaleSessionError(
         'API Error: 413 {"type":"error","error":{"type":"request_too_large","message":"image too large"}}',
       ),
     ).toBe(true);
+  });
+
+  it('does not clear the session for a recoverable error that merely mentions an image', () => {
+    // A transient tool/validation error that happens to contain "invalid" near
+    // "image" must NOT nuke the session — clearing loses conversation continuity
+    // and these are recoverable without it.
+    expect(isStaleSessionError('invalid argument: expected image url')).toBe(
+      false,
+    );
+    expect(isStaleSessionError('invalid image_url provided to the tool')).toBe(
+      false,
+    );
   });
 
   it('does not match an oversized-prompt 413 (only image-related ones)', () => {
@@ -376,7 +392,10 @@ describe('shouldClearSession', () => {
 
   it('does not clear a healthy (non-poison) error', () => {
     expect(
-      shouldClearSession({ status: 'error', error: 'Container exited: OOM killed' }),
+      shouldClearSession({
+        status: 'error',
+        error: 'Container exited: OOM killed',
+      }),
     ).toBe(false);
   });
 

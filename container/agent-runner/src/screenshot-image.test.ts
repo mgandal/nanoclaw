@@ -48,6 +48,65 @@ function jpegOf(width: number, height: number): string {
   ]).toString('base64');
 }
 
+// JPEG with legal 0xFF fill bytes before the SOF0 marker. The marker-scan must
+// skip the fill run rather than read it as a segment length and desync.
+function jpegWithFillBytesOf(width: number, height: number): string {
+  const app0 = Buffer.from([
+    0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
+    0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+  ]);
+  const sof0 = Buffer.alloc(11);
+  sof0[0] = 0xff;
+  sof0[1] = 0xc0;
+  sof0.writeUInt16BE(11 - 2, 2);
+  sof0[4] = 0x08;
+  sof0.writeUInt16BE(height, 5);
+  sof0.writeUInt16BE(width, 7);
+  sof0[9] = 0x01;
+  sof0[10] = 0x01;
+  return Buffer.concat([
+    Buffer.from([0xff, 0xd8]),
+    app0,
+    // Three legal 0xFF fill bytes preceding the next marker (JPEG spec allows
+    // any number of 0xFF padding bytes before a marker).
+    Buffer.from([0xff, 0xff, 0xff]),
+    sof0,
+    Buffer.from([0xff, 0xd9]),
+  ]).toString('base64');
+}
+
+function webpVp8Of(width: number, height: number): string {
+  // Lossy VP8: 'VP8 ' chunk, dims are 14-bit LE at offsets 26/28 of the file.
+  const buf = Buffer.alloc(30);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(22, 4);
+  buf.write('WEBP', 8, 'ascii');
+  buf.write('VP8 ', 12, 'ascii');
+  buf.writeUInt32LE(10, 16); // chunk size
+  // frame tag (3) + start code 0x9d 0x01 0x2a at 20..22, then dims at 26/28
+  buf[23] = 0x9d;
+  buf[24] = 0x01;
+  buf[25] = 0x2a;
+  buf.writeUInt16LE(width & 0x3fff, 26);
+  buf.writeUInt16LE(height & 0x3fff, 28);
+  return buf.toString('base64');
+}
+
+function webpVp8lOf(width: number, height: number): string {
+  // Lossless VP8L: 14-bit (dim-1) fields packed LE after the 0x2f signature.
+  const buf = Buffer.alloc(25);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(17, 4);
+  buf.write('WEBP', 8, 'ascii');
+  buf.write('VP8L', 12, 'ascii');
+  buf.writeUInt32LE(5, 16); // chunk size
+  buf[20] = 0x2f; // VP8L signature
+  // packed: (height-1)<<14 | (width-1), little-endian uint32 at offset 21
+  const packed = (((height - 1) & 0x3fff) << 14) | ((width - 1) & 0x3fff);
+  buf.writeUInt32LE(packed >>> 0, 21);
+  return buf.toString('base64');
+}
+
 function gifOf(width: number, height: number): string {
   const b = Buffer.alloc(13);
   b.write('GIF89a', 0, 'ascii');
@@ -149,6 +208,33 @@ describe('sanitizeScreenshotImage — dimension limits', () => {
 
   it('accepts an in-bounds VP8X WebP', () => {
     expect(sanitizeScreenshotImage(webpVp8xOf(800, 600))).not.toBeNull();
+  });
+
+  it('rejects an oversized lossy VP8 WebP by its dimensions', () => {
+    expect(sanitizeScreenshotImage(webpVp8Of(9000, 100))).toBeNull();
+  });
+
+  it('accepts an in-bounds lossy VP8 WebP', () => {
+    expect(sanitizeScreenshotImage(webpVp8Of(800, 600))).not.toBeNull();
+  });
+
+  it('rejects an oversized lossless VP8L WebP by its dimensions', () => {
+    expect(sanitizeScreenshotImage(webpVp8lOf(9000, 100))).toBeNull();
+  });
+
+  it('accepts an in-bounds lossless VP8L WebP', () => {
+    expect(sanitizeScreenshotImage(webpVp8lOf(800, 600))).not.toBeNull();
+  });
+
+  it('rejects an oversized JPEG even when 0xFF fill bytes precede the SOF', () => {
+    // The marker-scan must skip legal 0xFF fill padding rather than read it as
+    // a segment length and desync (which would yield null dims and bypass the
+    // dimension guard).
+    expect(sanitizeScreenshotImage(jpegWithFillBytesOf(12000, 100))).toBeNull();
+  });
+
+  it('accepts an in-bounds JPEG with 0xFF fill bytes before the SOF', () => {
+    expect(sanitizeScreenshotImage(jpegWithFillBytesOf(640, 480))).not.toBeNull();
   });
 
   it('accepts a valid-magic image whose dimensions cannot be parsed (no over-rejection)', () => {

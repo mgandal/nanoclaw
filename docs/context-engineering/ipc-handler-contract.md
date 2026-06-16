@@ -43,7 +43,9 @@ export interface IpcHandler<TInput> {
 ```
 
 `IpcAuthorization` may additionally declare `skipGate: true` to opt out of the
-trust gate. See **Rule 4** below for when that's permitted.
+trust gate (see **Rule 4**), `postHocNotify: true` / `suppressNotifyWhenTargetIs`
+to shape the post-hoc notify (see **Rule 3**, step 5), and the
+`actionTypeOverride` / `auditTarget` / `auditSummary` audit overrides.
 
 ## Six load-bearing rules
 
@@ -136,6 +138,19 @@ Dispatch order is fixed:
    Telegram notify). Combining `postHocNotify` with `skipGate` is a
    contract violation and produces a `denied_contract_violation` audit
    row (parallel to the off-allowlist `skipGate` check).
+
+   The dispatcher also honors `auth.suppressNotifyWhenTargetIs?: string`
+   (added for the `message` handler migration). When set, the dispatcher
+   skips the post-hoc notify if `auth.target` equals this value — applied to
+   BOTH the `notify`-kind branch and the `result`-kind `postHocNotify`
+   branch. This exists for delivery-shaped handlers whose notify is
+   chatJid-aware: the generic receipt always goes to the main jid, so a
+   handler that *delivers to* the main jid would echo the receipt into the
+   same chat. The `message` handler sets this to the main jid, reproducing
+   the inline `processIpcMessage` self-echo guard
+   (`mainJidForSelfCheck !== chatJid`). Leave it unset for ordinary
+   handlers — the gate's `decision.notify` is the only notify control they
+   need.
 
 ### Rule 4 — `skipGate: true` is allowlisted
 

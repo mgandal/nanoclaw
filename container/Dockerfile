@@ -58,9 +58,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg    
 # Install agent-reach (from GitHub — not on PyPI) + yt-dlp + mcporter + bird
 # + markitdown for Office/PDF/HTML → Markdown extraction (used by pptx skill)
 # --break-system-packages is safe in containers (no venv needed)
-# agent-reach pinned: v1.4.0, 2026-03-28, commit e178470
+# agent-reach pinned: v1.4.0, 2026-06-10, commit 607f0d2
+# (bumped from e178470 to pick up #329 "drop duplicate force-include that breaks
+#  source installs" — newer hatchling rejects the redundant force-include and
+#  fails the wheel build; same v1.4.0, delta is docs/guides only)
 RUN pip3 install \
-    'git+https://github.com/Panniantong/Agent-Reach.git@e178470320a4c61017c961902a84d83441f6acb0' \
+    'git+https://github.com/Panniantong/Agent-Reach.git@607f0d2c5647ccce2253af604f12a5240094991e' \
     'yt-dlp==2025.12.8' \
     'markitdown[pptx,docx,xlsx,pdf]==0.0.1a3' \
     --break-system-packages && \

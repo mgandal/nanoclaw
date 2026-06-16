@@ -42,6 +42,27 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 /**
+ * Parse the LAST output-marker pair from accumulated container stdout. Returns
+ * the parsed ContainerOutput, or null when no well-formed marker pair is
+ * present or the enclosed JSON does not parse. Single source of truth for the
+ * lastIndexOf→slice→JSON.parse logic used by both the legacy result path and
+ * extractContainerError, so the two cannot silently diverge on the marker
+ * protocol. (The streaming path consumes markers incrementally and is separate.)
+ */
+function parseLastOutputMarker(stdout: string): ContainerOutput | null {
+  const endIdx = stdout.lastIndexOf(OUTPUT_END_MARKER);
+  const startIdx = stdout.lastIndexOf(OUTPUT_START_MARKER, endIdx);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return null;
+  try {
+    return JSON.parse(
+      stdout.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim(),
+    ) as ContainerOutput;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Cached QMD reachability flag — updated by the health monitor loop
  * in index.ts every HEALTH_MONITOR_INTERVAL (60s). Avoids blocking
  * container spawn with a synchronous HTTP call.
@@ -698,6 +719,11 @@ function buildContainerArgs(
     }
   }
 
+  // Run the agent on Sonnet 4.6. The Claude Agent SDK reads ANTHROPIC_MODEL for
+  // the main model; the fast/background model (ANTHROPIC_SMALL_FAST_MODEL) is
+  // left unset so summarization etc. stays on the cheaper default (Haiku).
+  args.push('-e', 'ANTHROPIC_MODEL=claude-sonnet-4-6');
+
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
 
@@ -708,6 +734,11 @@ function buildContainerArgs(
   if (group.containerConfig?.implicitCrystallizeOffer === true) {
     args.push('-e', 'IMPLICIT_CRYSTALLIZE_OFFER=1');
   }
+
+  // Crystallization kill switch: the Stop hook that fires
+  // crystallize_candidate IPCs defaults ON inside the container. Pass the
+  // off-value so no container registers the hook.
+  args.push('-e', 'CRYSTALLIZE_CANDIDATE_ENABLED=0');
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -1153,22 +1184,15 @@ export async function runContainerAgent(
 
       // Legacy mode: parse the last output marker pair from accumulated stdout
       try {
-        // Extract JSON between sentinel markers for robust parsing
-        const endIdx = stdout.lastIndexOf(OUTPUT_END_MARKER);
-        const startIdx = stdout.lastIndexOf(OUTPUT_START_MARKER, endIdx);
-
-        let jsonLine: string;
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          jsonLine = stdout
-            .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
-            .trim();
-        } else {
-          // Fallback: last non-empty line (backwards compatibility)
-          const lines = stdout.trim().split('\n');
-          jsonLine = lines[lines.length - 1];
-        }
-
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        // Shared marker parse (single source of truth with extractContainerError).
+        // Fall back to the last non-empty line when no marker pair is present
+        // (backwards compatibility with pre-marker container output).
+        const markerParsed = parseLastOutputMarker(stdout);
+        const output: ContainerOutput =
+          markerParsed ??
+          (JSON.parse(
+            stdout.trim().split('\n').slice(-1)[0],
+          ) as ContainerOutput);
 
         // Collect tool calls and insert into action_log
         const toolCalls = collectToolCalls(path.join(groupIpcDir, 'output'));
@@ -1263,17 +1287,8 @@ export function extractContainerError(
   code: number | null,
 ): string {
   const tail = `Container exited with code ${code}: ${stderr.slice(-200)}`;
-  const endIdx = stdout.lastIndexOf(OUTPUT_END_MARKER);
-  const startIdx = stdout.lastIndexOf(OUTPUT_START_MARKER, endIdx);
-  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return tail;
-  try {
-    const parsed = JSON.parse(
-      stdout.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim(),
-    ) as ContainerOutput;
-    return parsed.error ? parsed.error : tail;
-  } catch {
-    return tail;
-  }
+  const parsed = parseLastOutputMarker(stdout);
+  return parsed?.error ? parsed.error : tail;
 }
 
 export interface ToolCallRecord {

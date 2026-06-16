@@ -211,6 +211,82 @@ def _load_email_ingest():
     return mod
 
 
+def test_sustained_classifier_failure_is_surfaced_loudly(tmp_state):
+    """A run where transient classifier failures dominate must emit a loud
+    error (not just per-email warnings) so a backlogging inbox is visible."""
+    mod = _load_email_ingest()
+
+    failed = ClassificationResult(
+        relevance=0.0, topic="unknown", summary="",
+        entities=[], action_items=[], skip_reason="classification_failed",
+    )
+
+    mock_gmail = MagicMock()
+    mock_gmail.connect.return_value = True
+    mock_gmail.fetch_since.return_value = [_make_email(f"g{i}") for i in range(6)]
+
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = False
+    mock_exchange.fetch_since.return_value = []
+
+    state = IngestState()
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", return_value=failed), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod.log, "error") as mock_error:
+        stats = mod.run_ingest(state, backfill_days=None, exchange_batch=0)
+
+    # All 6 transient failures counted, none exported, none marked processed.
+    assert stats["classify_failed"] == 6
+    assert stats["exported"] == 0
+    assert "g0" not in state.processed_gmail_ids
+    # The loud unhealthy-classifier error must have fired.
+    assert any(
+        "Classifier unhealthy" in str(call.args[0])
+        for call in mock_error.call_args_list
+    ), f"expected a 'Classifier unhealthy' error, got: {mock_error.call_args_list}"
+
+
+def test_occasional_classifier_failure_is_not_alerted(tmp_state):
+    """A few transient failures among many successes must NOT trip the alert."""
+    mod = _load_email_ingest()
+
+    ok = _make_result(0.1)  # below threshold -> classified but not exported
+    failed = ClassificationResult(
+        relevance=0.0, topic="unknown", summary="",
+        entities=[], action_items=[], skip_reason="classification_failed",
+    )
+    # 1 failure, 9 successes -> 10% fail rate, under the 50% / 5-count gate.
+    results = [failed] + [ok] * 9
+
+    mock_gmail = MagicMock()
+    mock_gmail.connect.return_value = True
+    mock_gmail.fetch_since.return_value = [_make_email(f"g{i}") for i in range(10)]
+
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = False
+    mock_exchange.fetch_since.return_value = []
+
+    state = IngestState()
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", side_effect=results), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod.log, "error") as mock_error:
+        stats = mod.run_ingest(state, backfill_days=None, exchange_batch=0)
+
+    assert stats["classify_failed"] == 1
+    assert not any(
+        "Classifier unhealthy" in str(call.args[0])
+        for call in mock_error.call_args_list
+    )
+
+
 def test_c18_retain_decision_skips_unsafe_url():
     """_retain_decision must not POST when HINDSIGHT_URL is remote."""
     import os

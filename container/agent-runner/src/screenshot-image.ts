@@ -75,13 +75,28 @@ function imageDimensions(
           off++;
           continue;
         }
-        const marker = bytes[off + 1];
-        // Standalone markers without a length payload.
-        if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
-          off += 2;
+        // A marker is 0xFF followed by a non-0xFF, non-0x00 byte. The JPEG spec
+        // allows any number of 0xFF fill bytes before a marker, so skip the run
+        // of 0xFF to land on the real marker rather than reading a fill byte as
+        // the marker (which would desync the scan and lose the dimensions).
+        let markerOff = off + 1;
+        while (markerOff < bytes.length && bytes[markerOff] === 0xff) {
+          markerOff++;
+        }
+        if (markerOff + 8 >= bytes.length) break;
+        const marker = bytes[markerOff];
+        // Standalone markers without a length payload (SOI, EOI, RSTn, TEM).
+        if (
+          marker === 0xd8 ||
+          marker === 0xd9 ||
+          marker === 0x01 ||
+          (marker >= 0xd0 && marker <= 0xd7)
+        ) {
+          off = markerOff + 1;
           continue;
         }
-        const segLen = bytes.readUInt16BE(off + 2);
+        // Segment length and payload follow the marker byte.
+        const segLen = bytes.readUInt16BE(markerOff + 1);
         const isSof =
           marker >= 0xc0 &&
           marker <= 0xcf &&
@@ -90,11 +105,11 @@ function imageDimensions(
           marker !== 0xcc; // DAC
         if (isSof) {
           return {
-            height: bytes.readUInt16BE(off + 5),
-            width: bytes.readUInt16BE(off + 7),
+            height: bytes.readUInt16BE(markerOff + 4),
+            width: bytes.readUInt16BE(markerOff + 6),
           };
         }
-        off += 2 + segLen;
+        off = markerOff + 1 + segLen;
       }
       return null;
     }

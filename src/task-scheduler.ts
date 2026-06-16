@@ -23,6 +23,7 @@ import {
   healOrphanedNextRun,
   logTaskRun,
   markTaskRunning,
+  deleteSession,
   recoverRunningTasks,
   setSession,
   touchSession,
@@ -31,6 +32,7 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { shouldClearSession } from './index-helpers.js';
 import { logger } from './logger.js';
 import { appendAlert, getUnresolvedAlerts } from './system-alerts.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
@@ -444,6 +446,29 @@ async function runTask(
       } else if (sessions[task.group_folder]) {
         touchSession(task.group_folder);
       }
+    }
+
+    // Group-context tasks share the same session as interactive turns. If the
+    // turn failed with a stale/poison-image error, clear the session so the
+    // bad block does not replay on every subsequent turn (scheduled OR
+    // interactive) and wedge the group permanently — mirrors runAgent() in
+    // index.ts. Only group-context tasks persist a session to clear.
+    if (
+      task.context_mode === 'group' &&
+      sessions[task.group_folder] &&
+      shouldClearSession(output)
+    ) {
+      logger.warn(
+        {
+          taskId: task.id,
+          group: task.group_folder,
+          staleSessionId: sessions[task.group_folder],
+          error: output.error,
+        },
+        'Unusable session detected in scheduled task — clearing for next run',
+      );
+      delete sessions[task.group_folder];
+      deleteSession(task.group_folder);
     }
 
     if (output.status === 'error') {

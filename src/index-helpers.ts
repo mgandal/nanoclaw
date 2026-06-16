@@ -102,7 +102,10 @@ export function isStaleSessionError(error: string | null | undefined): boolean {
   if (!error) return false;
   // The phrase "image" appearing alongside an exceed/unsupported/too-large
   // wording, or the canonical "could not process image", marks a poison block.
-  return /no conversation found|ENOENT.*\.jsonl|session.*not found|could not process image|image\b[^]{0,40}\b(exceeds|too large|unsupported|invalid)|(exceeds|too large|unsupported|invalid)\b[^]{0,40}\bimage|unsupported image type/i.test(
+  // Deliberately NOT "invalid": it appears in every API 400 (invalid_request_error)
+  // and in recoverable tool-validation errors like "invalid argument: expected
+  // image url", so matching it near "image" would nuke healthy sessions.
+  return /no conversation found|ENOENT.*\.jsonl|session.*not found|could not process image|image\b[^]{0,40}\b(exceeds|too large|unsupported)|(exceeds|too large|unsupported)\b[^]{0,40}\bimage/i.test(
     error,
   );
 }

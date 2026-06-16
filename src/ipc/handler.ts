@@ -173,6 +173,22 @@ export interface IpcAuthorization {
    * handlers).
    */
   postHocNotify?: true;
+  /**
+   * Suppress the post-hoc notify when `auth.target` equals this jid.
+   *
+   * The generic notify (`fireNotifyIfRequested`) always sends its receipt to
+   * the main jid. For an action that *delivers to* the main jid (an agent in
+   * the main group sending a message to main), that receipt would echo back
+   * into the very chat the action just wrote to. The `message` handler sets
+   * this to the main jid so the dispatcher skips the receipt in exactly that
+   * case — reproducing the inline `processIpcMessage` self-echo guard
+   * (`mainJidForSelfCheck !== data.chatJid`).
+   *
+   * Has no effect when the gate did not request a notify, or when `target`
+   * differs from this value. Applies to both the `result`-kind postHocNotify
+   * branch and the `notify`-kind branch.
+   */
+  suppressNotifyWhenTargetIs?: string;
 }
 
 /**
@@ -522,7 +538,8 @@ export async function dispatchIpcAction(
       !executeThrew &&
       executed &&
       decision !== null &&
-      isSuccessPayload(resultPayload)
+      isSuccessPayload(resultPayload) &&
+      !notifySuppressedBySelfEcho(auth)
     ) {
       await fireNotifyIfRequested(decision, {
         agentName: ctx.agentName,
@@ -533,11 +550,20 @@ export async function dispatchIpcAction(
         deps: ctx.deps,
       });
     }
-  } else if (executed && decision !== null) {
+  } else if (
+    executed &&
+    decision !== null &&
+    !notifySuppressedBySelfEcho(auth)
+  ) {
     // Notify path (existing behaviour). decision is null only for skipGate
     // calls, which are read-only and on the allowlist — by construction they
     // never produce a notify, and skipping fireNotifyIfRequested here keeps
     // that invariant explicit.
+    //
+    // notifySuppressedBySelfEcho gates the chatJid-aware self-echo case: a
+    // message delivered TO the main jid must not also fire a receipt to main
+    // (it would echo into the same chat). See IpcAuthorization
+    // .suppressNotifyWhenTargetIs.
     await fireNotifyIfRequested(decision, {
       agentName: ctx.agentName,
       actionType: auditActionType,
@@ -603,6 +629,20 @@ export function isSuccessPayload(payload: unknown): boolean {
     typeof payload === 'object' &&
     payload !== null &&
     (payload as { success?: unknown }).success === true
+  );
+}
+
+/**
+ * True when the post-hoc notify should be suppressed because the action's
+ * target equals `auth.suppressNotifyWhenTargetIs` — the chatJid-aware
+ * self-echo guard for delivery-shaped handlers (see
+ * IpcAuthorization.suppressNotifyWhenTargetIs). Returns false (no
+ * suppression) when the field is unset.
+ */
+function notifySuppressedBySelfEcho(auth: IpcAuthorization): boolean {
+  return (
+    auth.suppressNotifyWhenTargetIs !== undefined &&
+    auth.suppressNotifyWhenTargetIs === auth.target
   );
 }
 
