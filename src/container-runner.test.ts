@@ -15,6 +15,7 @@ vi.mock('./config.js', () => ({
   CONTAINER_TIMEOUT: 1800000, // 30min
   CONTEXT_PACKET_MAX_SIZE: 8000,
   CREDENTIAL_PROXY_PORT: 3001,
+  AGENTS_DIR: '/tmp/nanoclaw-test-agents',
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
@@ -98,6 +99,13 @@ vi.mock('./credential-proxy.js', () => ({
   proxyToken: 'test-proxy-token',
 }));
 
+// Mock agent-registry: model selection reads the agent's lead flag via
+// loadAgentIdentity. Default to null (no identity) so unrelated tests that
+// pass an agentName don't accidentally select Opus.
+vi.mock('./agent-registry.js', () => ({
+  loadAgentIdentity: vi.fn(() => null),
+}));
+
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
   const proc = new EventEmitter() as EventEmitter & {
@@ -152,6 +160,8 @@ import { detectAuthMode } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { stopContainer } from './container-runtime.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { loadAgentIdentity } from './agent-registry.js';
+import { logger } from './logger.js';
 
 const testGroup: RegisteredGroup = {
   name: 'Test Group',
@@ -1245,18 +1255,172 @@ describe('container-runner MCP URL injection', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
-  it('always passes ANTHROPIC_MODEL=claude-sonnet-4-6 to the agent', async () => {
-    const _resultPromise = runContainerAgent(testGroup, testInput, () => {});
+  // The Opus gate keys off the agent's lead flag (identity.md `lead: true`),
+  // read via loadAgentIdentity — NOT a hardcoded agent name. `lead` controls
+  // what that mock reports for the named agent.
+  async function modelEnvFor(
+    group: RegisteredGroup,
+    input: typeof testInput & { agentName?: string; isScheduledTask?: boolean },
+    lead?: boolean,
+  ): Promise<string | undefined> {
+    // Isolate model selection from the skill-sync filesystem walk: with no
+    // skill dirs present, syncSkillsForGroup is a no-op for every layer
+    // (group, agent-crystallized, container), so passing agentName here only
+    // exercises the ANTHROPIC_MODEL branch. Reset here rather than relying on
+    // sibling tests in this block not leaking fs mock implementations.
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readdirSync).mockReturnValue([] as any);
+    vi.mocked(fs.statSync).mockReturnValue({
+      isDirectory: () => false,
+    } as any);
+
+    // lead === undefined → no identity on disk (loadAgentIdentity returns null).
+    vi.mocked(loadAgentIdentity).mockReturnValue(
+      lead === undefined
+        ? null
+        : ({
+            name: 'X',
+            role: 'r',
+            description: 'd',
+            dirName: input.agentName ?? 'x',
+            dirPath: '/x',
+            bodyMarkdown: '',
+            ...(lead ? { lead: true } : {}),
+          } as ReturnType<typeof loadAgentIdentity>),
+    );
+
+    const _resultPromise = runContainerAgent(group, input, () => {});
     await vi.advanceTimersByTimeAsync(10);
 
     const args = vi.mocked(spawn).mock.calls[0][1] as string[];
     const envVars = args.filter((_a, i) => i > 0 && args[i - 1] === '-e');
 
     const modelVar = envVars.find((a) => a.startsWith('ANTHROPIC_MODEL='));
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
 
     fakeProc.emit('close', 0);
     await vi.advanceTimersByTimeAsync(10);
+    return modelVar;
+  }
+
+  it('runs the lead agent in the main group on Opus 4.8', async () => {
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'claire' },
+      true,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-opus-4-8');
+  });
+
+  it('keeps non-lead agents in the main group on Sonnet 4.6', async () => {
+    // e.g. a swarm pool bot speaking in the main group must not inherit Opus.
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'marvin' },
+      false,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('keeps the lead agent in a non-main group on Sonnet 4.6', async () => {
+    const modelVar = await modelEnvFor(
+      testGroup,
+      { ...testInput, isMain: false, agentName: 'claire' },
+      true,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('runs a lead agent NOT named claire on Opus 4.8', async () => {
+    // Discriminates lead-flag gating from the old hardcoded-'claire' name gate.
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'newlead' },
+      true,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-opus-4-8');
+  });
+
+  it('keeps an agent named claire that is NOT the lead on Sonnet 4.6', async () => {
+    // Discriminates lead-flag gating from the old hardcoded-'claire' name gate.
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'claire' },
+      false,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('keeps a main-group scheduled task on Sonnet 4.6 even for the lead', async () => {
+    // Unattended cron-style runs must not silently use the pricier model.
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      {
+        ...testInput,
+        isMain: true,
+        agentName: 'claire',
+        isScheduledTask: true,
+      },
+      true,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('keeps the main group on Sonnet 4.6 when no agent is resolved', async () => {
+    // The agentless main-group path (empty agents dir / no targetAgent).
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      {
+        ...testInput,
+        isMain: true,
+      },
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('keeps the main group on Sonnet 4.6 when the agent has no identity.md', async () => {
+    const modelVar = await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'ghost' },
+      undefined,
+    );
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+  });
+
+  it('logs the model and agent when the Opus upgrade is applied', async () => {
+    vi.mocked(logger.info).mockClear();
+    await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'claire' },
+      true,
+    );
+    const opusLog = vi
+      .mocked(logger.info)
+      .mock.calls.find(
+        (c) =>
+          typeof c[0] === 'object' &&
+          c[0] !== null &&
+          (c[0] as Record<string, unknown>).model === 'claude-opus-4-8',
+      );
+    expect(opusLog).toBeDefined();
+    expect((opusLog![0] as Record<string, unknown>).agentName).toBe('claire');
+  });
+
+  it('does not log an Opus selection on the default Sonnet path', async () => {
+    vi.mocked(logger.info).mockClear();
+    await modelEnvFor(
+      { ...testGroup, isMain: true },
+      { ...testInput, isMain: true, agentName: 'marvin' },
+      false,
+    );
+    const opusLog = vi
+      .mocked(logger.info)
+      .mock.calls.find(
+        (c) =>
+          typeof c[0] === 'object' &&
+          c[0] !== null &&
+          (c[0] as Record<string, unknown>).model === 'claude-opus-4-8',
+      );
+    expect(opusLog).toBeUndefined();
   });
 });
 

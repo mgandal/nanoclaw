@@ -32,6 +32,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { getBridgeToken } from './bridge-auth.js';
+import { loadAgentIdentity } from './agent-registry.js';
 import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -486,6 +487,8 @@ function buildContainerArgs(
   containerName: string,
   isMain: boolean,
   group: RegisteredGroup,
+  agentName?: string,
+  isScheduledTask?: boolean,
   extraEnv?: Record<string, string>,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
@@ -719,10 +722,33 @@ function buildContainerArgs(
     }
   }
 
-  // Run the agent on Sonnet 4.6. The Claude Agent SDK reads ANTHROPIC_MODEL for
-  // the main model; the fast/background model (ANTHROPIC_SMALL_FAST_MODEL) is
-  // left unset so summarization etc. stays on the cheaper default (Haiku).
-  args.push('-e', 'ANTHROPIC_MODEL=claude-sonnet-4-6');
+  // Model selection. The Claude Agent SDK reads ANTHROPIC_MODEL for the main
+  // model; the fast/background model (ANTHROPIC_SMALL_FAST_MODEL) is left unset
+  // so summarization etc. stays on the cheaper default (Haiku).
+  //
+  // Only the lead agent, in the main group, on an interactive turn, runs Opus
+  // 4.8; everything else stays on Sonnet 4.6. The eligibility gate keeps the
+  // following on Sonnet: a non-lead/swarm bot in the main group, the lead in
+  // another group, and an unattended scheduled task running AS the lead in the
+  // main group. Lead-ness comes from the agent's identity.md `lead: true` flag
+  // (not a hardcoded name), matching how the registry and event-routing
+  // identify the lead. Because only main+interactive+named spawns can reach
+  // Opus, the identity.md filesystem read is resolved lazily behind that gate —
+  // never for non-main containers or scheduled tasks.
+  const eligibleForOpus = isMain && !isScheduledTask && agentName != null;
+  const isLead =
+    eligibleForOpus &&
+    loadAgentIdentity(path.join(AGENTS_DIR, agentName))?.lead === true;
+  const model = isLead ? 'claude-opus-4-8' : 'claude-sonnet-4-6';
+  args.push('-e', `ANTHROPIC_MODEL=${model}`);
+  if (model !== 'claude-sonnet-4-6') {
+    // Surface the rare, cost-relevant upgrade so Opus spend is attributable
+    // from info-level logs (Sonnet is the default and stays unlogged).
+    logger.info(
+      { model, agentName, group: group.name },
+      'Model upgrade applied',
+    );
+  }
 
   // Pass Ollama host URL for container access
   args.push('-e', `OLLAMA_HOST=http://${CONTAINER_HOST_GATEWAY}:11434`);
@@ -802,6 +828,8 @@ export async function runContainerAgent(
     containerName,
     input.isMain,
     group,
+    input.agentName,
+    input.isScheduledTask,
     input.extraEnv,
   );
 
