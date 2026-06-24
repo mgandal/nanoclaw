@@ -308,7 +308,12 @@ describe('checkSessionExpiry: size cap', () => {
 
   it('remains backward-compatible: omitting size args never triggers size expiry', () => {
     const { createdAt, lastUsed } = fresh();
-    const result = checkSessionExpiry(createdAt, lastUsed, TWO_HOURS, FOUR_HOURS);
+    const result = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      TWO_HOURS,
+      FOUR_HOURS,
+    );
     expect(result).toBeNull();
   });
 
