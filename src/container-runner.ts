@@ -36,6 +36,7 @@ import { loadAgentIdentity } from './agent-registry.js';
 import { detectAuthMode, proxyToken } from './credential-proxy.js';
 import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
+import { shouldStopOnClose } from './index-helpers.js';
 import { AllowedSecret, RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -976,6 +977,7 @@ export async function runContainerAgent(
     });
 
     let timedOut = false;
+    let forceKilled = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
     // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
@@ -995,6 +997,7 @@ export async function runContainerAgent(
           { group: group.name, containerName, err },
           'Graceful stop failed, force killing',
         );
+        forceKilled = true;
         container.kill('SIGKILL');
       }
     };
@@ -1010,6 +1013,39 @@ export async function runContainerAgent(
     container.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
+
+      // Belt-and-suspenders orphan teardown. Apple Container's runtime
+      // sometimes leaves the VM in state=running even after `container run
+      // --rm` exits cleanly (code 0) — `--rm` is silently not honored, so the
+      // VM lingers (holding ~1GB + a slot) until the boot-time reaper runs at
+      // the next restart. Fire a redundant `container stop` on close to close
+      // the leak at the source.
+      //
+      // Skipped when the timeout path (`timedOut`) or a force-kill
+      // (`forceKilled`) already tore the container down — both already issued a
+      // stop/SIGKILL, so re-stopping would be a pointless double-stop.
+      //
+      // CRITICAL: stopContainer() runs a SYNCHRONOUS execSync with a 15s
+      // timeout and can hang that long when the runtime is wedged (exactly the
+      // degraded state where orphans pile up). Calling it inline here would
+      // stall the event loop — and delay this turn's resolve() — for up to 15s
+      // on every container exit. setImmediate() defers it to a later tick so it
+      // never blocks the close handler or the user's reply. A redundant stop
+      // that finds nothing already gone is normal (debug, not error); a stop
+      // failure must NEVER turn a successful turn into an error, hence the
+      // fully-guarded try/catch.
+      if (shouldStopOnClose(timedOut, forceKilled)) {
+        setImmediate(() => {
+          try {
+            stopContainer(containerName);
+          } catch (err) {
+            logger.debug(
+              { group: group.name, containerName, err },
+              'Belt-and-suspenders stop on clean close found nothing to stop',
+            );
+          }
+        });
+      }
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');

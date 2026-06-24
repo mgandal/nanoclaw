@@ -84,6 +84,34 @@ export function shouldKillActiveContainer(
 }
 
 /**
+ * Decide whether to issue a belt-and-suspenders `container stop` when an agent
+ * container's process closes.
+ *
+ * Apple Container's runtime sometimes leaves the agent VM in state=running
+ * after the `container run --rm` client exits cleanly (code 0) — `--rm` is
+ * silently not honored, so the VM lingers (holding ~1GB + a container slot)
+ * until the boot-time orphan reaper runs at the next restart. To close that
+ * leak at the source we fire a redundant `container stop` on close.
+ *
+ * It must NOT fire when the container was already torn down on the way to the
+ * close event, or we'd issue a pointless double-stop:
+ *   - `timedOut`     → the hard-timeout handler (`killOnTimeout`) already called
+ *                      `stopContainer` (and may have force-killed on top).
+ *   - `forceKilled`  → a SIGKILL was issued for this container.
+ *
+ * Pure + boolean-only so it can be unit-tested exhaustively (mirrors the
+ * extract-pure-helper pattern used by shouldKillActiveContainer / shouldClearSession);
+ * the close handler in container-runner.ts wires the result into a non-blocking
+ * `setImmediate(stopContainer)` so the sync exec never stalls the event loop.
+ */
+export function shouldStopOnClose(
+  timedOut: boolean,
+  forceKilled: boolean,
+): boolean {
+  return !timedOut && !forceKilled;
+}
+
+/**
  * Parse the last_agent_seq JSON from the DB.
  * Returns empty object on any error (corruption, null, etc.)
  */

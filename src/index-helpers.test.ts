@@ -1,6 +1,30 @@
 import { describe, it, expect } from 'vitest';
 
-import { normalizeOllamaHost } from './index-helpers.js';
+import { normalizeOllamaHost, shouldStopOnClose } from './index-helpers.js';
+
+// Belt-and-suspenders orphan teardown: Apple Container's runtime sometimes
+// leaves an agent VM in state=running after the `container run --rm` client
+// exits cleanly, so on a normal close we fire a redundant `container stop`.
+// shouldStopOnClose() is the pure predicate that decides whether that stop
+// should run — it must NOT fire when the timeout path or a force-kill already
+// tore the container down (avoid a double-stop), and MUST fire otherwise.
+describe('shouldStopOnClose', () => {
+  it('stops on a clean close (no timeout, no force-kill)', () => {
+    expect(shouldStopOnClose(false, false)).toBe(true);
+  });
+
+  it('does NOT stop on the timeout path (killOnTimeout already stopped it)', () => {
+    expect(shouldStopOnClose(true, false)).toBe(false);
+  });
+
+  it('does NOT stop when the container was force-killed (SIGKILL already issued)', () => {
+    expect(shouldStopOnClose(false, true)).toBe(false);
+  });
+
+  it('does NOT stop when both timed out and force-killed', () => {
+    expect(shouldStopOnClose(true, true)).toBe(false);
+  });
+});
 
 // `OLLAMA_HOST` is deliberately set to the Ollama SERVER bind address (0.0.0.0)
 // by com.nanoclaw.ollama-host-env.plist so Apple Container VMs can reach Ollama

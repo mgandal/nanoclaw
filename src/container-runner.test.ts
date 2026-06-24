@@ -284,6 +284,164 @@ describe('container-runner timeout behavior', () => {
   });
 });
 
+describe('container-runner belt-and-suspenders orphan teardown', () => {
+  // Apple Container sometimes leaves the VM in state=running after `container
+  // run --rm` exits cleanly (code 0). The close handler fires a fire-and-forget
+  // `stopContainer` (via setImmediate, off the hot path) to close that leak —
+  // but must NOT double-stop the timeout/force-kill paths that already stopped.
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+    vi.mocked(spawn).mockReturnValue(fakeProc as any);
+    // stopContainer accumulates calls across tests (no global clearAllMocks in
+    // this file) — reset so per-test call counts are exact.
+    vi.mocked(stopContainer).mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('stops the container once on a clean (code 0) streaming close', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+      newSessionId: 'session-clean',
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Clean exit — the `container run --rm` client returned 0.
+    fakeProc.emit('close', 0);
+    // Flush the setImmediate-deferred stop + the resolve chain.
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    // Belt-and-suspenders stop fired exactly once, for THIS container.
+    expect(stopContainer).toHaveBeenCalledTimes(1);
+    expect(stopContainer).toHaveBeenCalledWith(
+      expect.stringMatching(/^nanoclaw-test-group-\d+$/),
+    );
+  });
+
+  it('does not delay the turn resolve on the stop (resolve before setImmediate flush)', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+      newSessionId: 'session-noblock',
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    // Advance only microtasks/promise jobs, NOT the setImmediate macrotask, by
+    // awaiting the resolve directly. The turn must settle on the output chain,
+    // independent of the deferred stop.
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.newSessionId).toBe('session-noblock');
+  });
+
+  it('does NOT additionally stop on the timeout path (no double-stop)', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Here is my response',
+      newSessionId: 'session-timeout',
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Fire the hard timeout — killOnTimeout() calls stopContainer ONCE itself.
+    await vi.advanceTimersByTimeAsync(1830000);
+
+    // Container is then reaped; emit the close event.
+    fakeProc.emit('close', 137);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.timedOut).toBe(true);
+    // Exactly one stop (the timeout's own) — the close handler's
+    // belt-and-suspenders stop must be suppressed by shouldStopOnClose.
+    expect(stopContainer).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops on a clean NON-zero exit (--rm may also fail to reap a crashed run)', async () => {
+    // A non-zero exit can also leave a lingering VM; since neither the timeout
+    // nor force-kill path ran, the belt-and-suspenders stop still fires.
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    fakeProc.stderr.push('boom\n');
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(stopContainer).toHaveBeenCalledTimes(1);
+    expect(stopContainer).toHaveBeenCalledWith(
+      expect.stringMatching(/^nanoclaw-test-group-\d+$/),
+    );
+  });
+
+  it('a stop failure on clean close never turns a successful turn into an error', async () => {
+    // The runtime is wedged: stopContainer throws. The turn must still succeed.
+    vi.mocked(stopContainer).mockImplementationOnce(() => {
+      throw new Error('container runtime wedged');
+    });
+
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+      newSessionId: 'session-stopthrows',
+    });
+    await vi.advanceTimersByTimeAsync(10);
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('success');
+    expect(result.newSessionId).toBe('session-stopthrows');
+    // The throw was swallowed and logged at debug, not surfaced as an error.
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ containerName: expect.any(String) }),
+      'Belt-and-suspenders stop on clean close found nothing to stop',
+    );
+  });
+});
+
 describe('container-runner spawn error handling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
