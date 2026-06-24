@@ -249,6 +249,83 @@ describe('checkSessionExpiry', () => {
   });
 });
 
+// ---- Size-based session cap (prevents transcript bloat → container timeout) ----
+// Root cause of the 2026-06-23 CLAIRE "no reply" incident: a session jsonl grew
+// to 19MB within the 4h age window (driven by large tool outputs / pasted blobs,
+// not elapsed time). At that size each turn auto-compacts and exceeds the 30-min
+// CONTAINER_TIMEOUT, so the container is killed before sending a reply. Age/idle
+// thresholds are the wrong axis for a size-driven failure — hence a size cap.
+describe('checkSessionExpiry: size cap', () => {
+  const TWO_HOURS = 2 * 60 * 60 * 1000;
+  const FOUR_HOURS = 4 * 60 * 60 * 1000;
+  const MAX_SIZE = 8 * 1024 * 1024; // 8 MB
+  const fresh = () => {
+    const now = Date.now();
+    return {
+      createdAt: new Date(now - 30 * 60 * 1000).toISOString(),
+      lastUsed: new Date(now - 5 * 60 * 1000).toISOString(),
+    };
+  };
+
+  it('expires a fresh, non-idle session when size exceeds the cap', () => {
+    const { createdAt, lastUsed } = fresh();
+    const result = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      TWO_HOURS,
+      FOUR_HOURS,
+      MAX_SIZE + 1,
+      MAX_SIZE,
+    );
+    expect(result).toMatch(/size/);
+  });
+
+  it('returns null when size is under the cap', () => {
+    const { createdAt, lastUsed } = fresh();
+    const result = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      TWO_HOURS,
+      FOUR_HOURS,
+      MAX_SIZE - 1,
+      MAX_SIZE,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('does not expire on size when sizeBytes is undefined (no file yet)', () => {
+    const { createdAt, lastUsed } = fresh();
+    const result = checkSessionExpiry(
+      createdAt,
+      lastUsed,
+      TWO_HOURS,
+      FOUR_HOURS,
+      undefined,
+      MAX_SIZE,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('remains backward-compatible: omitting size args never triggers size expiry', () => {
+    const { createdAt, lastUsed } = fresh();
+    const result = checkSessionExpiry(createdAt, lastUsed, TWO_HOURS, FOUR_HOURS);
+    expect(result).toBeNull();
+  });
+
+  it('age still takes priority over size (age checked first)', () => {
+    const now = Date.now();
+    const result = checkSessionExpiry(
+      new Date(now - 5 * 60 * 60 * 1000).toISOString(), // 5h old → max age
+      new Date(now - 1 * 60 * 1000).toISOString(),
+      TWO_HOURS,
+      FOUR_HOURS,
+      MAX_SIZE + 1, // also oversize
+      MAX_SIZE,
+    );
+    expect(result).toMatch(/max age/);
+  });
+});
+
 // ---- Pure function tests: parseLastAgentSeq ----
 
 describe('parseLastAgentSeq', () => {

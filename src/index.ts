@@ -34,6 +34,7 @@ import {
   POLL_INTERVAL,
   SESSION_IDLE_MS,
   SESSION_MAX_AGE_MS,
+  SESSION_MAX_SIZE_BYTES,
   TELEGRAM_BOT_POOL,
   TELEGRAM_POOL_PIN,
   TIMEZONE,
@@ -169,6 +170,34 @@ let lastAgentSeq: Record<string, number> = {};
 // the messages re-enter the loop on the next poll.
 const pendingPipedAdvance = new Map<string, number>();
 let messageLoopRunning = false;
+
+/**
+ * Size in bytes of a session's transcript jsonl, or undefined if it does not
+ * exist yet (fresh session, crash mid-write, manual deletion). The on-disk
+ * directory is keyed by the bare group folder (compound agent keys still map
+ * to the group's folder); the session id is the filename. Used by the SIZE
+ * guard in checkSessionExpiry to rotate oversized sessions before they exceed
+ * CONTAINER_TIMEOUT. fs.statSync over a known path — cheap, called once per turn.
+ */
+function sessionFileSize(
+  groupFolder: string,
+  sessionId: string,
+): number | undefined {
+  const file = path.join(
+    DATA_DIR,
+    'sessions',
+    groupFolder,
+    '.claude',
+    'projects',
+    '-workspace-group',
+    `${sessionId}.jsonl`,
+  );
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return undefined; // ENOENT or unreadable → don't trigger size expiry
+  }
+}
 
 /** H2 helpers — small enough to inline but extracted so tests can exercise
  * commit-vs-discard semantics without spinning the full message loop. */
@@ -341,6 +370,16 @@ export function _setRegisteredGroups(
 /** @internal - H2 pending piped-message advance map view, for tests only. */
 export function _pendingPipedAdvanceForTests(): Map<string, number> {
   return pendingPipedAdvance;
+}
+
+/** @internal - SIZE-cap session-file path resolver, exported for integration
+ * testing of the on-disk path formula against real transcripts. Wraps the
+ * module-private sessionFileSize unchanged. */
+export function _sessionFileSizeForTests(
+  groupFolder: string,
+  sessionId: string,
+): number | undefined {
+  return sessionFileSize(groupFolder, sessionId);
 }
 
 /** @internal - H2 primitives exposed for direct unit testing. */
@@ -818,11 +857,17 @@ async function runAgent(
   let sessionId: string | undefined = sessions[effectiveGroupFolder];
   if (sessionId) {
     const { lastUsed, createdAt } = getSessionTimestamps(effectiveGroupFolder);
+    // SIZE guard: measure the transcript jsonl so an oversized session is
+    // rotated before it can blow past CONTAINER_TIMEOUT (see checkSessionExpiry).
+    // The on-disk dir uses the bare group.folder; the session id is the filename.
+    const sessionBytes = sessionFileSize(group.folder, sessionId);
     const expireReason = checkSessionExpiry(
       createdAt,
       lastUsed,
       SESSION_IDLE_MS,
       SESSION_MAX_AGE_MS,
+      sessionBytes,
+      SESSION_MAX_SIZE_BYTES,
     );
     if (expireReason) {
       const idleAge = lastUsed
@@ -920,8 +965,7 @@ async function runAgent(
       // since the phrase can fall outside the host's 200-char stderr tail. The
       // existing backoff in group-queue.ts handles the retry; we just remove
       // the broken session ID.
-      const isStaleSession =
-        !!sessionId && shouldClearSession(output);
+      const isStaleSession = !!sessionId && shouldClearSession(output);
 
       if (isStaleSession) {
         logger.warn(

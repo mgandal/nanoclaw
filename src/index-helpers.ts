@@ -7,15 +7,30 @@
  * Check whether a session should be expired.
  * Returns the expiry reason string, or null if the session is still valid.
  *
- * Two thresholds:
+ * Three thresholds (checked in priority order):
  *   MAX_AGE: session older than maxAgeMs total → expire (checked first)
  *   IDLE: no activity for idleMs → expire
+ *   SIZE: transcript jsonl larger than maxSizeBytes → expire
+ *
+ * The SIZE check guards a failure mode the age/idle checks cannot: a session
+ * can grow large enough (big tool outputs, memory-context injections, pasted
+ * blobs) that each turn auto-compacts and exceeds CONTAINER_TIMEOUT, killing
+ * the container before it replies — and this happens *within* the age window,
+ * so age never trips. `sizeBytes` is supplied by the caller (kept out of this
+ * pure function so it stays fs-free and unit-testable); pass `undefined` when
+ * the transcript file does not exist yet. Size args are optional and trailing
+ * so existing four-arg callers keep their exact behavior.
+ *
+ * Root cause: 2026-06-23 CLAIRE incident (19MB session → 30+ min turns → killed
+ * pre-reply). See src/index.test.ts "checkSessionExpiry: size cap".
  */
 export function checkSessionExpiry(
   createdAt: string | undefined,
   lastUsed: string | undefined,
   idleMs: number,
   maxAgeMs: number,
+  sizeBytes?: number,
+  maxSizeBytes?: number,
 ): string | null {
   const idleAge = lastUsed
     ? Date.now() - new Date(lastUsed).getTime()
@@ -26,6 +41,14 @@ export function checkSessionExpiry(
 
   if (totalAge > maxAgeMs) return 'max age (4h)';
   if (idleAge > idleMs) return 'idle (2h)';
+  if (
+    maxSizeBytes !== undefined &&
+    sizeBytes !== undefined &&
+    sizeBytes > maxSizeBytes
+  ) {
+    const mb = Math.round(sizeBytes / (1024 * 1024));
+    return `size (${mb}MB)`;
+  }
   return null;
 }
 
@@ -125,4 +148,57 @@ export function shouldClearSession(output: {
 }): boolean {
   if (output.status !== 'error') return false;
   return isStaleSessionError(output.error);
+}
+
+/**
+ * Normalize a raw OLLAMA_HOST value into a URL safe to use as a CLIENT fetch
+ * target. The env var is reused for two opposite roles: it is set to the Ollama
+ * SERVER bind address `0.0.0.0` (so Apple Container VMs can reach Ollama on all
+ * interfaces) by com.nanoclaw.ollama-host-env.plist, but the host process also
+ * reads it as the base URL it fetches (event-router.ts:270). A bind-all address
+ * is not connectable, and a scheme-less value throws in `new URL()`, so the
+ * unnormalized value floods the log with ERR_INVALID_URL on every vault change.
+ *
+ * Rules:
+ *  - already has http:// or https:// → keep the scheme, otherwise prepend http://
+ *  - host of `0.0.0.0` (or empty) → rewrite to 127.0.0.1 (loopback is connectable)
+ *  - a scheme-less input with no port → append the Ollama default 11434
+ *
+ * The default port is applied ONLY when the input lacked an explicit scheme
+ * (i.e. it is a bare host/bind address we are interpreting as the local Ollama).
+ * A fully-formed URL the operator wrote, like `https://example.com`, is trusted
+ * verbatim — its port (or the scheme default) is left as-is rather than forced
+ * to 11434. The result is always parseable by `new URL()`; an unparseable input
+ * falls back to the canonical local default.
+ */
+export function normalizeOllamaHost(raw: string): string {
+  const DEFAULT = 'http://127.0.0.1:11434';
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return DEFAULT;
+
+  const hadScheme = /^https?:\/\//i.test(trimmed);
+  const withScheme = hadScheme ? trimmed : `http://${trimmed}`;
+
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return DEFAULT;
+  }
+
+  // A bind-all address (or an empty host) is not a valid connect target.
+  if (url.hostname === '0.0.0.0' || url.hostname === '') {
+    url.hostname = '127.0.0.1';
+  }
+  // Only default the port for bare host inputs; trust an operator-written URL.
+  if (!url.port && !hadScheme) {
+    url.port = '11434';
+  }
+
+  // Preserve the simple `scheme://host:port` shape callers expect (no trailing
+  // slash) when there is no path/query/hash, so equality assertions stay stable.
+  if (url.pathname === '/' && !url.search && !url.hash) {
+    return `${url.protocol}//${url.host}`;
+  }
+  return url.toString();
 }

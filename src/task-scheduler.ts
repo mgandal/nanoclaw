@@ -1,11 +1,14 @@
 import { ChildProcess, execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
+import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  DATA_DIR,
   OPS_ALERT_FOLDER,
   SCHEDULER_POLL_INTERVAL,
+  SESSION_MAX_SIZE_BYTES,
   TIMEZONE,
 } from './config.js';
 import { parseCompoundKey } from './compound-key.js';
@@ -366,8 +369,47 @@ async function runTask(
 
   // For group context mode, use the group's current session
   const sessions = deps.getSessions();
-  const sessionId =
+  let sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+
+  // SIZE guard for the scheduled path. Unlike interactive turns (runAgent in
+  // index.ts), the scheduler does NOT run age/idle expiry — group-context tasks
+  // deliberately keep the session warm across runs. But that is exactly how a
+  // session bloats: each wake resumes and appends. Cap by transcript size so a
+  // task resuming an oversized session rotates to a fresh one instead of pushing
+  // the next turn past CONTAINER_TIMEOUT. Root cause: 2026-06-23 CLAIRE incident.
+  if (sessionId && task.context_mode === 'group') {
+    const file = path.join(
+      DATA_DIR,
+      'sessions',
+      task.group_folder,
+      '.claude',
+      'projects',
+      '-workspace-group',
+      `${sessionId}.jsonl`,
+    );
+    let sizeBytes: number | undefined;
+    try {
+      sizeBytes = fs.statSync(file).size;
+    } catch {
+      sizeBytes = undefined; // missing/unreadable → leave session as-is
+    }
+    if (sizeBytes !== undefined && sizeBytes > SESSION_MAX_SIZE_BYTES) {
+      logger.warn(
+        {
+          taskId: task.id,
+          group: task.group_folder,
+          staleSessionId: sessionId,
+          sizeMB: Math.round(sizeBytes / (1024 * 1024)),
+          capMB: Math.round(SESSION_MAX_SIZE_BYTES / (1024 * 1024)),
+        },
+        'Oversized session in scheduled task — rotating to fresh session',
+      );
+      delete sessions[task.group_folder];
+      deleteSession(task.group_folder);
+      sessionId = undefined;
+    }
+  }
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the

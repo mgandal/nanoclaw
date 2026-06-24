@@ -2,6 +2,7 @@ import os from 'os';
 import path from 'path';
 
 import { readEnvFile } from './env.js';
+import { normalizeOllamaHost } from './index-helpers.js';
 import { isValidTimezone } from './timezone.js';
 
 // Read config values from .env (falls back to process.env).
@@ -102,6 +103,14 @@ export const SESSION_MAX_AGE_MS = parseInt(
   process.env.SESSION_MAX_AGE_MS || `${4 * 60 * 60 * 1000}`,
   10,
 ); // 4 hours
+// SIZE: transcript jsonl larger than this → expire session before the next turn.
+// Guards the size-driven timeout failure (large sessions auto-compact and exceed
+// CONTAINER_TIMEOUT → killed pre-reply) that age/idle cannot catch. Offending
+// sessions in the 2026-06-23 incident were 10–20MB; healthy ones stay well under.
+export const SESSION_MAX_SIZE_BYTES = parseInt(
+  process.env.SESSION_MAX_SIZE_BYTES || `${8 * 1024 * 1024}`,
+  10,
+); // 8 MB
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '8', 10) || 8,
@@ -200,7 +209,13 @@ export const MAX_CONTAINER_SPAWNS_PER_HOUR = 30;
 export const MAX_ERRORS_PER_HOUR = 20;
 
 // Ollama classification
-export const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://localhost:11434';
+// OLLAMA_HOST doubles as the server bind address (0.0.0.0, set by the
+// ollama-host-env plist for container reachability) and a client fetch target.
+// Normalize the bind/scheme-less form into a connectable URL so consumers like
+// event-router's fetch don't hit ERR_INVALID_URL. See normalizeOllamaHost.
+export const OLLAMA_HOST = normalizeOllamaHost(
+  process.env.OLLAMA_HOST || 'http://localhost:11434',
+);
 export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
 export const OLLAMA_TIMEOUT = parseInt(
   process.env.OLLAMA_TIMEOUT || '30000',
