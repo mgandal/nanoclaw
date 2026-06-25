@@ -159,6 +159,7 @@ import {
 import { routeClassifiedEvent } from './event-routing.js';
 import { BusWatcher } from './bus-watcher.js';
 import { buildBusPrompt } from './bus-dispatch.js';
+import { startFollowupHubPoller } from './followup-hub-poller.js';
 
 let lastSeq = 0;
 let sessions: Record<string, string> = {};
@@ -1821,6 +1822,10 @@ async function main(): Promise<void> {
   // `stop` is called via optional chaining, so the null initializer is safe.
   let proactiveHandle: { stop: () => void } | null = null;
 
+  // Follow-up Hub write-back poller: long-polls the relay topic so checked items
+  // in the published mini-app are applied to followups.md within seconds.
+  const followupHubHandle = startFollowupHubPoller();
+
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
@@ -1828,6 +1833,7 @@ async function main(): Promise<void> {
     busWatcher?.stop();
     // 1a. Stop proactive watchers (cheap, synchronous)
     proactiveHandle?.stop();
+    followupHubHandle.stop();
     // 2. Stop accepting new work (signals containers to wind down)
     await queue.shutdown(15000);
     // 2a. Flip any tasks stuck in 'running' back to 'active'. If a task was

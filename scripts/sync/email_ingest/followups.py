@@ -1,5 +1,6 @@
 """Parse, serialize, and dedupe the followups.md file."""
 
+import hashlib
 import logging
 import os
 import re
@@ -134,6 +135,45 @@ def parse_file(path: Path) -> list[FollowUp]:
         i += 1
 
     return items
+
+
+def hub_id(date: str, who: str, what: str) -> str:
+    """Stable id for a follow-up as the mini-app sees it.
+
+    MUST match the page's formula exactly:
+        "f-" + sha1(date + who + what).hexdigest()[:10]
+    where `date` is the heading date (created[:10]), `who` is the raw heading
+    remainder (incl. any "<email>"), and `what` is the what field. This is the
+    single source of truth for that id — the page generator and the write-back
+    matcher both go through it so they can never drift.
+    """
+    return "f-" + hashlib.sha1((date + who + what).encode()).hexdigest()[:10]
+
+
+def mark_done_by_ids(path: Path, ids: list[str]) -> list[str]:
+    """Flip open follow-ups whose hub_id is in `ids` to status 'done'.
+
+    Returns the ids that were actually flipped (open -> done). Ids that match
+    nothing, or match an entry already done/stale/closed, are omitted from the
+    return so the caller reports only real changes. The file is rewritten only
+    when at least one entry changed.
+    """
+    wanted = set(ids)
+    if not wanted:
+        return []
+    path = Path(path)
+    items = parse_file(path)
+    marked: list[str] = []
+    changed = False
+    for it in items:
+        iid = hub_id(it.created[:10], it.who, it.what)
+        if iid in wanted and it.status == "open":
+            it.status = "done"
+            marked.append(iid)
+            changed = True
+    if changed:
+        write_file(path, items)
+    return marked
 
 
 def _render_entry(f: FollowUp) -> list[str]:
