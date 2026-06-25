@@ -395,8 +395,13 @@ describe('parseTextStyles — italic', () => {
     );
   });
 
-  it('converts *italic* to _italic_ on telegram', () => {
-    expect(parseTextStyles('*italic*', 'telegram')).toBe('_italic_');
+  it('converts inline *italic* to _italic_ on telegram', () => {
+    // NOTE: a bare `*word*` ALONE on its own line is treated as a bold header
+    // (see "single-asterisk header lines"), so this case uses mid-sentence
+    // italic, which is the span that genuinely stays italic.
+    expect(parseTextStyles('an *italic* word', 'telegram')).toBe(
+      'an _italic_ word',
+    );
   });
 
   it('bold-before-italic: **bold** *italic* → *bold* _italic_', () => {
@@ -422,6 +427,83 @@ describe('parseTextStyles — headings', () => {
   it('only converts headings at line start', () => {
     const input = 'not a ## heading in middle';
     expect(parseTextStyles(input, 'whatsapp')).toBe(input);
+  });
+});
+
+describe('parseTextStyles — single-asterisk header lines → bold', () => {
+  // Agents frequently emit section headers as a single-asterisk span on its
+  // own line (`*Today*`), meaning bold. Standard Markdown reads single `*` as
+  // italic, but a span that is the ENTIRE line is unambiguously a header, so
+  // render it bold (`*…*` on telegram/whatsapp/slack) rather than italic.
+
+  it('renders a standalone *Header* line as bold on telegram', () => {
+    expect(parseTextStyles('*Today*', 'telegram')).toBe('*Today*');
+  });
+
+  it('renders a multi-word standalone header as bold', () => {
+    expect(parseTextStyles('*NEEDS YOUR DECISION*', 'telegram')).toBe(
+      '*NEEDS YOUR DECISION*',
+    );
+  });
+
+  it('keeps a leading emoji/pin before a standalone header', () => {
+    expect(parseTextStyles('📋 *Follow-ups*', 'telegram')).toBe(
+      '📋 *Follow-ups*',
+    );
+  });
+
+  it('treats a standalone header as bold on whatsapp too', () => {
+    expect(parseTextStyles('*Overdue*', 'whatsapp')).toBe('*Overdue*');
+  });
+
+  it('still renders inline *italic* mid-sentence as italic', () => {
+    expect(parseTextStyles('this is *important* today', 'telegram')).toBe(
+      'this is _important_ today',
+    );
+  });
+
+  it('header on its own line, italic inline elsewhere', () => {
+    const input = '*Today*\nthis is *important* now';
+    expect(parseTextStyles(input, 'telegram')).toBe(
+      '*Today*\nthis is _important_ now',
+    );
+  });
+
+  it('does not treat a **bold** line as needing header handling', () => {
+    expect(parseTextStyles('**Already Bold**', 'telegram')).toBe(
+      '*Already Bold*',
+    );
+  });
+
+  it('bolds a label followed by an em-dash at line start', () => {
+    expect(
+      parseTextStyles('*System alert* — 401 failures today', 'telegram'),
+    ).toBe('*System alert* — 401 failures today');
+  });
+
+  it('bolds a label followed by a colon at line start', () => {
+    expect(parseTextStyles('*Note*: check the logs', 'telegram')).toBe(
+      '*Note*: check the logs',
+    );
+  });
+
+  it('bolds an emoji-led label followed by an em-dash', () => {
+    expect(parseTextStyles('💬 *Slack* — lookup failed', 'telegram')).toBe(
+      '💬 *Slack* — lookup failed',
+    );
+  });
+
+  it('does NOT bold a label-like span mid-sentence', () => {
+    // The span is not at line start, so it stays italic.
+    expect(parseTextStyles('see *this*: details', 'telegram')).toBe(
+      'see _this_: details',
+    );
+  });
+
+  it('does NOT bold when an em-dash appears but span is not at line start', () => {
+    expect(parseTextStyles('foo *bar* — baz', 'telegram')).toBe(
+      'foo _bar_ — baz',
+    );
   });
 });
 
@@ -478,9 +560,130 @@ describe('parseTextStyles — code block protection', () => {
   });
 
   it('transforms text outside fenced block but not inside', () => {
-    const input = '**bold**\n```\n**raw**\n```\n*italic*';
+    // Trailing italic is mid-line ("an *x* y") so it stays italic — a bare
+    // `*x*` alone on a line would be promoted to a bold header instead.
+    const input = '**bold**\n```\n**raw**\n```\nan *italic* tail';
     expect(parseTextStyles(input, 'telegram')).toBe(
-      '*bold*\n```\n**raw**\n```\n_italic_',
+      '*bold*\n```\n**raw**\n```\nan _italic_ tail',
+    );
+  });
+});
+
+describe('parseTextStyles — telegram marker balance (Markdown v1)', () => {
+  // Telegram Markdown v1 rejects the ENTIRE message (silent plain-text
+  // fallback) if literal `_` or `*` leave the emphasis markers unbalanced.
+  // Identifiers like CLAUDE_CODE_OAUTH_TOKEN or file_name.py are the common
+  // trigger — their underscores must be escaped so v1 treats them as literal.
+  const unescapedUnderscores = (s: string): number =>
+    (s.match(/(?<!\\)_/g) ?? []).length;
+  const unescapedStars = (s: string): number =>
+    (s.match(/(?<!\\)\*/g) ?? []).length;
+
+  it('escapes underscores inside snake_case identifiers', () => {
+    expect(
+      parseTextStyles(
+        'Token CLAUDE_CODE_OAUTH_TOKEN may be expired.',
+        'telegram',
+      ),
+    ).toBe('Token CLAUDE\\_CODE\\_OAUTH\\_TOKEN may be expired.');
+  });
+
+  it('keeps the underscore count even when an identifier is present', () => {
+    const out = parseTextStyles(
+      'See file_name_here.py and other_var today.',
+      'telegram',
+    );
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+  });
+
+  it('does not break intentional _italic_ when an identifier is also present', () => {
+    const out = parseTextStyles('*Today* uses my_var_name here', 'telegram');
+    // The intentional emphasis survives as a balanced pair...
+    expect(out).toContain('_Today_');
+    // ...and the identifier underscores are escaped (literal).
+    expect(out).toContain('my\\_var\\_name');
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+  });
+
+  it('full digest with identifier headers stays balanced', () => {
+    const raw = [
+      '*System alert* — CLAUDE_CODE_OAUTH_TOKEN may be expired.',
+      '',
+      '*Today*',
+      '• 12:00 — Lab Meeting',
+      '',
+      '*Awaiting you*',
+      '• billing fix — see followups.md',
+    ].join('\n');
+    const out = parseTextStyles(raw, 'telegram');
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+    expect(unescapedStars(out) % 2).toBe(0);
+  });
+
+  // Regression: a leading- or trailing-underscore identifier has a balanced
+  // underscore count to begin with; a naive "escape only when flanked by word
+  // chars on BOTH sides" rule escapes the interior `_` but not the boundary
+  // one, turning balanced → UNBALANCED and silently breaking the whole message.
+  it('keeps balance for a leading-underscore identifier', () => {
+    const out = parseTextStyles('set _internal_state now', 'telegram');
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+    expect(out).toBe('set \\_internal\\_state now');
+  });
+
+  it('keeps balance for a single leading-underscore token', () => {
+    // A lone `_id` would leave one stray `_` and break the message.
+    const out = parseTextStyles('use _id today', 'telegram');
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+    expect(out).toBe('use \\_id today');
+  });
+
+  it('keeps balance for a dunder identifier', () => {
+    const out = parseTextStyles('override __init__ here', 'telegram');
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+  });
+
+  it('preserves italic AND escapes an identifier on the same line', () => {
+    const out = parseTextStyles('mix _this_ and file_name here', 'telegram');
+    expect(out).toContain('_this_'); // intentional italic survives
+    expect(out).toContain('file\\_name'); // identifier escaped
+    expect(unescapedUnderscores(out) % 2).toBe(0);
+  });
+
+  it('escapes a stray word-internal asterisk to keep balance', () => {
+    const out = parseTextStyles('compute 2*3 now', 'telegram');
+    expect(unescapedStars(out) % 2).toBe(0);
+    expect(out).toBe('compute 2\\*3 now');
+  });
+
+  it('escaping is idempotent: a second pass does not double-escape', () => {
+    // parseTextStyles is non-idempotent overall (one-transform invariant), but
+    // the marker escaping specifically must not turn \_ into \\_ / \* into \\*.
+    for (const input of [
+      'set _internal_state now',
+      'CLAUDE_CODE_OAUTH_TOKEN here',
+      '*System alert* — file_name.py down',
+      'compute 2*3 now',
+    ]) {
+      const once = parseTextStyles(input, 'telegram');
+      expect(parseTextStyles(once, 'telegram')).toBe(once);
+    }
+  });
+
+  it('does not add escapes on non-telegram channels', () => {
+    const input = 'CLAUDE_CODE_OAUTH_TOKEN and _x_ and 2*3';
+    expect(parseTextStyles(input, 'whatsapp')).not.toContain('\\');
+    expect(parseTextStyles(input, 'slack')).not.toContain('\\');
+  });
+
+  it('does not escape underscores inside code (still literal, but protected)', () => {
+    const out = parseTextStyles('run `my_func()` now', 'telegram');
+    // Code is protected verbatim — no backslash escaping inside it.
+    expect(out).toBe('run `my_func()` now');
+  });
+
+  it('leaves a normal _italic_ pair untouched', () => {
+    expect(parseTextStyles('say _this_ now', 'telegram')).toBe(
+      'say _this_ now',
     );
   });
 });
