@@ -313,11 +313,41 @@ function splitProtectedRegions(text: string): Segment[] {
 function transformSegment(text: string, channel: ChannelType): string {
   let t = text;
 
+  // Telegram-only, step −1: escape LITERAL underscores BEFORE the italic step.
+  //   Telegram Markdown v1 rejects the ENTIRE message (silent plain-text
+  //   fallback, every marker renders literally) if `_` are unbalanced.
+  //   Identifiers like CLAUDE_CODE_OAUTH_TOKEN, file_name.py, _internal_state,
+  //   or __init__ contain literal underscores that throw off the balance.
+  //   This MUST run before step 1, which converts `*italic*` → `_italic_`:
+  //   escaping after that would also escape the underscores we just inserted.
+  //   Genuine `_italic_` that a human typed is protected first (word-boundary
+  //   pairs), then every remaining word-adjacent `_` is escaped — so both the
+  //   identifier case AND underscore-italic survive with balanced markers.
+  if (channel === 'telegram') {
+    t = escapeTelegramUnderscores(t);
+  }
+
   // Order matters: italic before bold.
   // The italic regex won't match **bold** (it requires the char after the opening *
   // to be a non-* non-space), so running italic first is safe.  If we ran bold
   // first (**bold** → *bold*), the italic step would immediately re-convert *bold*
   // to _bold_, producing wrong output.
+
+  // 0. Header / label lines: a single-asterisk span at the START of a line is
+  //    an agent-emitted section header meaning bold, not italic. Promote it to
+  //    **…** so the bold step (2) renders it bold instead of the italic step
+  //    (1) turning it into _…_. Two shapes qualify:
+  //      a) the span is the ENTIRE line       → `*Today*`, `📋 *Follow-ups*`
+  //      b) the span is a label before an      → `*System alert* — 401 down`
+  //         em/en-dash or colon                  `*Note*: see logs`
+  //    An optional leading emoji/pin is preserved by the [^\w*\n]* lead group
+  //    (the `u` flag keeps surrogate-pair emoji intact). Spans that are NOT at
+  //    line start (`see *this*: x`, `foo *bar* — baz`) never match, so genuine
+  //    inline italics are untouched.
+  t = t.replace(
+    /^([^\w*\n]*)\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?=[ \t]*(?:$|[—–:]))/gmu,
+    '$1**$2**',
+  );
 
   // 1. Italic: *text* → _text_ (whatsapp/telegram/slack use _)
   t = t.replace(/(?<!\*)\*(?=[^\s*])([^*\n]+?)(?<=[^\s*])\*(?!\*)/g, '_$1_');
@@ -348,6 +378,53 @@ function transformSegment(text: string, channel: ChannelType): string {
   // 5. Horizontal rules: strip them
   t = t.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '');
 
+  // 6. Escape word-internal `*` for Telegram Markdown v1 (underscores are
+  //    already handled in step −1, before italic conversion). After steps 1-2
+  //    every intentional `*` is a balanced bold pair whose markers sit on a
+  //    space/boundary outer edge; a `*` flanked by word chars on BOTH sides is
+  //    therefore a stray literal (e.g. `2*3`) and is escaped so it can't
+  //    unbalance the message.
+  if (channel === 'telegram') {
+    t = t.replace(/(?<!\\)(?<=\w)\*(?=\w)/g, '\\*');
+  }
+
+  return t;
+}
+
+/**
+ * Escape literal underscores that would unbalance a Telegram Markdown v1
+ * message, while preserving genuine `_italic_` emphasis.
+ *
+ * Telegram v1 silently drops the whole message to plain text if `_` markers are
+ * unbalanced, and identifiers like `CLAUDE_CODE_OAUTH_TOKEN`, `file_name.py`,
+ * `_internal_state`, or `__init__` carry literal underscores. We:
+ *   1. Protect word-boundary `_italic_` spans behind a control-char sentinel
+ *      (an opener at start/after-non-word + non-space, a closer before
+ *      end/non-word + after non-space — the same boundary rule v1 itself uses).
+ *   2. Escape every remaining underscore adjacent to a word char on either side.
+ *   3. Restore the protected italic spans verbatim.
+ *
+ * The sentinel uses U+0000, which never appears in Claude's Markdown output, so
+ * it cannot collide with real text.
+ */
+function escapeTelegramUnderscores(text: string): string {
+  // Word-boundary italic: _x_  (opener: start|non-word, then non-space;
+  // closer: non-space, then end|non-word). Captures the leading boundary char
+  // so it isn't consumed, and disallows internal newlines.
+  const ITALIC = /(^|[^\w\\])_(?=\S)((?:[^_\n]*\S)?)_(?!\w)/g;
+  const spans: string[] = [];
+  let t = text.replace(ITALIC, (_m, lead: string, inner: string) => {
+    spans.push(`_${inner}_`);
+    return `${lead} ${spans.length - 1} `;
+  });
+
+  // Escape underscores touching a word char on either side (identifiers).
+  // The `(?<!\\)` guard keeps this idempotent — an already-escaped `\_` is not
+  // re-escaped into `\\_` if the transform is ever applied twice.
+  t = t.replace(/(?<!\\)(?:(?<=\w)_|_(?=\w))/g, '\\_');
+
+  // Restore protected italic spans.
+  t = t.replace(/ (\d+) /g, (_m, i: string) => spans[Number(i)]);
   return t;
 }
 

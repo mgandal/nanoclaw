@@ -85,7 +85,10 @@ describe('parseTextStyles — unicode and emoji', () => {
   });
 
   it('preserves CJK characters in formatted text on telegram', () => {
-    expect(parseTextStyles('*日本語*', 'telegram')).toBe('_日本語_');
+    // Mid-sentence italic (a bare `*x*` line is now promoted to a bold header).
+    expect(parseTextStyles('say *日本語* now', 'telegram')).toBe(
+      'say _日本語_ now',
+    );
   });
 });
 
@@ -161,7 +164,9 @@ describe('parseTextStyles — code blocks with language tags', () => {
   });
 
   it('transforms text around code block with language tag', () => {
-    const input = '**bold**\n```js\ncode\n```\n*italic*';
+    // Trailing italic is mid-line ("an *x* y"); a bare `*x*` line would be
+    // promoted to a bold header instead.
+    const input = '**bold**\n```js\ncode\n```\nan *italic* tail';
     const result = parseTextStyles(input, 'whatsapp');
     expect(result).toContain('*bold*');
     expect(result).toContain('```js\ncode\n```');
