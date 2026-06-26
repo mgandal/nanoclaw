@@ -271,7 +271,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 
 <script>
-// Relay via ntfy.sh — no auth required; agent polls this topic every 30 min
+// Relay via ntfy.sh — no auth required; host poller long-polls this topic, applies in ~seconds
 const RELAY_TOPIC = 'nanoclaw-relay-7406c450';
 const RELAY_URL = `https://ntfy.sh/${RELAY_TOPIC}`;
 // Data is inlined at publish time (no external fetch — eliminates the broken gist token)
@@ -341,7 +341,7 @@ async function submit() {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (!res.ok) throw new Error(`ntfy ${res.status}`);
     btn.classList.add('success');
-    btn.textContent = `✓ Submitted ${payload.items.length} item${payload.items.length !== 1 ? 's' : ''} — processed in ~30 min`;
+    btn.textContent = `✓ Marked ${payload.items.length} done — updating now…`;
     setTimeout(() => {
       checked.clear();
       document.querySelectorAll('.item.checked').forEach(el => el.classList.remove('checked'));
