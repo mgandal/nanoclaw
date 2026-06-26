@@ -331,86 +331,91 @@ def run_followups_passes(
         now = datetime.now(timezone.utc)
     new_emails = new_emails or []
 
-    items = _followups_mod.parse_file(FOLLOWUPS_FILE)
+    # Hold the followups lock across this whole read-modify-write. Classification
+    # below can take tens of seconds; without the lock a Follow-up Hub check-off
+    # (mark_done_by_ids) landing in that window would be clobbered by our write
+    # at the end (or vice-versa). Both writers share email_ingest.followups.followups_lock.
+    with _followups_mod.followups_lock(FOLLOWUPS_FILE):
+        items = _followups_mod.parse_file(FOLLOWUPS_FILE)
 
-    items, closed_count = _closure_mod.apply_closure(items, gmail_adapter, exchange_adapter, now=now)
-    items, aged_count = _aging_mod.apply_aging(items, now=now)
+        items, closed_count = _closure_mod.apply_closure(items, gmail_adapter, exchange_adapter, now=now)
+        items, aged_count = _aging_mod.apply_aging(items, now=now)
 
-    # --- Task closure (auto-close tasks table from email activity) ---
-    task_closure_stats = {"closed": 0, "suggested": 0, "cooling_off": 0, "skipped": 0, "ran": False}
-    if os.environ.get("TASK_CLOSURE_ENABLED", "1") == "1":
-        try:
-            from email_ingest.task_closure import (
-                scan_and_close, load_profile, _load_contacts_from_claude_md,
-                CONTACTS_PATH,
-            )
-            from pathlib import Path as _P
-            project_root = _P(__file__).resolve().parents[2]
-            db_path = project_root / "store" / "messages.db"
-            cache_dir = _P.home() / ".cache" / "email-ingest"
-            jsonl = cache_dir / "task-closures.jsonl"
-            pending = cache_dir / "task-closures-pending.json"
-            profile_path = cache_dir / "task-closure-profile.json"
-            contacts = _load_contacts_from_claude_md(CONTACTS_PATH)
-            profile = load_profile(profile_path)
-            # Default to dry-run; user opts into live closures via TASK_CLOSURE_DRY_RUN=0
-            # (see Stage I3 of docs/superpowers/specs/2026-05-06-email-task-closure-design.md).
-            dry_run = os.environ.get("TASK_CLOSURE_DRY_RUN", "1") == "1"
-            per_run_cap = int(os.environ.get("TASK_CLOSURE_CAP", "3"))
-            report = scan_and_close(
-                db_path=db_path,
-                gmail_adapter=gmail_adapter,
-                exchange_adapter=exchange_adapter,
-                profile=profile,
-                contacts=contacts,
-                followups=items,
-                now=now,
-                jsonl_path=jsonl,
-                pending_path=pending,
-                per_run_cap=per_run_cap,
-                dry_run=dry_run,
-            )
-            task_closure_stats = {
-                "closed": report.closed_count,
-                "suggested": report.suggested_count,
-                "cooling_off": report.cooling_off_count,
-                "skipped": report.skipped_count,
-                "ran": True,
-                "dry_run": dry_run,
-            }
-            log.info(
-                "task-closure: closed=%d suggested=%d cooling_off=%d skipped=%d (dry_run=%s)",
-                report.closed_count, report.suggested_count,
-                report.cooling_off_count, report.skipped_count, dry_run,
-            )
-        except Exception as e:
-            log.exception("task-closure failed (non-fatal): %s", e)
+        # --- Task closure (auto-close tasks table from email activity) ---
+        task_closure_stats = {"closed": 0, "suggested": 0, "cooling_off": 0, "skipped": 0, "ran": False}
+        if os.environ.get("TASK_CLOSURE_ENABLED", "1") == "1":
+            try:
+                from email_ingest.task_closure import (
+                    scan_and_close, load_profile, _load_contacts_from_claude_md,
+                    CONTACTS_PATH,
+                )
+                from pathlib import Path as _P
+                project_root = _P(__file__).resolve().parents[2]
+                db_path = project_root / "store" / "messages.db"
+                cache_dir = _P.home() / ".cache" / "email-ingest"
+                jsonl = cache_dir / "task-closures.jsonl"
+                pending = cache_dir / "task-closures-pending.json"
+                profile_path = cache_dir / "task-closure-profile.json"
+                contacts = _load_contacts_from_claude_md(CONTACTS_PATH)
+                profile = load_profile(profile_path)
+                # Default to dry-run; user opts into live closures via TASK_CLOSURE_DRY_RUN=0
+                # (see Stage I3 of docs/superpowers/specs/2026-05-06-email-task-closure-design.md).
+                dry_run = os.environ.get("TASK_CLOSURE_DRY_RUN", "1") == "1"
+                per_run_cap = int(os.environ.get("TASK_CLOSURE_CAP", "3"))
+                report = scan_and_close(
+                    db_path=db_path,
+                    gmail_adapter=gmail_adapter,
+                    exchange_adapter=exchange_adapter,
+                    profile=profile,
+                    contacts=contacts,
+                    followups=items,
+                    now=now,
+                    jsonl_path=jsonl,
+                    pending_path=pending,
+                    per_run_cap=per_run_cap,
+                    dry_run=dry_run,
+                )
+                task_closure_stats = {
+                    "closed": report.closed_count,
+                    "suggested": report.suggested_count,
+                    "cooling_off": report.cooling_off_count,
+                    "skipped": report.skipped_count,
+                    "ran": True,
+                    "dry_run": dry_run,
+                }
+                log.info(
+                    "task-closure: closed=%d suggested=%d cooling_off=%d skipped=%d (dry_run=%s)",
+                    report.closed_count, report.suggested_count,
+                    report.cooling_off_count, report.skipped_count, dry_run,
+                )
+            except Exception as e:
+                log.exception("task-closure failed (non-fatal): %s", e)
 
-    commitments_added = 0
-    asks_added = 0
-    decisions_retained = 0
+        commitments_added = 0
+        asks_added = 0
+        decisions_retained = 0
 
-    for email, relevance in new_emails:
-        direction = _email_qualifies_for_extraction(email, relevance)
-        if direction is None:
-            continue
-        result = _extractor_mod.extract(email, direction=direction)
-        if result is None:
-            continue
-        if result.significant and direction == "sent":
-            decisions_retained += _retain_decision(email, result)
-        fu = _ext_to_followup(email, result)
-        if fu is None:
-            continue
-        if any(_followups_mod.is_duplicate(fu, existing) for existing in items):
-            continue
-        items.append(fu)
-        if fu.kind == "i-owe":
-            commitments_added += 1
-        else:
-            asks_added += 1
+        for email, relevance in new_emails:
+            direction = _email_qualifies_for_extraction(email, relevance)
+            if direction is None:
+                continue
+            result = _extractor_mod.extract(email, direction=direction)
+            if result is None:
+                continue
+            if result.significant and direction == "sent":
+                decisions_retained += _retain_decision(email, result)
+            fu = _ext_to_followup(email, result)
+            if fu is None:
+                continue
+            if any(_followups_mod.is_duplicate(fu, existing) for existing in items):
+                continue
+            items.append(fu)
+            if fu.kind == "i-owe":
+                commitments_added += 1
+            else:
+                asks_added += 1
 
-    _followups_mod.write_file(FOLLOWUPS_FILE, items)
+        _followups_mod.write_file(FOLLOWUPS_FILE, items)
 
     return {
         "followups_closed": closed_count,

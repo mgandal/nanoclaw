@@ -112,3 +112,6 @@ scripts/markitdown/venv/
 groups/*/knowledge-base/**/CLAUDE.md
 scripts/skill-evolve/venv/
 scripts/skill-evolve/runs/*/scratch/
+
+# Follow-up Hub write-back lock (runtime, shared between poller + email-ingest)
+groups/global/state/followups.md.lock

@@ -1,14 +1,52 @@
 """Parse, serialize, and dedupe the followups.md file."""
 
+from __future__ import annotations  # PEP 604 (X | Y) annotations under Python 3.9
+
+import contextlib
 import hashlib
 import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from email_ingest.types import FollowUp, JACCARD_THRESHOLD
 
 log = logging.getLogger("email-ingest.followups")
+
+try:
+    import fcntl  # POSIX only (macOS host + Linux container both have it)
+    _HAVE_FCNTL = True
+except ImportError:  # pragma: no cover - non-POSIX
+    _HAVE_FCNTL = False
+
+
+@contextlib.contextmanager
+def followups_lock(path: Path | str):
+    """Hold an exclusive advisory lock for the whole read-modify-write of
+    followups.md. Two independent writers touch this file — the 4-hourly
+    email-ingest pipeline (read -> classify for ~tens of seconds -> write) and
+    the Follow-up Hub poller (mark_done_by_ids). Without a shared lock, whichever
+    writes last clobbers the other (a hub check-off vanishes, or an ingest
+    update is lost). Both wrap their RMW in this lock.
+
+    The lock is a sidecar `<path>.lock` file (flock), so it never interferes
+    with the atomic os.replace of the data file itself. No-op on non-POSIX.
+    """
+    if not _HAVE_FCNTL:
+        yield
+        return
+    lock_path = str(path) + ".lock"
+    os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
+    f = open(lock_path, "w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        finally:
+            f.close()
 
 EMPTY_FILE_TEMPLATE = """# Follow-ups
 
@@ -137,42 +175,55 @@ def parse_file(path: Path) -> list[FollowUp]:
     return items
 
 
-def hub_id(date: str, who: str, what: str) -> str:
+def hub_id(date: str, who: str, what: str, kind: str) -> str:
     """Stable id for a follow-up as the mini-app sees it.
 
     MUST match the page's formula exactly:
-        "f-" + sha1(date + who + what).hexdigest()[:10]
-    where `date` is the heading date (created[:10]), `who` is the raw heading
-    remainder (incl. any "<email>"), and `what` is the what field. This is the
-    single source of truth for that id — the page generator and the write-back
-    matcher both go through it so they can never drift.
+        "f-" + sha1(date + kind + who + what).hexdigest()[:10]
+    where `date` is the heading date (created[:10]), `kind` is i-owe/they-owe-me,
+    `who` is the raw heading remainder (incl. any "<email>"), and `what` is the
+    what field. This is the single source of truth for that id — the page
+    generator and the write-back matcher both go through it so they can never
+    drift. `kind` is part of the hash because the same date+who+what can legally
+    appear under both kinds (one i-owe, one they-owe-me on a single thread); a
+    kind-blind id would collide and close the wrong obligation.
     """
-    return "f-" + hashlib.sha1((date + who + what).encode()).hexdigest()[:10]
+    return "f-" + hashlib.sha1((date + kind + who + what).encode()).hexdigest()[:10]
 
 
-def mark_done_by_ids(path: Path, ids: list[str]) -> list[str]:
-    """Flip open follow-ups whose hub_id is in `ids` to status 'done'.
+def mark_done_by_ids(path: Path, ids: list[str], closed_at: str | None = None) -> list[str]:
+    """Close open follow-ups whose hub_id is in `ids`.
 
-    Returns the ids that were actually flipped (open -> done). Ids that match
-    nothing, or match an entry already done/stale/closed, are omitted from the
-    return so the caller reports only real changes. The file is rewritten only
-    when at least one entry changed.
+    Sets status='closed' (the status the rest of the pipeline understands, so
+    write_file buckets them into ## Closed and aging/closure skip them) with
+    closed_reason + closed_at provenance. `closed_at` defaults to now (UTC ISO).
+
+    Returns the ids actually closed (were open). Ids that match nothing, or an
+    entry already non-open, are omitted so the caller reports only real changes.
+    The file is rewritten only when at least one entry changed.
     """
     wanted = set(ids)
     if not wanted:
         return []
+    if closed_at is None:
+        closed_at = datetime.now(timezone.utc).isoformat()
     path = Path(path)
-    items = parse_file(path)
-    marked: list[str] = []
-    changed = False
-    for it in items:
-        iid = hub_id(it.created[:10], it.who, it.what)
-        if iid in wanted and it.status == "open":
-            it.status = "done"
-            marked.append(iid)
-            changed = True
-    if changed:
-        write_file(path, items)
+    # Hold the lock across parse->write so a concurrent email-ingest RMW can't
+    # clobber these closes (and vice-versa).
+    with followups_lock(path):
+        items = parse_file(path)
+        marked: list[str] = []
+        changed = False
+        for it in items:
+            iid = hub_id(it.created[:10], it.who, it.what, it.kind)
+            if iid in wanted and it.status == "open":
+                it.status = "closed"
+                it.closed_reason = "user-marked-done"
+                it.closed_at = closed_at
+                marked.append(iid)
+                changed = True
+        if changed:
+            write_file(path, items)
     return marked
 
 

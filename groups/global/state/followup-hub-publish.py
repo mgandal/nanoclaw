@@ -29,20 +29,20 @@ RELAY_TOPIC = "nanoclaw-relay-7406c450"
 API = "https://here.now"
 
 # Shared id + write-back logic lives in email_ingest.followups so the page
-# generator and the matcher can never drift. Fall back to a local copy of the
-# id formula if that module isn't importable (e.g. minimal container env) — but
-# --apply (which needs mark_done_by_ids) hard-requires the import.
+# generator and the matcher can NEVER drift — there is no local copy of the id
+# formula. We import from EMAIL_INGEST_PATH (set by the host poller) or the
+# known repo mount (/workspace/project/scripts/sync in-container). If neither
+# works that's a real misconfiguration, so fail loudly rather than silently
+# generating ids under a divergent formula that --apply could never match.
+for _sync in [os.environ.get("EMAIL_INGEST_PATH"),
+              "/workspace/project/scripts/sync"]:
+    if _sync and os.path.isdir(_sync) and _sync not in sys.path:
+        sys.path.insert(0, _sync)
 try:
-    _SYNC = os.environ.get("EMAIL_INGEST_PATH")
-    if _SYNC and _SYNC not in sys.path:
-        sys.path.insert(0, _SYNC)
     from email_ingest.followups import hub_id as _hub_id, mark_done_by_ids as _mark_done_by_ids
-    _HAVE_INGEST = True
-except Exception:
-    _HAVE_INGEST = False
-    def _hub_id(date, who, what):
-        return "f-" + hashlib.sha1((date + who + what).encode()).hexdigest()[:10]
-    _mark_done_by_ids = None
+except ImportError as e:
+    sys.exit(f"ERROR: cannot import email_ingest.followups ({e}); "
+             f"set EMAIL_INGEST_PATH to the scripts/sync dir")
 
 def load_key():
     # home dir does NOT persist across containers; prefer workspace-pinned key
@@ -89,7 +89,7 @@ def parse_open_followups(path):
                 past = datetime.date.fromisoformat(due[:10]) < today
             except ValueError:
                 past = False
-        rid = _hub_id(date, who, what)
+        rid = _hub_id(date, who, what, ftype)
         recs.append({
             "id": rid,
             "label": what or f"(follow-up with {who_clean})",
@@ -113,6 +113,12 @@ def build_html(followups):
         "decisions": [],
     }
     data_json = json.dumps(data, ensure_ascii=False)
+    # Safe to embed in an inline <script>: escape '<' so a follow-up label
+    # containing '</script>' (email-derived, attacker-influenceable) can't close
+    # the tag and inject HTML, and escape U+2028/U+2029 which are valid JSON but
+    # illegal raw in a JS string literal. '<' still parses as '<' in JS.
+    for _ch, _esc in (("<", "\\u003c"), (chr(0x2028), "\\u2028"), (chr(0x2029), "\\u2029")):
+        data_json = data_json.replace(_ch, _esc)
     return HTML_TEMPLATE.replace("/*__INLINE_DATA__*/null", data_json)
 
 # ---------- here.now publish (3-step, stable slug) ----------
@@ -428,10 +434,14 @@ init();
 
 # ---------- apply: drain ntfy submissions -> mark done -> republish ----------
 def _read_relay_last():
+    # Default to "0s" (live only) on first run — NOT "all", which would replay
+    # ntfy's whole retention window (~12h of possibly stale/test submissions)
+    # and try to re-close items on a fresh host. Once we have a real cursor we
+    # use it (exclusive), so no submission is missed after the first poll.
     try:
-        return open(RELAY_STATE).read().strip() or "all"
+        return open(RELAY_STATE).read().strip() or "0s"
     except OSError:
-        return "all"
+        return "0s"
 
 def _write_relay_last(mid):
     try:
@@ -469,10 +479,18 @@ def fetch_submissions(since):
     return subs, latest
 
 def apply_submissions(key):
-    """Process any new ntfy submissions: flip checked follow-ups to done and
-    republish so the live page reflects it. Returns list of marked labels."""
-    if not _HAVE_INGEST or _mark_done_by_ids is None:
-        sys.exit("ERROR: --apply requires email_ingest.followups (set EMAIL_INGEST_PATH)")
+    """Process any new ntfy submissions: close checked follow-ups and republish
+    so the live page reflects it. Returns list of marked labels.
+
+    Cursor discipline (avoids the silent-wedge where a failed publish drops a
+    submission): the relay cursor is advanced ONLY after the page is confirmed
+    fresh — either nothing needed publishing, or publish() succeeded. If
+    publish() fails we leave the cursor where it is and exit non-zero so the
+    poller's next run retries. Because mark_done_by_ids already wrote the file,
+    a retry finds 0 newly-marked but the want_ids are still in the (un-advanced)
+    window, so we republish whenever want_ids is non-empty — that brings the
+    page in sync with disk even after a prior failed publish.
+    """
     since = _read_relay_last()
     subs, latest = fetch_submissions(since)
     # Collect followup ids across all new submissions (todos/decisions ignored here).
@@ -483,20 +501,23 @@ def apply_submissions(key):
                 want_ids.append(it["id"])
                 labels[it["id"]] = it.get("label", it["id"])
     if not want_ids:
-        # Still advance the cursor so we don't re-scan the same window forever.
+        # Nothing to publish — safe to advance past this window.
         if latest != since:
             _write_relay_last(latest)
         print("no new follow-up submissions")
         return []
     marked = _mark_done_by_ids(FOLLOWUPS, want_ids)
-    _write_relay_last(latest)
+    # Republish whenever there are submissions in this window (marked>0, or a
+    # prior failed publish left disk ahead of the page). publish() exits non-zero
+    # on here.now failure; we have NOT advanced the cursor yet, so that retries.
+    followups = parse_open_followups(FOLLOWUPS)
+    html = build_html(followups)
+    url, _, _ = publish(html, key)
+    _write_relay_last(latest)  # only reached on successful publish
     if marked:
-        followups = parse_open_followups(FOLLOWUPS)
-        html = build_html(followups)
-        url, _, _ = publish(html, key)
         print(f"marked {len(marked)} done; republished {url}")
     else:
-        print(f"submissions had {len(want_ids)} ids but none were open (already done?)")
+        print(f"submissions had {len(want_ids)} ids but none were newly open; republished {url}")
     return [labels.get(mid, mid) for mid in marked]
 
 def main():

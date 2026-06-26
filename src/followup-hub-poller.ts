@@ -1,7 +1,30 @@
 import { spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 
 import { logger } from './logger.js';
+
+/**
+ * Resolve the Python interpreter for --apply. Bare `python3` is a footgun: under
+ * the launchd PATH it resolves to /usr/bin/python3 (3.9), a DIFFERENT interpreter
+ * than the email-ingest pipeline (which co-writes followups.md) uses, so newer
+ * syntax in the shared module can silently break only the poller's spawn. Pin to:
+ * FOLLOWUP_HUB_PYTHON env → the anaconda interpreter sync-all.sh uses → python3.
+ */
+function resolvePython(): string {
+  const candidates = [
+    process.env.FOLLOWUP_HUB_PYTHON,
+    '/Users/mgandal/.pyenv/versions/anaconda3-2024.02-1/bin/python3',
+  ].filter((p): p is string => Boolean(p));
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+      /* ignore */
+    }
+  }
+  return 'python3';
+}
 
 /**
  * Follow-up Hub write-back poller (host side).
@@ -25,6 +48,11 @@ const NTFY_STREAM_URL = `https://ntfy.sh/${RELAY_TOPIC}/json`;
 const RECONNECT_MS = 5_000;
 // Coalesce a burst of submissions into one --apply run.
 const APPLY_DEBOUNCE_MS = 1_500;
+// Abort + reconnect if no bytes arrive for this long. ntfy sends keepalives
+// ~every 45s, so silence past this means a half-open socket (TCP up, no data,
+// no FIN) — without this, reader.read() would block forever and the poller
+// would wedge silently. Must exceed the keepalive interval.
+const IDLE_TIMEOUT_MS = 75_000;
 
 /**
  * Decide whether an ntfy stream line represents a real Follow-up Hub submission
@@ -86,7 +114,7 @@ function runApply(projectRoot: string): Promise<void> {
       ),
       EMAIL_INGEST_PATH: path.join(projectRoot, 'scripts/sync'),
     };
-    const child = spawn('python3', [script, '--apply'], { env });
+    const child = spawn(resolvePython(), [script, '--apply'], { env });
     let out = '';
     let err = '';
     child.stdout.on('data', (d) => (out += d.toString()));
@@ -164,19 +192,27 @@ export function startFollowupHubPoller(projectRoot: string = process.cwd()): {
   };
 
   const loop = async () => {
-    // Catch-up pass on startup: drain anything submitted while we were down.
-    void drainApply();
-
     while (!stopped) {
       controller = new AbortController();
+      const ctrl = controller;
+      // Idle watchdog: abort if the stream goes silent past the keepalive
+      // interval (half-open socket), so the reconnect path below runs instead
+      // of reader.read() blocking forever.
+      let idle: NodeJS.Timeout | null = null;
+      const armIdle = () => {
+        if (idle) clearTimeout(idle);
+        idle = setTimeout(() => ctrl.abort(), IDLE_TIMEOUT_MS);
+      };
       try {
+        // Drain anything submitted while we were disconnected (startup, or the
+        // gap during a reconnect). --apply is idempotent via the relay cursor,
+        // so this also covers messages the live stream (since=0s) won't replay.
+        void drainApply();
         // Long-poll: omit poll=1 so ntfy holds the connection open and streams
-        // new messages as they arrive. `since=all` on first connect would replay
-        // history, but --apply is idempotent (cursor in relay-last-id.txt), so we
-        // ask only for live messages here and let the catch-up drainApply handle
-        // backlog.
+        // new messages live. since=0s = only messages from now forward (NOT a
+        // history replay); backlog is handled by the drainApply above.
         const res = await fetch(`${NTFY_STREAM_URL}?since=0s`, {
-          signal: controller.signal,
+          signal: ctrl.signal,
           headers: { 'User-Agent': 'nanoclaw-followup-hub/1' },
         });
         if (!res.ok || !res.body) {
@@ -185,9 +221,11 @@ export function startFollowupHubPoller(projectRoot: string = process.cwd()): {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
+        armIdle();
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
+          armIdle();
           buf += decoder.decode(value, { stream: true });
           let nl: number;
           while ((nl = buf.indexOf('\n')) >= 0) {
@@ -207,6 +245,8 @@ export function startFollowupHubPoller(projectRoot: string = process.cwd()): {
             'Follow-up Hub poller stream dropped, reconnecting',
           );
         }
+      } finally {
+        if (idle) clearTimeout(idle);
       }
       if (!stopped) {
         await new Promise((r) => setTimeout(r, RECONNECT_MS));
