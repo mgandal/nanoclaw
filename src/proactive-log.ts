@@ -1,4 +1,5 @@
 import { getDb } from './db.js';
+import { logger } from './logger.js';
 
 export interface ProactiveLogRow {
   id: number;
@@ -116,6 +117,46 @@ export function getDueDefers(nowIso: string): ProactiveLogRow[] {
        ORDER BY deliver_at ASC`,
     )
     .all(nowIso) as ProactiveLogRow[];
+}
+
+/**
+ * Thread-silence watcher dedup. A "silent_thread:{threadId}" sentinel row
+ * suppresses re-emission for 7 days. Sentinels use decision='drop' with a
+ * watcher-specific reason so they never interact with governor dedup
+ * (which only matches rows with dispatched_at or delivered_at set — these
+ * remain NULL for sentinels). Moved out of the wireProactiveWatchers
+ * closures in index.ts so the proactive_log table has one owner.
+ */
+export function hasRecentSilentThreadEmission(threadId: string): boolean {
+  const cutoff = new Date(Date.now() - 7 * 86400_000).toISOString();
+  return !!getDb()
+    .prepare(
+      `SELECT 1 FROM proactive_log WHERE correlation_id = ? AND timestamp >= ? LIMIT 1`,
+    )
+    .get(`silent_thread:${threadId}`, cutoff);
+}
+
+export function recordSilentThreadEmission(threadId: string): void {
+  try {
+    getDb()
+      .prepare(
+        `INSERT INTO proactive_log
+          (timestamp, from_agent, to_group, decision, reason,
+           correlation_id, message_preview, contributing_events)
+          VALUES (?, ?, ?, 'drop', 'watcher_dedup_marker', ?, NULL, '[]')`,
+      )
+      .run(
+        new Date().toISOString(),
+        'thread-silence-watcher',
+        '',
+        `silent_thread:${threadId}`,
+      );
+  } catch (err) {
+    logger.warn(
+      { err, threadId },
+      'failed to record silent-thread emission marker',
+    );
+  }
 }
 
 export function backfillReaction(

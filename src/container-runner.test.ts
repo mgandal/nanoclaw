@@ -9,7 +9,12 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
-vi.mock('./config.js', () => ({
+vi.mock('./config.js', async () => {
+  // env.js is itself mocked above/below in this file, so this import
+  // resolves to the mock — tests drive the file layer via
+  // vi.mocked(readEnvFile).mockReturnValue(...).
+  const envMod = await import('./env.js');
+  return {
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
@@ -24,7 +29,18 @@ vi.mock('./config.js', () => ({
   ONECLI_API_KEY: '',
   ONECLI_URL: 'http://localhost:10254',
   TIMEZONE: 'America/Los_Angeles',
-}));
+  // Mirror the real contract: process.env first, then the (mocked)
+  // .env file layer.
+  getIntegrationEnv: () => {
+    const fileEnv = envMod.readEnvFile([]);
+    const merged: Record<string, string | undefined> = { ...fileEnv };
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v) merged[k] = v;
+    }
+    return merged;
+  },
+  };
+});
 
 // Mock logger
 vi.mock('./logger.js', () => ({

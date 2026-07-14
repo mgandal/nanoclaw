@@ -318,3 +318,37 @@ export const PROACTIVE_PAUSE_PATH = path.join(
   'proactive',
   'pause.json',
 );
+
+/**
+ * Integration endpoint/token keys resolved per call (process.env first,
+ * then .env via the mtime-cached readEnvFile) so operators can edit .env
+ * without a restart. Consumers: buildContainerArgs (container-runner.ts)
+ * resolves these once per container spawn. The health poll's endpoint
+ * table (health-fixes.ts) reads the URL subset the same way.
+ */
+export const INTEGRATION_ENV_KEYS = [
+  'APPLE_NOTES_URL',
+  'TODOIST_URL',
+  'HINDSIGHT_URL',
+  'CALENDAR_URL',
+  'SLACK_MCP_URL',
+  'MAIL_BRIDGE_URL',
+  'HONCHO_URL',
+  'READWISE_ACCESS_TOKEN',
+  'GITHUB_TOKEN',
+  'GH_REPO',
+  'SUPADATA_API_KEY',
+] as const;
+export type IntegrationEnvKey = (typeof INTEGRATION_ENV_KEYS)[number];
+
+export function getIntegrationEnv(): Record<
+  IntegrationEnvKey,
+  string | undefined
+> {
+  const fileEnv = readEnvFile([...INTEGRATION_ENV_KEYS]);
+  const resolved = {} as Record<IntegrationEnvKey, string | undefined>;
+  for (const key of INTEGRATION_ENV_KEYS) {
+    resolved[key] = process.env[key] || fileEnv[key];
+  }
+  return resolved;
+}

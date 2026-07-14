@@ -97,7 +97,11 @@ import {
   type IpcDeps,
 } from './ipc.js';
 import { writeBridgeTokenFile } from './bridge-auth.js';
-import { backfillReaction } from './proactive-log.js';
+import {
+  backfillReaction,
+  hasRecentSilentThreadEmission,
+  recordSilentThreadEmission,
+} from './proactive-log.js';
 import { wireProactiveWatchers } from './startup/proactive-watchers.js';
 import { deliverText } from './outbound.js';
 import { findChannel, formatMessages } from './router.js';
@@ -129,7 +133,12 @@ import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { HealthMonitor, createDefaultFixActions } from './health-monitor.js';
+import {
+  checkMcpEndpoints,
+  registerFixHandlers,
+  resolveMcpEndpoints,
+} from './health-fixes.js';
+import { HealthMonitor } from './health-monitor.js';
 import { MessageBus } from './message-bus.js';
 import { EventRouter, TrustConfig } from './event-router.js';
 import { GmailWatcher } from './watchers/gmail-watcher.js';
@@ -148,12 +157,8 @@ import {
   type AgentIdentity,
   type AgentRegistryRow,
 } from './agent-registry.js';
-import {
-  compoundKey,
-  compoundKeyToFsPath,
-  parseCompoundKey,
-} from './compound-key.js';
-import { routeClassifiedEvent } from './event-routing.js';
+import { compoundKey, parseCompoundKey } from './compound-key.js';
+import { createEscalationDispatcher } from './escalation-dispatcher.js';
 import { BusWatcher } from './bus-watcher.js';
 import { buildBusPrompt } from './bus-dispatch.js';
 import { startFollowupHubPoller } from './followup-hub-poller.js';
@@ -1274,71 +1279,11 @@ async function main(): Promise<void> {
     },
   });
 
-  // Wire watchdog fix handlers
-  const fixScriptsDir = path.join(process.cwd(), 'scripts', 'fixes');
-
-  healthMonitor.addFixHandler({
-    id: 'mcp-qmd',
-    service: 'mcp:QMD',
-    fixScript: path.join(fixScriptsDir, 'restart-qmd.sh'),
-    verify: {
-      type: 'http',
-      url: 'http://localhost:8181/health',
-      expectStatus: 200,
-    },
-    cooldownMs: 120_000,
-    maxAttempts: 2,
-  });
-  healthMonitor.addFixHandler({
-    id: 'mcp-apple-notes',
-    service: 'mcp:Apple Notes',
-    fixScript: path.join(fixScriptsDir, 'restart-apple-notes.sh'),
-    verify: {
-      type: 'http',
-      url: 'http://localhost:8184/mcp',
-      expectStatus: 405,
-    },
-    cooldownMs: 120_000,
-    maxAttempts: 2,
-  });
-  healthMonitor.addFixHandler({
-    id: 'mcp-todoist',
-    service: 'mcp:Todoist',
-    fixScript: path.join(fixScriptsDir, 'restart-todoist.sh'),
-    verify: {
-      type: 'http',
-      url: 'http://localhost:8186/mcp',
-      expectStatus: 405,
-    },
-    cooldownMs: 120_000,
-    maxAttempts: 2,
-  });
-  healthMonitor.addFixHandler({
-    id: 'container-runtime',
-    service: 'container-runtime',
-    fixScript: path.join(fixScriptsDir, 'restart-container-runtime.sh'),
-    verify: {
-      type: 'command',
-      cmd: '/usr/local/bin/container',
-      args: ['system', 'status'],
-    },
-    cooldownMs: 120_000,
-    maxAttempts: 2,
-  });
-  healthMonitor.addFixHandler({
-    id: 'sqlite-lock',
-    service: 'sqlite-lock',
-    fixScript: path.join(fixScriptsDir, 'kill-sqlite-orphans.sh'),
-    verify: {
-      type: 'command',
-      cmd: '/bin/sh',
-      args: ['-c', 'echo "SELECT 1" | sqlite3 store/messages.db'],
-    },
-    cooldownMs: 60_000,
-    maxAttempts: 2,
-  });
-
-  healthMonitor.setFixActions(createDefaultFixActions());
+  // Wire watchdog fix handlers + fix actions (tables live in health-fixes.ts)
+  registerFixHandlers(
+    healthMonitor,
+    path.join(process.cwd(), 'scripts', 'fixes'),
+  );
 
   // Bootstrap Honcho workspace (create if not exists)
   const honchoBootstrapEnv = readEnvFile(['HONCHO_URL']);
@@ -1370,85 +1315,14 @@ async function main(): Promise<void> {
     }
   }
 
-  // Periodically check health thresholds + MCP endpoints
-  // Each endpoint has an optional healthUrl for services where the MCP URL
-  // isn't suitable for health checks (e.g. SSE endpoints that hang or require auth).
-  const mcpEndpoints: Array<{
-    name: string;
-    url: string | undefined;
-    healthUrl?: string;
-  }> = [
-    // B1: each HTTP-auth'd bridge proxy exposes /health unauth'd; the
-    // monitor hits that instead of /mcp so it doesn't need to forward
-    // a bearer token and doesn't spam warn logs in the proxy.
-    {
-      name: 'QMD',
-      url: 'http://localhost:8181/mcp',
-      healthUrl: 'http://localhost:8181/health',
-    },
-    { name: 'Honcho', url: undefined as string | undefined },
-    {
-      name: 'Apple Notes',
-      url: process.env.APPLE_NOTES_URL,
-      healthUrl: 'http://localhost:8184/health',
-    },
-    {
-      name: 'Todoist',
-      url: process.env.TODOIST_URL,
-      healthUrl: 'http://localhost:8186/health',
-    },
-    {
-      name: 'Hindsight',
-      url: process.env.HINDSIGHT_URL,
-      healthUrl: 'http://127.0.0.1:8888/health',
-    },
-  ];
-
-  // Read URLs from .env if not in process.env
-  {
-    const envUrls = readEnvFile([
-      'HONCHO_URL',
-      'APPLE_NOTES_URL',
-      'TODOIST_URL',
-      'HINDSIGHT_URL',
-    ]);
-    if (!mcpEndpoints[1].url && envUrls.HONCHO_URL) {
-      mcpEndpoints[1].url = `${envUrls.HONCHO_URL}/v3/workspaces/list`;
-    }
-    if (!mcpEndpoints[2].url) mcpEndpoints[2].url = envUrls.APPLE_NOTES_URL;
-    if (!mcpEndpoints[3].url) mcpEndpoints[3].url = envUrls.TODOIST_URL;
-    if (!mcpEndpoints[4].url) mcpEndpoints[4].url = envUrls.HINDSIGHT_URL;
-    if (!mcpEndpoints[4].healthUrl && mcpEndpoints[4].url) {
-      mcpEndpoints[4].healthUrl = 'http://127.0.0.1:8888/health';
-    }
-  }
-
+  // Periodically check health thresholds + MCP endpoints. The endpoint
+  // table (with .env fallbacks) lives in health-fixes.ts.
+  const mcpEndpoints = resolveMcpEndpoints();
   setInterval(async () => {
     healthMonitor.checkThresholds();
-
     // Check MCP endpoints (only after channels are connected)
     if (channels.length === 0) return;
-    for (const ep of mcpEndpoints) {
-      if (!ep.url) continue;
-      const result = await checkMcpEndpoint(ep.healthUrl || ep.url);
-      if (result.reachable) {
-        healthMonitor.clearInfraEvent(`mcp:${ep.name}`);
-      } else {
-        healthMonitor.recordInfraEvent(
-          `mcp:${ep.name}`,
-          `MCP server ${ep.name} is unreachable`,
-        );
-        // Auto-fix: attempt repair if handler registered and threshold met
-        const failCount = healthMonitor.getInfraFailureCount(`mcp:${ep.name}`);
-        if (failCount >= 3) {
-          void healthMonitor.attemptFix(`mcp:${ep.name}`);
-        }
-      }
-      // Update cached QMD reachability for container-runner
-      if (ep.name === 'QMD') {
-        setQmdReachable(result.reachable);
-      }
-    }
+    await checkMcpEndpoints(healthMonitor, mcpEndpoints, setQmdReachable);
   }, HEALTH_MONITOR_INTERVAL);
 
   // Initial QMD health check so first container spawn has accurate state.
@@ -1531,74 +1405,13 @@ async function main(): Promise<void> {
       defaultRouting: trustRules.default_routing,
       messageBus,
       healthMonitor,
-      onEscalate: async (event) => {
-        // Route the classified event to the best-matching agent via the bus.
-        // The bus-watcher will spawn that agent with the event's full payload
-        // attached (see the <bus-payload> enrichment above). If routing can't
-        // find a target, fall back to a main-group system alert so the event
-        // isn't dropped silently.
-        const target = routeClassifiedEvent(
-          event,
-          loadedAgents,
-          registeredGroups,
-        );
-
-        if (!target) {
-          logger.warn(
-            { eventId: event.event.id, topic: event.classification.topic },
-            'Event escalated but no agent target resolved; falling back to alert',
-          );
-          void sendSystemAlert(
-            'Event Escalation',
-            event.classification.summary,
-          );
-          return;
-        }
-
-        logger.info(
-          {
-            eventId: event.event.id,
-            targetAgent: target.agentName,
-            targetGroup: target.groupFolder,
-            score: target.score,
-            reason: target.reason,
-          },
-          'Event escalated → dispatching to agent via bus',
-        );
-
-        try {
-          const targetFsKey = compoundKeyToFsPath(
-            compoundKey(target.groupFolder, target.agentName),
-          );
-          messageBus.writeAgentMessage(targetFsKey, {
-            id: `evt-${event.event.id}-${Date.now()}`,
-            from: 'event-router',
-            topic: `escalate:${event.classification.topic || 'general'}`,
-            priority: 'high',
-            summary:
-              event.classification.summary ||
-              `${event.event.type} event requires attention`,
-            payload: {
-              eventType: event.event.type,
-              eventId: event.event.id,
-              eventTimestamp: event.event.timestamp,
-              eventPayload: event.event.payload,
-              classification: event.classification,
-              routing: event.routing,
-            },
-            timestamp: new Date().toISOString(),
-          });
-        } catch (err) {
-          logger.error(
-            { err, eventId: event.event.id, target },
-            'Bus dispatch failed for escalated event; falling back to alert',
-          );
-          void sendSystemAlert(
-            'Event Escalation',
-            event.classification.summary,
-          );
-        }
-      },
+      // Bus dispatch + alert fallback live in escalation-dispatcher.ts.
+      onEscalate: createEscalationDispatcher({
+        getAgents: () => loadedAgents,
+        getRegisteredGroups: () => registeredGroups,
+        messageBus,
+        sendSystemAlert,
+      }),
     });
 
     const watcherStateDir = path.join(DATA_DIR, 'watchers');
@@ -2035,41 +1848,8 @@ async function main(): Promise<void> {
         eventRouter,
         vaultRoots: deriveVaultRoots(),
         emailExportDir: path.join(os.homedir(), '.cache/email-ingest/exported'),
-        hasRecentEmission: (threadId) => {
-          const cutoff = new Date(Date.now() - 7 * 86400_000).toISOString();
-          return !!getDb()
-            .prepare(
-              `SELECT 1 FROM proactive_log WHERE correlation_id = ? AND timestamp >= ? LIMIT 1`,
-            )
-            .get(`silent_thread:${threadId}`, cutoff);
-        },
-        recordEmission: (threadId) => {
-          // Write a sentinel row so hasRecentEmission matches on subsequent
-          // polls for the next 7 days. Uses a 'drop' decision with a
-          // watcher-specific reason so it never interacts with governor
-          // dedup (which only matches rows with dispatched_at or
-          // delivered_at set — these remain NULL for sentinels).
-          try {
-            getDb()
-              .prepare(
-                `INSERT INTO proactive_log
-                  (timestamp, from_agent, to_group, decision, reason,
-                   correlation_id, message_preview, contributing_events)
-                  VALUES (?, ?, ?, 'drop', 'watcher_dedup_marker', ?, NULL, '[]')`,
-              )
-              .run(
-                new Date().toISOString(),
-                'thread-silence-watcher',
-                '',
-                `silent_thread:${threadId}`,
-              );
-          } catch (err) {
-            logger.warn(
-              { err, threadId },
-              'failed to record silent-thread emission marker',
-            );
-          }
-        },
+        hasRecentEmission: hasRecentSilentThreadEmission,
+        recordEmission: recordSilentThreadEmission,
         sendDeferred: async (s) => {
           await deliverSendMessage(
             {

@@ -14,6 +14,7 @@ import {
   CONTAINER_TIMEOUT,
   CREDENTIAL_PROXY_PORT,
   DATA_DIR,
+  getIntegrationEnv,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   OLLAMA_ADMIN_TOOLS,
@@ -34,7 +35,6 @@ import {
 import { getBridgeToken } from './bridge-auth.js';
 import { loadAgentIdentity } from './agent-registry.js';
 import { detectAuthMode, proxyToken } from './credential-proxy.js';
-import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { shouldStopOnClose } from './index-helpers.js';
 import { AllowedSecret, RegisteredGroup } from './types.js';
@@ -537,10 +537,12 @@ function buildContainerArgs(
     args.push('-e', `QMD_URL=${qmdUrl}`);
   }
 
+  // Integration endpoints/tokens, resolved once per spawn (process.env
+  // first, then .env — see getIntegrationEnv in config.ts).
+  const integrationEnv = getIntegrationEnv();
+
   // Pass Apple Notes MCP endpoint URL (only if configured in .env)
-  const appleNotesEnv = readEnvFile(['APPLE_NOTES_URL']);
-  const appleNotesUrl =
-    process.env.APPLE_NOTES_URL || appleNotesEnv.APPLE_NOTES_URL;
+  const appleNotesUrl = integrationEnv.APPLE_NOTES_URL;
   if (appleNotesUrl) {
     try {
       const parsed = new URL(appleNotesUrl);
@@ -561,8 +563,7 @@ function buildContainerArgs(
   }
 
   // Pass Todoist MCP endpoint URL (only if configured in .env)
-  const todoistEnv = readEnvFile(['TODOIST_URL']);
-  const todoistUrl = process.env.TODOIST_URL || todoistEnv.TODOIST_URL;
+  const todoistUrl = integrationEnv.TODOIST_URL;
   if (todoistUrl) {
     try {
       const parsed = new URL(todoistUrl);
@@ -580,8 +581,7 @@ function buildContainerArgs(
   }
 
   // Pass Hindsight memory MCP endpoint URL (bank-specific, e.g. /mcp/hermes/)
-  const hindsightEnv = readEnvFile(['HINDSIGHT_URL']);
-  const hindsightUrl = process.env.HINDSIGHT_URL || hindsightEnv.HINDSIGHT_URL;
+  const hindsightUrl = integrationEnv.HINDSIGHT_URL;
   if (hindsightUrl) {
     try {
       const parsed = new URL(hindsightUrl);
@@ -602,8 +602,7 @@ function buildContainerArgs(
   }
 
   // Pass Calendar MCP endpoint URL (only if configured in .env)
-  const calendarEnv = readEnvFile(['CALENDAR_URL']);
-  const calendarUrl = process.env.CALENDAR_URL || calendarEnv.CALENDAR_URL;
+  const calendarUrl = integrationEnv.CALENDAR_URL;
   if (calendarUrl) {
     try {
       const parsed = new URL(calendarUrl);
@@ -621,8 +620,7 @@ function buildContainerArgs(
   }
 
   // Pass Slack MCP endpoint URL (only if configured in .env)
-  const slackMcpEnv = readEnvFile(['SLACK_MCP_URL']);
-  const slackMcpUrl = process.env.SLACK_MCP_URL || slackMcpEnv.SLACK_MCP_URL;
+  const slackMcpUrl = integrationEnv.SLACK_MCP_URL;
   if (slackMcpUrl) {
     try {
       const parsed = new URL(slackMcpUrl);
@@ -640,9 +638,7 @@ function buildContainerArgs(
   }
 
   // Pass Exchange Mail Bridge HTTP API URL (macOS host bridge for AppleScript mail access)
-  const mailBridgeEnv = readEnvFile(['MAIL_BRIDGE_URL']);
-  const mailBridgeUrl =
-    process.env.MAIL_BRIDGE_URL || mailBridgeEnv.MAIL_BRIDGE_URL;
+  const mailBridgeUrl = integrationEnv.MAIL_BRIDGE_URL;
   if (mailBridgeUrl) {
     try {
       const parsed = new URL(mailBridgeUrl);
@@ -663,8 +659,7 @@ function buildContainerArgs(
   }
 
   // Pass Honcho user-modeling API URL
-  const honchoEnv = readEnvFile(['HONCHO_URL']);
-  const honchoUrl = process.env.HONCHO_URL || honchoEnv.HONCHO_URL;
+  const honchoUrl = integrationEnv.HONCHO_URL;
   if (honchoUrl) {
     try {
       const parsed = new URL(honchoUrl);
@@ -691,9 +686,7 @@ function buildContainerArgs(
 
   // Pass Readwise access token (for readwise CLI in container)
   if (isSecretAllowed('READWISE_ACCESS_TOKEN')) {
-    const readwiseEnv = readEnvFile(['READWISE_ACCESS_TOKEN']);
-    const readwiseToken =
-      process.env.READWISE_ACCESS_TOKEN || readwiseEnv.READWISE_ACCESS_TOKEN;
+    const readwiseToken = integrationEnv.READWISE_ACCESS_TOKEN;
     if (readwiseToken) {
       args.push('-e', `READWISE_ACCESS_TOKEN=${readwiseToken}`);
     }
@@ -701,13 +694,12 @@ function buildContainerArgs(
 
   // Pass GitHub credentials (for gh CLI in container)
   if (isSecretAllowed('GITHUB_TOKEN')) {
-    const githubEnv = readEnvFile(['GITHUB_TOKEN', 'GH_REPO']);
-    const githubToken = process.env.GITHUB_TOKEN || githubEnv.GITHUB_TOKEN;
+    const githubToken = integrationEnv.GITHUB_TOKEN;
     if (githubToken) {
       args.push('-e', `GITHUB_TOKEN=${githubToken}`);
     }
     // GH_REPO is not a secret — a repo slug — so it rides alongside the token.
-    const ghRepo = process.env.GH_REPO || githubEnv.GH_REPO;
+    const ghRepo = integrationEnv.GH_REPO;
     if (ghRepo) {
       args.push('-e', `GH_REPO=${ghRepo}`);
     }
@@ -715,9 +707,7 @@ function buildContainerArgs(
 
   // Pass Supadata API key (for follow-builders podcast transcripts)
   if (isSecretAllowed('SUPADATA_API_KEY')) {
-    const supadataEnv = readEnvFile(['SUPADATA_API_KEY']);
-    const supadataKey =
-      process.env.SUPADATA_API_KEY || supadataEnv.SUPADATA_API_KEY;
+    const supadataKey = integrationEnv.SUPADATA_API_KEY;
     if (supadataKey) {
       args.push('-e', `SUPADATA_API_KEY=${supadataKey}`);
     }
