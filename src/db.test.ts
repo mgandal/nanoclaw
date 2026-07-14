@@ -47,9 +47,6 @@ import {
   updateTaskAfterRun,
   validateTaskSchedule,
   insertActionLogEntries,
-  getActionLogRows,
-  insertPatternProposal,
-  getPatternProposals,
   upsertAgentRegistry,
   insertAgentAction,
   insertPendingAction,
@@ -2560,36 +2557,6 @@ describe('insertActionLogEntries', () => {
       .prepare("SELECT * FROM action_log WHERE params_hash = 'same123'")
       .all();
     expect(rows).toHaveLength(1);
-  });
-});
-
-describe('getActionLogRows', () => {
-  it('returns rows since a given timestamp', () => {
-    insertActionLogEntries('group-a', [
-      { tool: 'tool_a', paramsHash: 'h1', timestamp: '2026-04-10T10:00:00Z' },
-      { tool: 'tool_b', paramsHash: 'h2', timestamp: '2026-04-12T10:00:00Z' },
-      { tool: 'tool_c', paramsHash: 'h3', timestamp: '2026-04-14T10:00:00Z' },
-    ]);
-
-    const rows = getActionLogRows('2026-04-11T00:00:00Z');
-    expect(rows).toHaveLength(2);
-    expect(rows[0].tool_name).toBe('tool_b');
-    expect(rows[1].tool_name).toBe('tool_c');
-  });
-});
-
-describe('getPatternProposals', () => {
-  it('returns recent proposals', () => {
-    insertPatternProposal({
-      id: 'prop-test-1',
-      description: 'Test proposal',
-      proposed_at: '2026-04-13',
-    });
-
-    const proposals = getPatternProposals();
-    expect(proposals).toHaveLength(1);
-    expect(proposals[0].description).toBe('Test proposal');
-    expect(proposals[0].status).toBe('pending');
   });
 });
 

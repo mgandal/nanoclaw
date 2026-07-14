@@ -1351,58 +1351,12 @@ export function insertActionLogEntries(
   }
 }
 
-/**
- * Get action log rows since a given ISO timestamp, ordered by timestamp.
- */
-export function getActionLogRows(
-  since: string,
-): Array<{ tool_name: string; params_hash: string; timestamp: string }> {
-  return db
-    .prepare(
-      'SELECT tool_name, params_hash, timestamp FROM action_log WHERE timestamp >= ? ORDER BY timestamp',
-    )
-    .all(since) as Array<{
-    tool_name: string;
-    params_hash: string;
-    timestamp: string;
-  }>;
-}
-
-/**
- * Get all pattern proposals (recent first).
- */
-export function getPatternProposals(): Array<{
-  id: string;
-  description: string;
-  proposed_at: string;
-  status: string;
-  rejection_reason: string | null;
-}> {
-  return db
-    .prepare(
-      'SELECT id, description, proposed_at, status, rejection_reason FROM pattern_proposals ORDER BY proposed_at DESC LIMIT 100',
-    )
-    .all() as Array<{
-    id: string;
-    description: string;
-    proposed_at: string;
-    status: string;
-    rejection_reason: string | null;
-  }>;
-}
-
-/**
- * Insert a new pattern proposal.
- */
-export function insertPatternProposal(proposal: {
-  id: string;
-  description: string;
-  proposed_at: string;
-}): void {
-  db.prepare(
-    'INSERT INTO pattern_proposals (id, description, proposed_at, status) VALUES (?, ?, ?, ?)',
-  ).run(proposal.id, proposal.description, proposal.proposed_at, 'pending');
-}
+// getActionLogRows / getPatternProposals / insertPatternProposal deleted
+// 2026-07-14 with src/pattern-engine.ts (their only production caller —
+// the __pattern_detection__ task type has been disabled in the scheduler
+// since it shipped noisy proposals). The action_log and pattern_proposals
+// TABLES stay: action_log has live writers, and dropping pattern_proposals
+// would be a data decision, not a code cleanup.
 
 /**
  * Migrate a group from an old JID to a new JID (e.g., supergroup upgrade).
