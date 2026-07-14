@@ -45,9 +45,9 @@ import {
   getChannelFactory,
   getRegisteredChannelNames,
 } from './channels/registry.js';
+import { runAgentTurn, sessionFileSize } from './agent-turn.js';
 import {
   ContainerOutput,
-  runContainerAgent,
   setQmdReachable,
   writeGroupsSnapshot,
   writeTasksSnapshot,
@@ -77,7 +77,6 @@ import {
   setRegisteredGroup,
   setRouterState,
   getSessionTimestamps,
-  setSession,
   touchSession,
   storeChatMetadata,
   storeMessage,
@@ -140,8 +139,6 @@ import { appendAlert } from './system-alerts.js';
 import { readEnvFile } from './env.js';
 import YAML from 'yaml';
 import {
-  checkSessionExpiry,
-  shouldClearSession,
   parseLastAgentSeq,
   shouldKillActiveContainer,
 } from './index-helpers.js';
@@ -172,33 +169,8 @@ let lastAgentSeq: Record<string, number> = {};
 const pendingPipedAdvance = new Map<string, number>();
 let messageLoopRunning = false;
 
-/**
- * Size in bytes of a session's transcript jsonl, or undefined if it does not
- * exist yet (fresh session, crash mid-write, manual deletion). The on-disk
- * directory is keyed by the bare group folder (compound agent keys still map
- * to the group's folder); the session id is the filename. Used by the SIZE
- * guard in checkSessionExpiry to rotate oversized sessions before they exceed
- * CONTAINER_TIMEOUT. fs.statSync over a known path — cheap, called once per turn.
- */
-function sessionFileSize(
-  groupFolder: string,
-  sessionId: string,
-): number | undefined {
-  const file = path.join(
-    DATA_DIR,
-    'sessions',
-    groupFolder,
-    '.claude',
-    'projects',
-    '-workspace-group',
-    `${sessionId}.jsonl`,
-  );
-  try {
-    return fs.statSync(file).size;
-  } catch {
-    return undefined; // ENOENT or unreadable → don't trigger size expiry
-  }
-}
+// sessionFileSize moved to agent-turn.ts (shared with the scheduler via
+// runAgentTurn); re-imported above for the _sessionFileSizeForTests shim.
 
 /** H2 helpers — small enough to inline but extracted so tests can exercise
  * commit-vs-discard semantics without spinning the full message loop. */
@@ -850,49 +822,6 @@ async function runAgent(
     return 'error';
   }
 
-  // Expire sessions to prevent unbounded context growth.
-  // Two thresholds:
-  //   IDLE: no activity for 2 hours → expire (prevents stale sessions)
-  //   MAX_AGE: session older than 4 hours total → expire (prevents active sessions from growing forever)
-  // Session thresholds imported from config.ts
-  let sessionId: string | undefined = sessions[effectiveGroupFolder];
-  if (sessionId) {
-    const { lastUsed, createdAt } = getSessionTimestamps(effectiveGroupFolder);
-    // SIZE guard: measure the transcript jsonl so an oversized session is
-    // rotated before it can blow past CONTAINER_TIMEOUT (see checkSessionExpiry).
-    // The on-disk dir uses the bare group.folder; the session id is the filename.
-    const sessionBytes = sessionFileSize(group.folder, sessionId);
-    const expireReason = checkSessionExpiry(
-      createdAt,
-      lastUsed,
-      SESSION_IDLE_MS,
-      SESSION_MAX_AGE_MS,
-      sessionBytes,
-      SESSION_MAX_SIZE_BYTES,
-    );
-    if (expireReason) {
-      const idleAge = lastUsed
-        ? Date.now() - new Date(lastUsed).getTime()
-        : Infinity;
-      const totalAge = createdAt
-        ? Date.now() - new Date(createdAt).getTime()
-        : Infinity;
-      logger.info(
-        {
-          group: group.name,
-          agentName,
-          reason: expireReason,
-          idleMinutes: lastUsed ? Math.round(idleAge / 60000) : 'unknown',
-          totalMinutes: createdAt ? Math.round(totalAge / 60000) : 'unknown',
-        },
-        'Session expired, starting fresh',
-      );
-      delete sessions[effectiveGroupFolder];
-      deleteSession(effectiveGroupFolder);
-      sessionId = undefined;
-    }
-  }
-
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
   writeTasksSnapshot(
@@ -919,64 +848,30 @@ async function runAgent(
     new Set(Object.keys(registeredGroups)),
   );
 
-  // Wrap onOutput to track session ID from streamed results
-  const wrappedOnOutput = onOutput
-    ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
-          sessions[effectiveGroupFolder] = output.newSessionId;
-          setSession(effectiveGroupFolder, output.newSessionId);
-        }
-        await onOutput(output);
-      }
-    : undefined;
-
   try {
-    const output = await runContainerAgent(
+    // Session lifecycle (expiry, persistence, poison-clear) lives in
+    // runAgentTurn — shared with the scheduler's runTask.
+    const output = await runAgentTurn({
       group,
-      {
-        prompt,
-        sessionId,
-        groupFolder: group.folder,
-        chatJid,
-        isMain,
-        assistantName: ASSISTANT_NAME,
-        images,
-        agentName,
+      prompt,
+      chatJid,
+      images,
+      agentName,
+      sessionKey: effectiveGroupFolder,
+      sessionPolicy: {
+        idleMs: SESSION_IDLE_MS,
+        maxAgeMs: SESSION_MAX_AGE_MS,
+        maxSizeBytes: SESSION_MAX_SIZE_BYTES,
       },
-      (proc, containerName) =>
+      sessions,
+      registerProcess: (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
-      wrappedOnOutput,
-    );
+      onOutput,
+    });
 
     healthMonitor?.recordSpawn(group.folder);
 
-    if (output.newSessionId) {
-      sessions[effectiveGroupFolder] = output.newSessionId;
-      setSession(effectiveGroupFolder, output.newSessionId);
-    } else if (sessions[effectiveGroupFolder]) {
-      // Session resumed without new ID — still update last_used
-      touchSession(effectiveGroupFolder);
-    }
-
     if (output.status === 'error') {
-      // Detect a session that must be cleared so the next retry starts fresh:
-      // a stale/corrupt .jsonl (crash mid-write, manual deletion, disk-full),
-      // or a poison image block that 400s on every resume. We check both the
-      // final (truncated) error envelope and the captured streamed marker text,
-      // since the phrase can fall outside the host's 200-char stderr tail. The
-      // existing backoff in group-queue.ts handles the retry; we just remove
-      // the broken session ID.
-      const isStaleSession = !!sessionId && shouldClearSession(output);
-
-      if (isStaleSession) {
-        logger.warn(
-          { group: group.name, staleSessionId: sessionId, error: output.error },
-          'Unusable session detected — clearing for next retry',
-        );
-        delete sessions[effectiveGroupFolder];
-        deleteSession(effectiveGroupFolder);
-      }
-
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',

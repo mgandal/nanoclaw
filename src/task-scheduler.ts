@@ -1,11 +1,9 @@
 import { ChildProcess, execFile } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import fs from 'fs';
-import path from 'path';
 
+import { runAgentTurn } from './agent-turn.js';
 import {
-  ASSISTANT_NAME,
-  DATA_DIR,
   OPS_ALERT_FOLDER,
   SCHEDULER_POLL_INTERVAL,
   SESSION_MAX_SIZE_BYTES,
@@ -14,7 +12,6 @@ import {
 import { parseCompoundKey } from './compound-key.js';
 import {
   ContainerOutput,
-  runContainerAgent,
   writeTasksSnapshot,
 } from './container-runner.js';
 import {
@@ -26,16 +23,12 @@ import {
   healOrphanedNextRun,
   logTaskRun,
   markTaskRunning,
-  deleteSession,
   recoverRunningTasks,
-  setSession,
-  touchSession,
   updateTask,
   updateTaskAfterRun,
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { shouldClearSession } from './index-helpers.js';
 import { logger } from './logger.js';
 import { appendAlert, getUnresolvedAlerts } from './system-alerts.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
@@ -367,49 +360,14 @@ async function runTask(
     return;
   }
 
-  // For group context mode, use the group's current session
+  // Session lifecycle is owned by runAgentTurn. The scheduled policy is
+  // SIZE-ONLY: unlike interactive turns, group-context tasks deliberately
+  // keep the session warm across runs (no age/idle expiry), so only the
+  // transcript size cap bounds growth. Root cause: 2026-06-23 CLAIRE
+  // incident. Isolated-context tasks run stateless (sessionKey: null).
   const sessions = deps.getSessions();
-  let sessionId =
-    task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
-
-  // SIZE guard for the scheduled path. Unlike interactive turns (runAgent in
-  // index.ts), the scheduler does NOT run age/idle expiry — group-context tasks
-  // deliberately keep the session warm across runs. But that is exactly how a
-  // session bloats: each wake resumes and appends. Cap by transcript size so a
-  // task resuming an oversized session rotates to a fresh one instead of pushing
-  // the next turn past CONTAINER_TIMEOUT. Root cause: 2026-06-23 CLAIRE incident.
-  if (sessionId && task.context_mode === 'group') {
-    const file = path.join(
-      DATA_DIR,
-      'sessions',
-      task.group_folder,
-      '.claude',
-      'projects',
-      '-workspace-group',
-      `${sessionId}.jsonl`,
-    );
-    let sizeBytes: number | undefined;
-    try {
-      sizeBytes = fs.statSync(file).size;
-    } catch {
-      sizeBytes = undefined; // missing/unreadable → leave session as-is
-    }
-    if (sizeBytes !== undefined && sizeBytes > SESSION_MAX_SIZE_BYTES) {
-      logger.warn(
-        {
-          taskId: task.id,
-          group: task.group_folder,
-          staleSessionId: sessionId,
-          sizeMB: Math.round(sizeBytes / (1024 * 1024)),
-          capMB: Math.round(SESSION_MAX_SIZE_BYTES / (1024 * 1024)),
-        },
-        'Oversized session in scheduled task — rotating to fresh session',
-      );
-      delete sessions[task.group_folder];
-      deleteSession(task.group_folder);
-      sessionId = undefined;
-    }
-  }
+  const sessionKey =
+    task.context_mode === 'group' ? task.group_folder : null;
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
@@ -440,28 +398,22 @@ async function runTask(
       : undefined;
 
   try {
-    const output = await runContainerAgent(
+    const output = await runAgentTurn({
       group,
-      {
-        prompt: task.prompt,
-        sessionId,
-        groupFolder: task.group_folder,
-        chatJid: task.chat_jid,
-        isMain,
-        isScheduledTask: true,
-        assistantName: ASSISTANT_NAME,
-        agentName: task.agent_name || undefined,
-        script: task.script || undefined,
-        extraEnv,
-      },
-      (proc, containerName) =>
+      prompt: task.prompt,
+      chatJid: task.chat_jid,
+      sessionKey,
+      sessionPolicy: { maxSizeBytes: SESSION_MAX_SIZE_BYTES },
+      sessions,
+      groupFolder: task.group_folder,
+      isScheduledTask: true,
+      agentName: task.agent_name || undefined,
+      script: task.script || undefined,
+      extraEnv,
+      logContext: { taskId: task.id },
+      registerProcess: (proc, containerName) =>
         deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
-      async (streamedOutput: ContainerOutput) => {
-        // Persist session updates for group-context tasks
-        if (streamedOutput.newSessionId && task.context_mode === 'group') {
-          sessions[task.group_folder] = streamedOutput.newSessionId;
-          setSession(task.group_folder, streamedOutput.newSessionId);
-        }
+      onOutput: async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting)
@@ -476,42 +428,9 @@ async function runTask(
           error = streamedOutput.error || 'Unknown error';
         }
       },
-    );
+    });
 
     if (closeTimer) clearTimeout(closeTimer);
-
-    // Update session after task completion (group-context tasks keep session alive)
-    if (task.context_mode === 'group') {
-      if (output.newSessionId) {
-        sessions[task.group_folder] = output.newSessionId;
-        setSession(task.group_folder, output.newSessionId);
-      } else if (sessions[task.group_folder]) {
-        touchSession(task.group_folder);
-      }
-    }
-
-    // Group-context tasks share the same session as interactive turns. If the
-    // turn failed with a stale/poison-image error, clear the session so the
-    // bad block does not replay on every subsequent turn (scheduled OR
-    // interactive) and wedge the group permanently — mirrors runAgent() in
-    // index.ts. Only group-context tasks persist a session to clear.
-    if (
-      task.context_mode === 'group' &&
-      sessions[task.group_folder] &&
-      shouldClearSession(output)
-    ) {
-      logger.warn(
-        {
-          taskId: task.id,
-          group: task.group_folder,
-          staleSessionId: sessions[task.group_folder],
-          error: output.error,
-        },
-        'Unusable session detected in scheduled task — clearing for next run',
-      );
-      delete sessions[task.group_folder];
-      deleteSession(task.group_folder);
-    }
 
     if (output.status === 'error') {
       error = output.error || 'Unknown error';
