@@ -127,10 +127,20 @@ export function resolveContainerFilePathToHost(
 
   const projectRoot = path.resolve(GROUPS_DIR, '..');
 
-  // /workspace/group/... → groups/{sourceGroup}/...
+  // Compound-key callers (groups/{group}--{agent} IPC dirs) mount the BASE
+  // group folder at /workspace/group (container-runner mounts
+  // resolveGroupFolderPath(group.folder), never the compound name). Resolve
+  // against the base group, matching the /workspace/agent branch below —
+  // joining the raw compound sourceGroup pointed at a directory that never
+  // exists, so agent file sends silently failed (fixed 2026-07-14).
+  const { group: baseGroup } = parseCompoundKey(
+    fsPathToCompoundKey(sourceGroup),
+  );
+
+  // /workspace/group/... → groups/{baseGroup}/...
   if (containerFilePath.startsWith('/workspace/group/')) {
     const rel = containerFilePath.slice('/workspace/group/'.length);
-    return path.join(GROUPS_DIR, sourceGroup, rel);
+    return path.join(GROUPS_DIR, baseGroup, rel);
   }
 
   // /workspace/project/... → project root/...
@@ -148,7 +158,7 @@ export function resolveContainerFilePathToHost(
 
     // Find the group's container config to resolve the mount
     for (const group of Object.values(registeredGroups)) {
-      if (group.folder !== sourceGroup) continue;
+      if (group.folder !== baseGroup) continue;
       const mounts = group.containerConfig?.additionalMounts;
       if (!mounts) break;
       for (const m of mounts) {

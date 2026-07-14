@@ -1,5 +1,6 @@
 actions:
   send_message: autonomous
+  send_file: notify
   write_agent_memory: autonomous
   search_literature: autonomous
   # All other actions (send_email, draft_email, schedule_task, write_vault,

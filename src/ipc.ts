@@ -1,17 +1,9 @@
-import fs from 'fs';
-import path from 'path';
-
-import { AGENTS_DIR, DATA_DIR, PROACTIVE_PAUSE_PATH } from './config.js';
-import { parseCompoundKey, fsPathToCompoundKey } from './compound-key.js';
+import { DATA_DIR } from './config.js';
 import { AvailableGroup } from './container-runner.js';
-import { loadAgentTrust } from './agent-registry.js';
-import { checkTrustAndStage } from './trust-enforcement.js';
-import { firePostHocNotify } from './trust-notify.js';
 import {
   isValidAgentName,
   isFileCredentialLike,
   isSendFileExtensionAllowed,
-  resolveContainerFilePathToHost,
 } from './ipc/file-validation.js';
 import {
   deliverSendMessage,
@@ -23,7 +15,6 @@ import {
 import { buildContext, dispatchIpcAction } from './ipc/handler.js';
 import { registerBuiltinHandlers } from './ipc/handlers/index.js';
 import { logger } from './logger.js';
-import { writePause } from './proactive-pause.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
@@ -70,203 +61,12 @@ export {
   isSenderAllowedForPool,
 };
 
-
-/**
- * Process a single IPC message (send_message or send_file).
- * Extracted from the inline watcher loop for testability.
- */
-export async function processIpcMessage(
-  data: {
-    type: string;
-    chatJid?: string;
-    text?: string;
-    sender?: string;
-    webAppUrl?: string;
-    filePath?: string;
-    caption?: string;
-    pausedUntil?: string | null;
-  },
-  sourceGroup: string,
-  isMain: boolean,
-  deps: IpcDeps,
-): Promise<void> {
-  const registeredGroups = deps.registeredGroups();
-
-  if (data.type === 'message' && data.chatJid && data.text) {
-    // Authorization: verify this group can send to this chatJid
-    const targetGroup = registeredGroups[data.chatJid];
-    // For compound groups, extract base group for authorization
-    const baseKey = fsPathToCompoundKey(sourceGroup);
-    const { group: baseGroupFolder, agent: agentName } =
-      parseCompoundKey(baseKey);
-    if (isMain || (targetGroup && targetGroup.folder === baseGroupFolder)) {
-      // Trust enforcement for compound groups (agents). Capture decision
-      // so we can fire a post-hoc notify after delivery succeeds.
-      let notify = false;
-      if (agentName) {
-        const trust = loadAgentTrust(path.join(AGENTS_DIR, agentName));
-        const decision = checkTrustAndStage({
-          agentName,
-          groupFolder: baseGroupFolder,
-          actionType: 'send_message',
-          summary: data.text,
-          target: data.chatJid,
-          payloadForStaging: {
-            type: 'message',
-            chatJid: data.chatJid,
-            text: data.text,
-            sender: data.sender,
-            webAppUrl: data.webAppUrl,
-          },
-          trust,
-        });
-        notify = decision.notify;
-        if (!decision.allowed) return;
-      }
-
-      await deliverSendMessage(
-        {
-          chatJid: data.chatJid,
-          text: data.text,
-          sender: data.sender,
-          webAppUrl: data.webAppUrl,
-          permittedSenders: targetGroup?.permittedSenders,
-        },
-        deps,
-        sourceGroup,
-      );
-
-      // Skip the notify if its target jid IS the main jid (would echo back
-      // into the same chat we just sent to). The shared helper has no way
-      // to know about the message's chatJid, so we guard inline.
-      const mainJidForSelfCheck = Object.entries(registeredGroups).find(
-        ([, g]) => g.isMain,
-      )?.[0];
-      if (notify && agentName && mainJidForSelfCheck !== data.chatJid) {
-        await firePostHocNotify({
-          notify,
-          agentName,
-          actionType: 'send_message',
-          summary: `→ ${registeredGroups[data.chatJid]?.name || data.chatJid}: ${data.text}`,
-          registeredGroups,
-          deps,
-        });
-      }
-    } else {
-      logger.warn(
-        { chatJid: data.chatJid, sourceGroup },
-        'Unauthorized IPC message attempt blocked',
-      );
-    }
-  } else if (
-    data.type === 'send_file' &&
-    data.chatJid &&
-    data.filePath &&
-    deps.sendFile
-  ) {
-    const targetGroup = registeredGroups[data.chatJid];
-    // For compound groups, extract base group for authorization
-    const sfBaseKey = fsPathToCompoundKey(sourceGroup);
-    const { group: sfBaseGroup } = parseCompoundKey(sfBaseKey);
-    if (isMain || (targetGroup && targetGroup.folder === sfBaseGroup)) {
-      // Resolve container path to host path (or pass through absolute host paths)
-      let hostFilePath: string | null;
-      if (
-        isMain &&
-        data.filePath.startsWith('/') &&
-        !data.filePath.startsWith('/workspace/') &&
-        !data.filePath.includes('..') &&
-        fs.existsSync(data.filePath)
-      ) {
-        // Absolute host path pass-through: restricted to main group only.
-        // Non-main groups would otherwise be able to exfiltrate arbitrary
-        // host files (SSH keys, credentials) by sending them to their own JID.
-        hostFilePath = data.filePath;
-      } else {
-        hostFilePath = resolveContainerFilePathToHost(
-          data.filePath,
-          sourceGroup,
-          registeredGroups,
-        );
-      }
-      if (!hostFilePath || !fs.existsSync(hostFilePath)) {
-        logger.warn(
-          {
-            chatJid: data.chatJid,
-            sourceGroup,
-            containerPath: data.filePath,
-            hostFilePath,
-          },
-          'IPC send_file: file not found or path not resolvable',
-        );
-      } else {
-        // C2: extension allowlist for non-main. Fast reject before the
-        // content-sample credential check so we never open files we don't
-        // intend to send anyway (archives, data stores, executables).
-        if (!isMain && !isSendFileExtensionAllowed(hostFilePath)) {
-          logger.warn(
-            { sourceGroup, chatJid: data.chatJid, hostFilePath },
-            'IPC send_file rejected: extension not in allowlist',
-          );
-          return;
-        }
-        // B2/B4: credential blocklist. Main-group bypasses (operator
-        // tooling legitimately forwards tokens). Non-main checks both
-        // filename and a content sample so rename-to-x.json doesn't
-        // defeat it.
-        if (!isMain) {
-          try {
-            const fd = fs.openSync(hostFilePath, 'r');
-            const sample = Buffer.alloc(65536);
-            const bytes = fs.readSync(fd, sample, 0, sample.length, 0);
-            fs.closeSync(fd);
-            const slice = sample.subarray(0, bytes);
-            if (isFileCredentialLike(hostFilePath, slice)) {
-              logger.warn(
-                { sourceGroup, chatJid: data.chatJid, hostFilePath },
-                'IPC send_file rejected: credential-like file from non-main',
-              );
-              return;
-            }
-          } catch (err) {
-            logger.warn(
-              { err, hostFilePath },
-              'IPC send_file: failed to read credential sample (proceeding)',
-            );
-          }
-        }
-        await deps.sendFile(data.chatJid, hostFilePath, data.caption);
-        logger.info(
-          {
-            chatJid: data.chatJid,
-            sourceGroup,
-            hostFilePath,
-          },
-          'IPC file sent',
-        );
-      }
-    } else {
-      logger.warn(
-        { chatJid: data.chatJid, sourceGroup },
-        'Unauthorized IPC send_file attempt blocked',
-      );
-    }
-  } else if (data.type === 'set_proactive_pause') {
-    if (!isMain) {
-      logger.warn(
-        { sourceGroup },
-        'IPC set_proactive_pause rejected: not main',
-      );
-      return;
-    }
-    const pauseFile =
-      process.env.PROACTIVE_PAUSE_PATH_OVERRIDE || PROACTIVE_PAUSE_PATH;
-    const pausedUntil =
-      typeof data.pausedUntil === 'string' ? data.pausedUntil : null;
-    writePause(pauseFile, pausedUntil);
-    logger.info({ pausedUntil }, 'proactive pause updated');
-  }
-}
+// processIpcMessage (the inline message/send_file/set_proactive_pause
+// if-ladder) was deleted 2026-07-14. `message` and `send_file` now live on
+// the IpcHandler registry (src/ipc/handlers/message.ts, send-file.ts) and
+// both IPC queue dirs feed dispatchIpcAction via processTaskIpc.
+// `set_proactive_pause` was dropped entirely: no writer ever shipped
+// (f9279078 added only the host branch).
 
 // startIpcWatcher + cleanupStaleProcessing + the claim/process loop moved
 // to ipc/watcher.ts (the messages/ and tasks/ blocks are now one

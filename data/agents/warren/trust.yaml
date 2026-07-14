@@ -1,5 +1,6 @@
 actions:
   send_message: autonomous
+  send_file: notify
   write_agent_memory: autonomous
   write_vault: notify
   schedule_task: notify

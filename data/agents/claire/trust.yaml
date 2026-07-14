@@ -1,5 +1,6 @@
 actions:
   send_message: notify
+  send_file: notify
   send_slack_dm: notify
   read_slack_dm: notify
   publish_to_bus: autonomous

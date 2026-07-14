@@ -4,7 +4,7 @@ import path from 'path';
 import { DATA_DIR, IPC_POLL_INTERVAL } from '../config.js';
 import { logger } from '../logger.js';
 import type { IpcDeps } from '../ipc.js';
-import { processIpcMessage, processTaskIpc } from '../ipc.js';
+import { processTaskIpc } from '../ipc.js';
 import { scanIpcGroupFolders } from './fd-diagnostic.js';
 
 /**
@@ -56,10 +56,7 @@ export async function claimAndProcessDir(
       await processor(data);
       fs.unlinkSync(processingPath);
     } catch (err) {
-      logger.error(
-        { file, sourceGroup, err },
-        `Error processing IPC ${kind}`,
-      );
+      logger.error({ file, sourceGroup, err }, `Error processing IPC ${kind}`);
       fs.mkdirSync(errorDir, { recursive: true });
       try {
         const errorName = sourceGroup ? `${sourceGroup}-${file}` : file;
@@ -153,12 +150,16 @@ export function startIpcWatcher(deps: IpcDeps): void {
       const messagesDir = path.join(ipcBaseDir, sourceGroup, 'messages');
       const tasksDir = path.join(ipcBaseDir, sourceGroup, 'tasks');
 
-      // Process messages from this group's IPC directory.
+      // Process messages from this group's IPC directory. Since 2026-07-14
+      // both queues feed the same dispatcher: message/send_file were migrated
+      // onto the IpcHandler registry and the legacy processIpcMessage ladder
+      // was deleted. messages/ remains a separate directory only because
+      // in-flight containers still write to it.
       try {
         await claimAndProcessDir(
           messagesDir,
           errorDir,
-          (data) => processIpcMessage(data, sourceGroup, isMain, deps),
+          (data) => processTaskIpc(data, sourceGroup, isMain, deps),
           sourceGroup,
           'message',
         );

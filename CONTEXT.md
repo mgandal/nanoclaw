@@ -36,8 +36,11 @@ factories register at startup via `src/channels/registry.ts`.
 ### IPC action
 
 A typed message an in-container agent sends to the host. Wire format: JSON
-file dropped in `data/ipc/{group}/tasks/{id}.json`, identified by
-`data.type`. The set is closed; new actions require a host-side **handler**.
+file dropped in `data/ipc/{group}/tasks/{id}.json` (or the legacy
+`messages/{id}.json` queue, which `message`/`send_file` still use — since
+2026-07-14 both directories feed the same `dispatchIpcAction` registry; the
+inline `processIpcMessage` ladder is gone). Identified by `data.type`. The
+set is closed; new actions require a host-side **handler**.
 See `docs/context-engineering/ipc-handler-contract.md`.
 
 Two `responseKind`s:
@@ -85,11 +88,14 @@ sessionId. Persists across container spawns until idle-expired
 
 ### Compound key
 
-`{groupFolder}+{agentName}` — the filesystem-safe identifier for an
+`{groupFolder}--{agentName}` — the filesystem-safe identifier for an
 agent-running-in-a-group. Used for per-agent IPC directories
 (`data/ipc/{compoundKey}/`) so two agents in the same group don't collide.
-The `+` is the on-disk form; `:` is the parsed form. Conversion helpers
-live in `src/compound-key.ts`.
+The `--` is the on-disk form; `:` is the parsed form (`SEPARATOR`/
+`FS_SEPARATOR` in `src/compound-key.ts`). Note the container still mounts
+the **base** group folder at `/workspace/group` — compound callers' file
+paths must resolve against the base group, not the compound directory
+(see `resolveContainerFilePathToHost`).
 
 ### Skill
 

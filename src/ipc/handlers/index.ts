@@ -10,6 +10,7 @@ import {
 } from './imessage.js';
 import { kgQueryHandler } from './kg-query.js';
 import { messageHandler } from './message.js';
+import { sendFileHandler } from './send-file.js';
 import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 import { slackDmReadHandler, slackDmHandler } from './slack.js';
 import {
@@ -60,6 +61,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(deployMiniAppHandler);
   registerIpcHandler(kgQueryHandler);
   registerIpcHandler(messageHandler);
+  registerIpcHandler(sendFileHandler);
   registerIpcHandler(imessageSearchHandler);
   registerIpcHandler(imessageReadHandler);
   registerIpcHandler(imessageSendHandler);
