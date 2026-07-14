@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { CronExpressionParser } from 'cron-parser';
 import { sanitizeScreenshotImage } from './screenshot-image.js';
+import { resultsDirFor } from './wire-contract.js';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
@@ -818,13 +819,13 @@ Returns: "Group <name> registered. It will start receiving messages immediately.
 // General-purpose browser control via host-side Playwright.
 // Uses same IPC pattern: write task file, poll for result.
 
-const BROWSER_RESULTS_DIR = path.join(IPC_DIR, 'browser_results');
-const CRYSTALLIZE_CANDIDATE_RESULTS_DIR = path.join(IPC_DIR, 'crystallize_candidate_results');
-const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, 'dashboard_results');
-const KG_RESULTS_DIR = path.join(IPC_DIR, 'kg_results');
-const KNOWLEDGE_RESULTS_DIR = path.join(IPC_DIR, 'knowledge_results');
-const SKILL_RESULTS_DIR = path.join(IPC_DIR, 'skill_results');
-const TASK_RESULTS_DIR = path.join(IPC_DIR, 'task_results');
+const BROWSER_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('browser'));
+const CRYSTALLIZE_CANDIDATE_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('crystallize_candidate_fetch'));
+const DASHBOARD_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('dashboard_query'));
+const KG_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('kg_query'));
+const KNOWLEDGE_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('knowledge_search'));
+const SKILL_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('skill_search'));
+const TASK_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('task_add'));
 
 async function waitForIpcResult(
   resultsDir: string,
@@ -1326,7 +1327,7 @@ Returns: status message + base64-encoded PNG as an image content block. 2-minute
 // These tools communicate with the host via IPC task files.
 // The host runs browser automation scripts to interact with X.
 
-const X_RESULTS_DIR = path.join(IPC_DIR, 'x_results');
+const X_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('x'));
 
 async function waitForXResult(requestId: string, maxWait = 120000): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(X_RESULTS_DIR, `${requestId}.json`);
@@ -1478,7 +1479,7 @@ Returns: JSON array of bookmarked tweets, each with author, text, URL, and tweet
 // Read/search/send iMessages via host-side SQLite + AppleScript.
 // Uses same IPC pattern: write task file, poll for result.
 
-const IMESSAGE_RESULTS_DIR = path.join(IPC_DIR, 'imessage_results');
+const IMESSAGE_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('imessage_search'));
 
 async function waitForImessageResult(requestId: string, maxWait = 30000): Promise<{ success: boolean; message: string; data?: unknown }> {
   const resultFile = path.join(IMESSAGE_RESULTS_DIR, `${requestId}.json`);
@@ -1661,7 +1662,7 @@ Returns: lines of "<contact>: <count> messages (last: <timestamp>)". 30-second t
 // --- Slack DM Tool ---
 // Send a Slack direct message via the host bridge (port 19876).
 
-const SLACK_RESULTS_DIR = path.join(IPC_DIR, 'slack_results');
+const SLACK_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('slack_dm'));
 
 // Available to all groups — trust enforcement is handled host-side in ipc.ts
 server.tool(
@@ -1823,7 +1824,7 @@ Returns: newline-separated lines "[<priority>] From <agent> (<topic>): <finding>
 // Agents can deploy a self-contained HTML page to Vercel and send the user
 // an inline button that opens it as a Telegram Mini App (WebApp).
 
-const DEPLOY_RESULTS_DIR = path.join(IPC_DIR, 'deploy_results');
+const DEPLOY_RESULTS_DIR = path.join(IPC_DIR, resultsDirFor('deploy_mini_app'));
 
 server.tool(
   'deploy_mini_app',

@@ -269,6 +269,14 @@ export function _resetHandlersForTests(): void {
   HANDLERS.clear();
 }
 
+/** Registered handlers, for contract-consistency tests only. */
+export function _getRegisteredHandlersForTests(): ReadonlyMap<
+  string,
+  IpcHandler<unknown, ExecuteResult>
+> {
+  return HANDLERS;
+}
+
 export function buildContext(
   sourceGroup: string,
   isMain: boolean,
