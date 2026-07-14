@@ -1,5 +1,6 @@
 import { getDueDefers, markDelivered } from '../proactive-log.js';
 import { logger } from '../logger.js';
+import { startPollingLoop, PollingLoopHandle } from './polling-loop.js';
 
 export interface DeferredSendProcessorConfig {
   send: (s: {
@@ -15,7 +16,7 @@ export interface DeferredSendProcessorConfig {
 }
 
 export class DeferredSendProcessor {
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private loop: PollingLoopHandle | null = null;
   constructor(private cfg: DeferredSendProcessorConfig) {}
 
   async poll(): Promise<void> {
@@ -45,13 +46,14 @@ export class DeferredSendProcessor {
   }
 
   start(intervalMs = 60_000): void {
-    if (!this.timer)
-      this.timer = setInterval(() => {
-        void this.poll();
-      }, intervalMs);
+    if (!this.loop)
+      this.loop = startPollingLoop(() => this.poll(), {
+        name: 'deferred-send',
+        intervalMs,
+      });
   }
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.loop?.stop();
+    this.loop = null;
   }
 }

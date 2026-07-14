@@ -1,6 +1,7 @@
 import { getDb } from '../db.js';
 import { logger } from '../logger.js';
 import type { RawEvent } from '../event-router.js';
+import { startPollingLoop, PollingLoopHandle } from './polling-loop.js';
 
 export interface TaskOutcomeConfig {
   onEvent: (event: RawEvent) => void;
@@ -47,7 +48,7 @@ export function markStaleTaskOutcomesEmitted(
 
 export class TaskOutcomeWatcher {
   private cfg: TaskOutcomeConfig;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private loop: PollingLoopHandle | null = null;
 
   constructor(cfg: TaskOutcomeConfig) {
     this.cfg = cfg;
@@ -97,11 +98,15 @@ export class TaskOutcomeWatcher {
   }
 
   start(intervalMs = 60_000): void {
-    if (!this.timer) this.timer = setInterval(() => this.poll(), intervalMs);
+    if (!this.loop)
+      this.loop = startPollingLoop(() => this.poll(), {
+        name: 'task-outcome',
+        intervalMs,
+      });
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.loop?.stop();
+    this.loop = null;
   }
 }

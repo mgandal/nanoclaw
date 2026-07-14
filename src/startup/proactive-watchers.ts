@@ -6,6 +6,7 @@ import {
 import { ThreadSilenceWatcher } from '../watchers/thread-silence-watcher.js';
 import { QmdEmailAdapter } from '../watchers/qmd-email-adapter.js';
 import { DeferredSendProcessor } from '../watchers/deferred-send-processor.js';
+import { startPollingLoop } from '../watchers/polling-loop.js';
 import type { EventRouter } from '../event-router.js';
 import { PROACTIVE_WATCHERS_ENABLED } from '../config.js';
 import { logger } from '../logger.js';
@@ -95,16 +96,17 @@ export function wireProactiveWatchers(deps: ProactiveWiringDeps): {
   outcome.start();
   deferred.start();
   // Poll thread silence every 4 hours (idempotent via hasRecentEmission).
-  const silenceTimer = setInterval(() => {
-    void silence.poll();
-  }, 4 * 3600_000);
+  const silenceLoop = startPollingLoop(() => silence.poll(), {
+    name: 'thread-silence',
+    intervalMs: 4 * 3600_000,
+  });
 
   return {
     stop: () => {
       vault.stop();
       outcome.stop();
       deferred.stop();
-      clearInterval(silenceTimer);
+      silenceLoop.stop();
     },
   };
 }

@@ -45,6 +45,55 @@ export class VaultDeltaWatcher {
   }
 
   private enqueue(abs: string): void {
+    // FSEvents coalesces a newly-created subtree into ONE event for the
+    // topmost new directory (observed under Bun on macOS: mkdir -p a/b +
+    // write a/b/f.md while watching → a single 'rename a' event; edits to
+    // files under pre-existing directories DO carry the file path). A
+    // directory path carries no useful tag/author, so recover file
+    // granularity with a bounded scan: recurse only into directories whose
+    // mtime is fresh (every level of a new subtree is fresh; a big old
+    // tree that gets a spurious dir event is pruned immediately). The
+    // pending Map dedupes against events that also arrive file-level.
+    // Paths that no longer exist fall through — a deletion/rename of a
+    // file is a real change signal.
+    let isDirectory = false;
+    try {
+      isDirectory = fs.statSync(abs).isDirectory();
+    } catch {
+      // ENOENT — deleted/renamed entry; treat as a file-level change
+    }
+    if (isDirectory) {
+      const windowMs = (this.cfg.coalesceMs ?? 30_000) + 5_000;
+      this.scanRecentFiles(abs, windowMs, 0);
+      return;
+    }
+    this.enqueueFile(abs);
+  }
+
+  private scanRecentFiles(dir: string, windowMs: number, depth: number): void {
+    if (depth > 5) return;
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const p = path.join(dir, entry);
+      try {
+        const s = fs.statSync(p);
+        const fresh = Date.now() - s.mtimeMs <= windowMs;
+        if (s.isFile() && fresh) this.enqueueFile(p);
+        else if (s.isDirectory() && fresh) {
+          this.scanRecentFiles(p, windowMs, depth + 1);
+        }
+      } catch {
+        // entry vanished mid-scan
+      }
+    }
+  }
+
+  private enqueueFile(abs: string): void {
     const existing = this.pending.get(abs);
     if (existing) existing.count += 1;
     else this.pending.set(abs, { count: 1, firstSeen: Date.now() });

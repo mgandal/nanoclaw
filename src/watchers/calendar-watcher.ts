@@ -13,6 +13,7 @@ import path from 'path';
 import { logger } from '../logger.js';
 import type { CalendarPayload } from '../classification-prompts.js';
 import type { EventRouter } from '../event-router.js';
+import { startPollingLoop, PollingLoopHandle } from './polling-loop.js';
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ const ICALBUDDY_BIN = '/opt/homebrew/bin/icalbuddy';
 
 export class CalendarWatcher {
   private config: CalendarWatcherConfig;
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private loop: PollingLoopHandle | null = null;
   private lastCheck: string | null = null;
   private eventsTracked = 0;
   private changesDetected = 0;
@@ -75,16 +76,20 @@ export class CalendarWatcher {
       'CalendarWatcher starting',
     );
 
-    // Run first poll immediately, then chain with setTimeout to avoid pileup
+    // Run first poll immediately, then hand the reschedule chain to the
+    // shared polling loop (next tick only after completion — no pileup;
+    // an escaped throw is logged and the chain continues).
     await this.poll();
-    this.scheduleNext();
+    this.loop = startPollingLoop(() => this.poll(), {
+      name: 'calendar',
+      intervalMs: this.config.pollIntervalMs,
+      onError: (err) => logger.error({ err }, 'CalendarWatcher poll failed'),
+    });
   }
 
   stop(): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
+    this.loop?.stop();
+    this.loop = null;
     logger.info('CalendarWatcher stopped');
   }
 
@@ -345,18 +350,6 @@ export class CalendarWatcher {
   }
 
   // ─── Private Methods ─────────────────────────────────────────────────────────
-
-  private scheduleNext(): void {
-    this.timer = setTimeout(() => {
-      // MED-3: poll() is currently wrapped in try/catch, but if a future
-      // refactor lets an error escape, a missing .catch here would kill
-      // the reschedule chain and the watcher would stop silently. Always
-      // reschedule regardless of outcome.
-      this.poll()
-        .catch((err) => logger.error({ err }, 'CalendarWatcher poll failed'))
-        .finally(() => this.scheduleNext());
-    }, this.config.pollIntervalMs);
-  }
 
   private async poll(): Promise<void> {
     try {
