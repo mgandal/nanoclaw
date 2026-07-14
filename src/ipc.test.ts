@@ -3001,6 +3001,48 @@ describe('deliverSendMessage', () => {
     );
     expect(sendMessage).toHaveBeenCalledWith('tg:main123', 'hello');
   });
+
+  it("sendAs 'sent': persona delivery, no main-bot send", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendAs = vi.fn().mockResolvedValue('sent');
+    await deliverSendMessage(
+      { chatJid: 'tg:main123', text: 'hi', sender: 'Einstein' },
+      { sendMessage, sendAs },
+      'telegram_main',
+    );
+    expect(sendAs).toHaveBeenCalledWith(
+      'tg:main123',
+      'hi',
+      'Einstein',
+      'telegram_main',
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sendAs 'failed': downgrades to a prefixed main-bot send", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendAs = vi.fn().mockResolvedValue('failed');
+    await deliverSendMessage(
+      { chatJid: 'tg:main123', text: 'hi', sender: 'Einstein' },
+      { sendMessage, sendAs },
+      'telegram_main',
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      'tg:main123',
+      '*Einstein:*\nhi',
+    );
+  });
+
+  it("sendAs 'unavailable': falls through to a plain send (no prefix)", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendAs = vi.fn().mockResolvedValue('unavailable');
+    await deliverSendMessage(
+      { chatJid: 'slack:C123', text: 'hi', sender: 'Einstein' },
+      { sendMessage, sendAs },
+      'telegram_science-claw',
+    );
+    expect(sendMessage).toHaveBeenCalledWith('slack:C123', 'hi');
+  });
 });
 
 describe('isSenderAllowedForPool', () => {

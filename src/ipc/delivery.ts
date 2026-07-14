@@ -5,10 +5,8 @@ import {
   QUIET_DAYS_OFF,
   QUIET_HOURS_END,
   QUIET_HOURS_START,
-  TELEGRAM_BOT_POOL,
   TIMEZONE,
 } from '../config.js';
-import { sendPoolMessage } from '../channels/telegram.js';
 import { logger } from '../logger.js';
 import { decide as governorDecide } from '../outbound-governor.js';
 import {
@@ -94,7 +92,7 @@ export async function deliverSendMessage(
     // `deliverSendMessage` stays a pure delivery primitive.
     permittedSenders?: string[];
   },
-  deps: Pick<IpcDeps, 'sendMessage' | 'sendWebAppButton'>,
+  deps: Pick<IpcDeps, 'sendMessage' | 'sendWebAppButton' | 'sendAs'>,
   sourceGroup: string,
 ): Promise<void> {
   if (data.proactive && PROACTIVE_GOVERNOR) {
@@ -186,27 +184,31 @@ export async function deliverSendMessage(
     return;
   }
 
-  if (
-    data.sender &&
-    data.chatJid.startsWith('tg:') &&
-    TELEGRAM_BOT_POOL.length > 0
-  ) {
-    const sent = await sendPoolMessage(
+  // Persona delivery goes through the channel-agnostic sendAs seam
+  // (Telegram implements it via the bot pool). 'unavailable' — no persona
+  // transport for this jid/config — falls through to the plain send below,
+  // matching the old tg:-prefix + TELEGRAM_BOT_POOL check. 'failed' —
+  // configured transport couldn't deliver — downgrades to a prefixed
+  // main-bot send.
+  if (data.sender && deps.sendAs) {
+    const personaResult = await deps.sendAs(
       data.chatJid,
       data.text,
       data.sender,
       sourceGroup,
     );
-    if (!sent) {
-      const prefixed = `*${data.sender}:*\n${data.text}`;
-      await deps.sendMessage(data.chatJid, prefixed);
+    if (personaResult !== 'unavailable') {
+      if (personaResult === 'failed') {
+        const prefixed = `*${data.sender}:*\n${data.text}`;
+        await deps.sendMessage(data.chatJid, prefixed);
+      }
+      markIpcSend(data.chatJid);
+      logger.info(
+        { chatJid: data.chatJid, sourceGroup, sender: data.sender },
+        'IPC message sent',
+      );
+      return;
     }
-    markIpcSend(data.chatJid);
-    logger.info(
-      { chatJid: data.chatJid, sourceGroup, sender: data.sender },
-      'IPC message sent',
-    );
-    return;
   }
 
   await deps.sendMessage(data.chatJid, data.text);

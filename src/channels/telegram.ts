@@ -7,7 +7,11 @@ import { promisify } from 'util';
 
 import { Api, Bot, GrammyError, InlineKeyboard, InputFile } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  TELEGRAM_BOT_POOL,
+  TRIGGER_PATTERN,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { downloadFile, processImage } from '../image.js';
 import { logger } from '../logger.js';
@@ -23,6 +27,7 @@ import {
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
+  SendAsResult,
 } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -1134,6 +1139,25 @@ export class TelegramChannel implements Channel {
 
   isConnected(): boolean {
     return this.bot !== null;
+  }
+
+  /**
+   * Persona (swarm) delivery via the bot pool. 'unavailable' when no pool
+   * is configured — the caller does a plain main-bot send, matching the
+   * pre-seam TELEGRAM_BOT_POOL.length check in ipc/delivery.ts. 'failed'
+   * when a configured pool couldn't deliver (init failure, 403 in a group
+   * the bot isn't a member of) — the caller downgrades to a prefixed
+   * main-bot send.
+   */
+  async sendAs(
+    jid: string,
+    rawText: string,
+    sender: string,
+    sourceGroup: string,
+  ): Promise<SendAsResult> {
+    if (TELEGRAM_BOT_POOL.length === 0) return 'unavailable';
+    const sent = await sendPoolMessage(jid, rawText, sender, sourceGroup);
+    return sent ? 'sent' : 'failed';
   }
 
   ownsJid(jid: string): boolean {

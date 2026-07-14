@@ -146,7 +146,24 @@ export interface Channel {
   syncGroups?(force: boolean): Promise<void>;
   // Optional: send a Telegram Mini App (WebApp) inline button.
   sendWebAppButton?(jid: string, label: string, url: string): Promise<void>;
+  // Optional: send AS a named persona (swarm identity). Channels with a
+  // persona transport (Telegram bot pool) implement it. Receives RAW text
+  // (the persona sender formats internally, mirroring sendMessage's
+  // formatted-input contract being owned by the outbound door).
+  //   'sent'        — persona delivery succeeded
+  //   'failed'      — persona transport configured but delivery failed
+  //                   (caller falls back to a prefixed main-bot send)
+  //   'unavailable' — no persona transport for this channel/config
+  //                   (caller falls back to a plain send)
+  sendAs?(
+    jid: string,
+    rawText: string,
+    sender: string,
+    sourceGroup: string,
+  ): Promise<SendAsResult>;
 }
+
+export type SendAsResult = 'sent' | 'failed' | 'unavailable';
 
 // Callback type that channels use to deliver inbound messages
 export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;

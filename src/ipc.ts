@@ -20,6 +20,13 @@ import { RegisteredGroup } from './types.js';
 export interface IpcDeps {
   db: import('bun:sqlite').Database;
   sendMessage: (jid: string, text: string) => Promise<void>;
+  /** Persona (swarm) delivery via the owning channel's sendAs seam. */
+  sendAs?: (
+    jid: string,
+    rawText: string,
+    sender: string,
+    sourceGroup: string,
+  ) => Promise<import('./types.js').SendAsResult>;
   sendFile?: (jid: string, filePath: string, caption?: string) => Promise<void>;
   sendWebAppButton?: (jid: string, label: string, url: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;

@@ -529,9 +529,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       deleteSession(group.folder);
       lastAgentSeq[chatJid] = missedMessages[missedMessages.length - 1].seq;
       saveState();
-      await deliverText([channel], chatJid, 'Session cleared. Starting fresh.', {
-        kind: 'reply',
-      });
+      await deliverText(
+        [channel],
+        chatJid,
+        'Session cleared. Starting fresh.',
+        {
+          kind: 'reply',
+        },
+      );
       logger.info({ group: group.name }, 'Session reset via /new');
       return true;
     }
@@ -1958,6 +1963,11 @@ async function main(): Promise<void> {
       if (!res.sent && res.reason === 'no-channel') {
         throw new Error(`No channel for JID: ${jid}`);
       }
+    },
+    sendAs: async (jid, rawText, sender, sourceGroup) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendAs) return 'unavailable';
+      return channel.sendAs(jid, rawText, sender, sourceGroup);
     },
     sendFile: async (jid, filePath, caption) => {
       const channel = findChannel(channels, jid);
