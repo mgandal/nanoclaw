@@ -138,7 +138,7 @@ A personal Claude assistant accessible via messaging, with minimal custom code.
   - An escaper for `_ * [ ] ( ) ~ > # + - = | { } . !` in literal text
   - URL escaping inside `[text](url)`
   - A v2 target in `parseTextStyles` and updates to citation/bullet helpers
-- All outbound text MUST pass through `formatOutbound` (or `parseTextStyles` directly inside a channel) exactly once. Double-transform corrupts `_italic_` markers — see `sendPoolMessage`/`TelegramChannel.sendFile` for the two cases where the transform lives inside the channel rather than at the call site.
+- All outbound text goes through **one door**: `deliverText()` in `src/outbound.ts` (since 2026-07-14), which resolves the owning channel and applies the transform exactly once. Callers always pass RAW text and never call `formatOutbound` themselves — the transform is non-idempotent (double-transform corrupts `_italic_` markers) and the door makes that structural instead of comment-enforced. The only transforms outside the door live inside channel-specific senders that bypass `Channel.sendMessage`: `sendPoolMessage` and `TelegramChannel.sendFile` captions (both receive raw text). Sends declare a `kind` (`reply` / `system` / `proactive`); `kind: 'proactive'` throws unless the outbound governor ran (`deliverSendMessage` in `src/ipc/delivery.ts`), so a new proactive path cannot silently skip policy.
 
 ### Scheduler
 - Built-in scheduler runs on the host, spawns containers for task execution

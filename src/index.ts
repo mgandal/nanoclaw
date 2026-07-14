@@ -99,8 +99,8 @@ import {
 import { writeBridgeTokenFile } from './bridge-auth.js';
 import { backfillReaction } from './proactive-log.js';
 import { wireProactiveWatchers } from './startup/proactive-watchers.js';
-import { findChannel, formatMessages, formatOutbound } from './router.js';
-import { ChannelType } from './text-styles.js';
+import { deliverText } from './outbound.js';
+import { findChannel, formatMessages } from './router.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -510,8 +510,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           registeredGroups[jid] = updatedGroup;
         },
       });
-      const formattedReply = formatOutbound(reply, channel.name as ChannelType);
-      if (formattedReply) await channel.sendMessage(chatJid, formattedReply);
+      await deliverText([channel], chatJid, reply, { kind: 'reply' });
       lastAgentSeq[chatJid] = msg.seq;
       saveState();
       return true;
@@ -530,11 +529,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       deleteSession(group.folder);
       lastAgentSeq[chatJid] = missedMessages[missedMessages.length - 1].seq;
       saveState();
-      const newFormatted = formatOutbound(
-        'Session cleared. Starting fresh.',
-        channel.name as ChannelType,
-      );
-      if (newFormatted) await channel.sendMessage(chatJid, newFormatted);
+      await deliverText([channel], chatJid, 'Session cleared. Starting fresh.', {
+        kind: 'reply',
+      });
       logger.info({ group: group.name }, 'Session reset via /new');
       return true;
     }
@@ -563,8 +560,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       isMainGroup,
       deps: moduleIpcDeps,
       sendMessage: async (reply) => {
-        const formatted = formatOutbound(reply, channel.name as ChannelType);
-        if (formatted) await channel.sendMessage(chatJid, formatted);
+        await deliverText([channel], chatJid, reply, { kind: 'reply' });
       },
     });
     if (handled) {
@@ -582,8 +578,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     for (const m of missedMessages) {
       const text = m.content.trim().replace(groupTriggerPattern, '').trim();
       const handled = await maybeHandleCrystallize(text, async (reply) => {
-        const formatted = formatOutbound(reply, channel.name as ChannelType);
-        if (formatted) await channel.sendMessage(chatJid, formatted);
+        await deliverText([channel], chatJid, reply, { kind: 'reply' });
       });
       if (handled) {
         lastAgentSeq[chatJid] = m.seq;
@@ -601,11 +596,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     triggerPattern: getTriggerPattern(group.trigger),
     timezone: TIMEZONE,
     deps: {
-      sendMessage: (text) => {
-        const formatted = formatOutbound(text, channel.name as ChannelType);
-        return formatted
-          ? channel.sendMessage(chatJid, formatted)
-          : Promise.resolve();
+      sendMessage: async (text) => {
+        await deliverText([channel], chatJid, text, { kind: 'reply' });
       },
       setTyping: (typing) =>
         channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
@@ -738,8 +730,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               'Suppressing streaming output — IPC send_message already delivered to this chat',
             );
           } else {
-            const formatted = formatOutbound(text, channel.name as ChannelType);
-            if (formatted) await channel.sendMessage(chatJid, formatted);
+            await deliverText([channel], chatJid, text, { kind: 'reply' });
           }
           outputSentToUser = true;
         }
@@ -1146,11 +1137,10 @@ async function sendSystemAlert(
         const opsCh = findChannel(channels, opsJid);
         if (opsCh) {
           try {
-            const opsText = formatOutbound(text, opsCh.name as ChannelType);
-            if (opsText) {
-              await opsCh.sendMessage(opsJid, opsText);
-              return;
-            }
+            const res = await deliverText([opsCh], opsJid, text, {
+              kind: 'system',
+            });
+            if (res.sent) return;
           } catch {
             // fall through
           }
@@ -1165,11 +1155,10 @@ async function sendSystemAlert(
         const tgCh = findChannel(channels, tgMainJid);
         if (tgCh) {
           try {
-            const tgText = formatOutbound(text, tgCh.name as ChannelType);
-            if (tgText) {
-              await tgCh.sendMessage(tgMainJid, tgText);
-              return;
-            }
+            const res = await deliverText([tgCh], tgMainJid, text, {
+              kind: 'system',
+            });
+            if (res.sent) return;
           } catch {
             // fall through
           }
@@ -1181,11 +1170,10 @@ async function sendSystemAlert(
       const slackCh = findChannel(channels, slackJid);
       if (slackCh) {
         try {
-          const slackText = formatOutbound(text, slackCh.name as ChannelType);
-          if (slackText) {
-            await slackCh.sendMessage(slackJid, slackText);
-            return;
-          }
+          const res = await deliverText([slackCh], slackJid, text, {
+            kind: 'system',
+          });
+          if (res.sent) return;
         } catch {
           // fall through
         }
@@ -1784,8 +1772,7 @@ async function main(): Promise<void> {
     if (!channel) return;
 
     const sendFormatted = async (raw: string) => {
-      const formatted = formatOutbound(raw, channel.name as ChannelType);
-      if (formatted) await channel.sendMessage(chatJid, formatted);
+      await deliverText([channel], chatJid, raw, { kind: 'reply' });
     };
     if (command === '/remote-control') {
       const result = await startRemoteControl(
@@ -1955,23 +1942,22 @@ async function main(): Promise<void> {
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),
     sendMessage: async (jid, rawText) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) {
-        logger.warn({ jid }, 'No channel owns JID, cannot send message');
-        return;
-      }
-      const text = formatOutbound(rawText, channel.name as ChannelType);
-      if (text) await channel.sendMessage(jid, text);
+      // deliverText logs the no-channel case; task results are the output
+      // of a user-scheduled turn, hence kind 'reply'.
+      await deliverText(channels, jid, rawText, { kind: 'reply' });
     },
   });
   const ipcDeps: IpcDeps = {
     db: getDb(),
-    sendMessage: (jid, rawText) => {
-      const channel = findChannel(channels, jid);
-      if (!channel) throw new Error(`No channel for JID: ${jid}`);
-      const text = formatOutbound(rawText, channel.name as ChannelType);
-      if (!text) return Promise.resolve();
-      return channel.sendMessage(jid, text);
+    sendMessage: async (jid, rawText) => {
+      const res = await deliverText(channels, jid, rawText, {
+        kind: 'system',
+      });
+      // Preserve the legacy contract: IPC sends to an unowned JID throw so
+      // the dispatcher records a failure instead of silently dropping.
+      if (!res.sent && res.reason === 'no-channel') {
+        throw new Error(`No channel for JID: ${jid}`);
+      }
     },
     sendFile: async (jid, filePath, caption) => {
       const channel = findChannel(channels, jid);
