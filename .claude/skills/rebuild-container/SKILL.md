@@ -7,12 +7,13 @@ Rebuild the NanoClaw agent container image. This performs a clean rebuild by inv
 
 ## Steps
 
-### 1. Prune the buildkit cache
+### 1. Reset the builder
 
-The builder volume retains stale COPY artifacts even with `--no-cache`. Prune it first:
+The builder volume retains stale COPY artifacts even with `--no-cache`. Apple Container's builder has no `prune` subcommand (verified 2026-07-14) — stop and delete the builder container instead; `build.sh` starts a fresh one:
 
 ```bash
-container builder prune -f
+container builder stop
+container builder delete
 ```
 
 ### 2. Delete per-group agent-runner source caches

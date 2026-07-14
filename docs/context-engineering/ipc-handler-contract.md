@@ -56,24 +56,15 @@ Handlers return `{ executed: true, result: <payload> }` and the dispatcher
 writes `data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json` using the
 atomic `.tmp` + rename pattern.
 
-`resultsDirName` defaults to `${type}_results` for new handlers. **Legacy
-actions being migrated from the if-ladder MUST set `resultsDirName`
-explicitly** to match the container-side hardcoded path
-(`container/agent-runner/src/ipc-mcp-stdio.ts`). The legacy wire format is
-prefix-grouped, not type-suffixed:
-
-| action prefix | `resultsDirName` |
-|---|---|
-| `dashboard_query` | `dashboard_results` |
-| `kg_*` | `kg_results` |
-| `task_*` | `task_results` |
-| `pageindex_*` | `pageindex_results` |
-| `imessage_*` | `imessage_results` |
-| `slack_*` | `slack_results` |
-| `x_*` | `x_results` |
-| `browser_*` | `browser_results` |
-| `skill_*` | `skill_results` |
-| `deploy_*` | `deploy_results` |
+`resultsDirName` defaults to `${type}_results` for new handlers. The
+type → results-dir mapping (including the legacy prefix-grouped dirs) is
+machine-readable in the **wire contract**: canonical at
+`container/agent-runner/src/wire-contract.ts` (consumed by the container
+tools), mirrored at `src/ipc/wire-contract.ts`. Do not maintain a prose
+table here — `src/ipc/wire-contract.test.ts` enforces (a) the two copies
+are identical and (b) every result-kind handler's `resultsDirName`
+matches `resultsDirFor(type)`. Adding a legacy-dir action means adding
+it to BOTH contract files, or the test fails.
 
 The dispatcher also writes the failure file when `execute` throws or returns
 `{ executed: false }`:
