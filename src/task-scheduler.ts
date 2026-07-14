@@ -10,10 +10,7 @@ import {
   TIMEZONE,
 } from './config.js';
 import { parseCompoundKey } from './compound-key.js';
-import {
-  ContainerOutput,
-  writeTasksSnapshot,
-} from './container-runner.js';
+import { ContainerOutput, writeTasksSnapshot } from './container-runner.js';
 import {
   getAllTasks,
   getConsecutiveFailures,
@@ -366,8 +363,7 @@ async function runTask(
   // transcript size cap bounds growth. Root cause: 2026-06-23 CLAIRE
   // incident. Isolated-context tasks run stateless (sessionKey: null).
   const sessions = deps.getSessions();
-  const sessionKey =
-    task.context_mode === 'group' ? task.group_folder : null;
+  const sessionKey = task.context_mode === 'group' ? task.group_folder : null;
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the

@@ -56,8 +56,10 @@ describe('wire contract vs the IpcHandler registry', () => {
     for (const [type, dir] of Object.entries(RESULTS_DIR_BY_TYPE)) {
       if (dynamicFamilies.has(type)) continue; // skill hosts outside src/
       const handler = getIpcHandler(type);
-      expect(handler, `contract type ${type} has no registered handler`)
-        .toBeDefined();
+      expect(
+        handler,
+        `contract type ${type} has no registered handler`,
+      ).toBeDefined();
       expect(
         handler!.responseKind,
         `contract type ${type} is not result-kind`,

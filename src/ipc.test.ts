@@ -3027,10 +3027,7 @@ describe('deliverSendMessage', () => {
       { sendMessage, sendAs },
       'telegram_main',
     );
-    expect(sendMessage).toHaveBeenCalledWith(
-      'tg:main123',
-      '*Einstein:*\nhi',
-    );
+    expect(sendMessage).toHaveBeenCalledWith('tg:main123', '*Einstein:*\nhi');
   });
 
   it("sendAs 'unavailable': falls through to a plain send (no prefix)", async () => {

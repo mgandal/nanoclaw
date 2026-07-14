@@ -24,6 +24,13 @@ export interface PollingLoopOptions {
   runImmediately?: boolean;
   /** Default: logger.warn and continue. */
   onError?: (err: unknown) => void;
+  /**
+   * Warn when a single tick runs longer than this (a hung tick blocks the
+   * chain forever — unlike setInterval, this loop never overlaps — so a
+   * wedged downstream await, e.g. the 2026-05-21 slack-mcp hang, would
+   * otherwise stop the watcher silently). Log-only. Default 5 minutes.
+   */
+  tickWarnMs?: number;
 }
 
 export interface PollingLoopHandle {
@@ -42,12 +49,22 @@ export function startPollingLoop(
     ((err: unknown) =>
       logger.warn({ err, watcher: opts.name }, 'polling loop tick failed'));
 
+  const tickWarnMs = opts.tickWarnMs ?? 5 * 60_000;
+
   const runOnce = async (): Promise<void> => {
     timer = null;
+    const hungTickWarn = setTimeout(() => {
+      logger.warn(
+        { watcher: opts.name, tickWarnMs },
+        'polling loop tick still running — chain is blocked until it settles',
+      );
+    }, tickWarnMs);
     try {
       await fn();
     } catch (err) {
       handleError(err);
+    } finally {
+      clearTimeout(hungTickWarn);
     }
     if (!stopped) {
       timer = setTimeout(() => void runOnce(), opts.intervalMs);

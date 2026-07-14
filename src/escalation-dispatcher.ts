@@ -37,7 +37,10 @@ export function createEscalationDispatcher(
         { eventId: event.event.id, topic: event.classification.topic },
         'Event escalated but no agent target resolved; falling back to alert',
       );
-      void deps.sendSystemAlert('Event Escalation', event.classification.summary);
+      void deps.sendSystemAlert(
+        'Event Escalation',
+        event.classification.summary,
+      );
       return;
     }
 
@@ -79,7 +82,10 @@ export function createEscalationDispatcher(
         { err, eventId: event.event.id, target },
         'Bus dispatch failed for escalated event; falling back to alert',
       );
-      void deps.sendSystemAlert('Event Escalation', event.classification.summary);
+      void deps.sendSystemAlert(
+        'Event Escalation',
+        event.classification.summary,
+      );
     }
   };
 }

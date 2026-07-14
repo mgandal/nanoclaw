@@ -3,11 +3,13 @@ import path from 'path';
 
 import { ASSISTANT_NAME, DATA_DIR } from './config.js';
 import { parseCompoundKey } from './compound-key.js';
+import { ContainerOutput, runContainerAgent } from './container-runner.js';
 import {
-  ContainerOutput,
-  runContainerAgent,
-} from './container-runner.js';
-import { deleteSession, getSessionTimestamps, setSession, touchSession } from './db.js';
+  deleteSession,
+  getSessionTimestamps,
+  setSession,
+  touchSession,
+} from './db.js';
 import { checkSessionExpiry, shouldClearSession } from './index-helpers.js';
 import { logger } from './logger.js';
 import type { RegisteredGroup } from './types.js';

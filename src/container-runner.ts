@@ -406,8 +406,9 @@ export function buildVolumeMounts(
   });
 
   // Copy agent-runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
+  // can inspect it. NOTE: this is a dev-time source cache only — the
+  // container entrypoint execs /app/dist/index.js baked into the image; it
+  // does NOT recompile /app/src (see B7 comment below).
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -421,13 +422,23 @@ export function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
+    // Staleness check spans ALL source files, not just index.ts — an edit
+    // to a sibling module (e.g. wire-contract.ts) alone must also refresh
+    // the cache (2026-07-14 review).
+    const latestSrcMtime = (dir: string): number => {
+      let latest = 0;
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith('.ts')) continue;
+        const m = fs.statSync(path.join(dir, f)).mtimeMs;
+        if (m > latest) latest = m;
+      }
+      return latest;
+    };
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
       !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      latestSrcMtime(agentRunnerSrc) > latestSrcMtime(groupAgentRunnerDir);
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }

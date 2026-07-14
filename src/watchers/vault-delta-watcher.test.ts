@@ -97,6 +97,32 @@ describe('VaultDeltaWatcher', () => {
     w.stop();
   });
 
+  it('falls back to a coarse dir event when a dir change has no fresh-mtime files', async () => {
+    // mv/rsync -a preserve mtimes; a late-delivered event exceeds the scan
+    // window. The watcher must still emit SOMETHING (silent-failure-wedge
+    // guard) — the old coarse dir-path event.
+    const emit = vi.fn();
+    const w = new VaultDeltaWatcher({
+      roots: [tmp],
+      onEvent: emit,
+      coalesceMs: 30,
+    });
+    const staleDir = path.join(tmp, '10-daily');
+    fs.mkdirSync(staleDir, { recursive: true });
+    const staleFile = path.join(staleDir, 'old.md');
+    fs.writeFileSync(staleFile, 'x');
+    // Age both far past the scan window (coalesceMs 30 + 5s slack).
+    const past = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(staleFile, past, past);
+    fs.utimesSync(staleDir, past, past);
+
+    w.enqueueForTest(staleDir);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0].payload.path).toBe(staleDir);
+    w.stop();
+  });
+
   it('skips missing roots without crashing', () => {
     const emit = vi.fn();
     const w = new VaultDeltaWatcher({

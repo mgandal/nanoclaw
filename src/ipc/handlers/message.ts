@@ -30,6 +30,9 @@ function mainJidOf(ctx: IpcHandlerContext): string | undefined {
 export const messageHandler: IpcHandler<Input> = {
   type: 'message',
   responseKind: 'notify',
+  // Ladder parity: a delivery throw propagates so the watcher preserves
+  // the payload in errors/ instead of unlinking it as processed.
+  rethrowExecuteErrors: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;

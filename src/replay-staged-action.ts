@@ -41,10 +41,21 @@ export async function replayStagedAction(
   }
 
   // Build a real IpcHandlerContext via the canonical constructor (R2-I1).
-  // isMain=true: the user approving the action is the authority; the
-  // original caller's isMain status is irrelevant on the replay path.
-  // requestId=null: host-initiated, no IPC poller waiting.
-  const ctx = buildContext(group_folder, true, deps);
+  //
+  // isMain carries the ORIGIN group's tier, derived from the registration —
+  // NOT a blanket true. The user's approval authorizes the ACTION (that is
+  // why gateAndStage is bypassed below, per D5), but it must not promote the
+  // caller's trust tier: handler execute() bodies key tier-scoped behavior
+  // on ctx.isMain (send_file's absolute-path pass-through and credential-
+  // blocklist bypass, dashboard/kg result scoping, pageindex mount
+  // validation). A hardcoded true let an approved non-main staged send_file
+  // run with main's file-safety exemptions — 2026-07-14 security review H4.
+  // An unregistered origin (group removed since staging) fails safe to
+  // non-main. requestId=null: host-initiated, no IPC poller waiting.
+  const originIsMain = Object.values(deps.registeredGroups()).some(
+    (g) => g.folder === group_folder && g.isMain === true,
+  );
+  const ctx = buildContext(group_folder, originIsMain, deps);
 
   logger.info(
     {

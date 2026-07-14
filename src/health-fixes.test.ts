@@ -17,7 +17,10 @@ describe('registerFixHandlers', () => {
   it('registers the five watchdog handlers and the fix actions', () => {
     const addFixHandler = vi.fn();
     const setFixActions = vi.fn();
-    const monitor = { addFixHandler, setFixActions } as unknown as HealthMonitor;
+    const monitor = {
+      addFixHandler,
+      setFixActions,
+    } as unknown as HealthMonitor;
 
     registerFixHandlers(monitor, '/tmp/fixes');
 

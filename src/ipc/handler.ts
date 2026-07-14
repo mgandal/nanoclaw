@@ -243,6 +243,15 @@ export interface IpcHandler<TInput, TResult extends ExecuteResult = void> {
    * Path: data/ipc/{sourceGroup}/{resultsDirName}/{requestId}.json.
    */
   readonly resultsDirName?: string;
+  /**
+   * Rethrow execute() errors instead of swallowing them, so the IPC
+   * watcher moves the claimed file to errors/ for inspection/replay.
+   * ONLY for notify-kind delivery handlers (message, send_file) whose
+   * pre-migration ladder semantics preserved failed payloads. Never set
+   * on result-kind handlers — they must always write a failure result
+   * file so the container poller doesn't hang.
+   */
+  readonly rethrowExecuteErrors?: boolean;
   parse(raw: unknown): TInput | null;
   authorize(input: TInput, ctx: IpcHandlerContext): IpcAuthorization | null;
   execute(input: TInput, ctx: IpcHandlerContext): Promise<TResult> | TResult;
@@ -509,6 +518,12 @@ export async function dispatchIpcAction(
       },
       'IPC handler execute threw',
     );
+    // Delivery handlers (message/send_file) opt into rethrow so the watcher
+    // moves the claimed IPC file to errors/ for inspection/replay — the
+    // pre-migration ladder semantics. Result-kind handlers must NOT set
+    // this: their contract is to always write a failure result file below
+    // so the container poller never hangs.
+    if (handler.rethrowExecuteErrors) throw err;
   }
 
   if (responseKind === 'result') {
@@ -560,6 +575,7 @@ export async function dispatchIpcAction(
     }
   } else if (
     executed &&
+    !executeThrew &&
     decision !== null &&
     !notifySuppressedBySelfEcho(auth)
   ) {
@@ -567,6 +583,10 @@ export async function dispatchIpcAction(
     // calls, which are read-only and on the allowlist — by construction they
     // never produce a notify, and skipping fireNotifyIfRequested here keeps
     // that invariant explicit.
+    //
+    // !executeThrew: a throw leaves `executed` at its initialized true, so
+    // without this guard a failed delivery fired a receipt to main claiming
+    // success (2026-07-14 review). Mirrors the result-kind branch above.
     //
     // notifySuppressedBySelfEcho gates the chatJid-aware self-echo case: a
     // message delivered TO the main jid must not also fire a receipt to main

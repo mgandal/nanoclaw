@@ -450,6 +450,32 @@ describe('send_file trust gate (new under the dispatcher)', () => {
     }
   });
 
+  it('does not fire a receipt when the send THROWS (no false delivery claim)', async () => {
+    const cleanup = makeTestAgent(
+      'sf-throw-agent',
+      'actions:\n  send_file: notify\n',
+    );
+    makeGroupFile('telegram_other', 'agent-report.pdf', '%PDF-1.4 (fake)');
+    sendFileSpy.mockRejectedValue(new Error('telegram 413: file too large'));
+    try {
+      // rethrowExecuteErrors: the dispatcher rethrows so the watcher can
+      // preserve the payload in errors/ — and no receipt reaches main.
+      await expect(
+        dispatch(
+          {
+            chatJid: 'tg:other456',
+            filePath: '/workspace/group/agent-report.pdf',
+          },
+          'telegram_other--sf-throw-agent',
+          false,
+        ),
+      ).rejects.toThrow('413');
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('does not fire a notify receipt when the file send bailed (file missing)', async () => {
     const cleanup = makeTestAgent(
       'sf-bail-agent',

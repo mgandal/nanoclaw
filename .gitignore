@@ -115,3 +115,11 @@ scripts/skill-evolve/runs/*/scratch/
 
 # Follow-up Hub write-back lock (runtime, shared between poller + email-ingest)
 groups/global/state/followups.md.lock
+
+# Compiled artifacts must never sit beside agent-runner sources: vitest
+# resolves a literal .js import before the .ts, which silently pins the
+# wire-contract parity test to a stale build (2026-07-14 review).
+container/agent-runner/src/*.js
+container/agent-runner/src/*.js.map
+container/agent-runner/src/*.d.ts
+container/agent-runner/src/*.d.ts.map

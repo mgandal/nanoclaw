@@ -1,0 +1,9 @@
+# Keep stray compiled artifacts out of the image build context — /app/src
+# must mirror the tracked sources exactly (COPY layer determinism).
+agent-runner/src/*.js
+agent-runner/src/*.js.map
+agent-runner/src/*.d.ts
+agent-runner/src/*.d.ts.map
+agent-runner/node_modules
+agent-runner/dist
+logs

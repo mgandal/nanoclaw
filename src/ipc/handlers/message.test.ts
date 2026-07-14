@@ -59,7 +59,9 @@ beforeEach(() => {
     sendMessage: sendMessageSpy as unknown as IpcDeps['sendMessage'],
     registeredGroups: () => groups,
     registerGroup: vi.fn() as unknown as IpcDeps['registerGroup'],
-    syncGroups: vi.fn().mockResolvedValue(undefined) as unknown as IpcDeps['syncGroups'],
+    syncGroups: vi
+      .fn()
+      .mockResolvedValue(undefined) as unknown as IpcDeps['syncGroups'],
     getAvailableGroups: () => [],
     writeGroupsSnapshot: vi.fn() as unknown as IpcDeps['writeGroupsSnapshot'],
     onTasksChanged: vi.fn() as unknown as IpcDeps['onTasksChanged'],
@@ -84,12 +86,19 @@ describe('message handler — dispatch parity with processIpcMessage', () => {
       false,
     );
     expect(res.handled).toBe(true);
-    expect(sendMessageSpy).toHaveBeenCalledWith('tg:other456', 'hello from other');
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      'tg:other456',
+      'hello from other',
+    );
   });
 
   it('blocks an unauthorized cross-group send (target folder != base group)', async () => {
     // sourceGroup telegram_other, non-main, targeting main's jid → blocked.
-    await dispatch({ chatJid: 'tg:main123', text: 'sneaky' }, 'telegram_other', false);
+    await dispatch(
+      { chatJid: 'tg:main123', text: 'sneaky' },
+      'telegram_other',
+      false,
+    );
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 

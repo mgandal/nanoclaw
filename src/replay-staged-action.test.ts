@@ -167,6 +167,12 @@ describe('replayStagedAction', () => {
       },
     });
 
+    // isMain now derives from the ORIGIN group's registration (H4 fix) —
+    // register telegram_claire as main so the tier assertion stays true.
+    deps.registeredGroups = () => ({
+      'tg:main1': { name: 'Main', folder: 'telegram_claire', isMain: true },
+    });
+
     const { replayStagedAction } = await import('./replay-staged-action.js');
     await replayStagedAction({
       action_type: 'save_skill',
@@ -257,5 +263,57 @@ describe('replayStagedAction', () => {
     ).rejects.toThrow(
       /Handler save_skill rejected stored payload at parse\(\) time/,
     );
+  });
+
+  it('H4 fix — replay context carries the ORIGIN group tier, not a blanket isMain=true', async () => {
+    // A staged action from a NON-main group must replay with isMain=false so
+    // execute-time tier checks (send_file pass-through/blocklist, dashboard
+    // scoping) still apply. Approval bypasses the gate, not the caller tier.
+    let seenIsMain: boolean | null = null;
+    registerIpcHandler({
+      type: 'send_file',
+      parse: (r: unknown) => r as any,
+      authorize: () => null,
+      execute: async (_input: any, ctx: any) => {
+        seenIsMain = ctx.isMain;
+      },
+    } as any);
+
+    deps.registeredGroups = () => ({
+      'tg:main1': { name: 'Main', folder: 'telegram_main', isMain: true },
+      'tg:other1': { name: 'Other', folder: 'telegram_other' },
+    });
+
+    const { replayStagedAction } = await import('./replay-staged-action.js');
+    await replayStagedAction({
+      action_type: 'send_file',
+      payload: { chatJid: 'tg:other1', filePath: '/etc/passwd' },
+      group_folder: 'telegram_other',
+      agent_name: 'einstein',
+      deps,
+    });
+    expect(seenIsMain).toBe(false);
+
+    // Origin main replays as main (unchanged legitimate behavior).
+    seenIsMain = null;
+    await replayStagedAction({
+      action_type: 'send_file',
+      payload: { chatJid: 'tg:main1', filePath: '/tmp/x.pdf' },
+      group_folder: 'telegram_main',
+      agent_name: 'claire',
+      deps,
+    });
+    expect(seenIsMain).toBe(true);
+
+    // Unregistered origin (group removed since staging) fails safe: non-main.
+    seenIsMain = null;
+    await replayStagedAction({
+      action_type: 'send_file',
+      payload: { chatJid: 'tg:gone', filePath: '/tmp/x.pdf' },
+      group_folder: 'telegram_gone',
+      agent_name: 'einstein',
+      deps,
+    });
+    expect(seenIsMain).toBe(false);
   });
 });

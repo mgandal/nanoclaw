@@ -15,30 +15,30 @@ vi.mock('./config.js', async () => {
   // vi.mocked(readEnvFile).mockReturnValue(...).
   const envMod = await import('./env.js');
   return {
-  CONTAINER_IMAGE: 'nanoclaw-agent:latest',
-  CONTAINER_MAX_OUTPUT_SIZE: 10485760,
-  CONTAINER_TIMEOUT: 1800000, // 30min
-  CONTEXT_PACKET_MAX_SIZE: 8000,
-  CREDENTIAL_PROXY_PORT: 3001,
-  AGENTS_DIR: '/tmp/nanoclaw-test-agents',
-  DATA_DIR: '/tmp/nanoclaw-test-data',
-  GROUPS_DIR: '/tmp/nanoclaw-test-groups',
-  IDLE_TIMEOUT: 1800000, // 30min
-  OLLAMA_ADMIN_TOOLS: false,
-  OLLAMA_DEFAULT_MODEL: '',
-  ONECLI_API_KEY: '',
-  ONECLI_URL: 'http://localhost:10254',
-  TIMEZONE: 'America/Los_Angeles',
-  // Mirror the real contract: process.env first, then the (mocked)
-  // .env file layer.
-  getIntegrationEnv: () => {
-    const fileEnv = envMod.readEnvFile([]);
-    const merged: Record<string, string | undefined> = { ...fileEnv };
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v) merged[k] = v;
-    }
-    return merged;
-  },
+    CONTAINER_IMAGE: 'nanoclaw-agent:latest',
+    CONTAINER_MAX_OUTPUT_SIZE: 10485760,
+    CONTAINER_TIMEOUT: 1800000, // 30min
+    CONTEXT_PACKET_MAX_SIZE: 8000,
+    CREDENTIAL_PROXY_PORT: 3001,
+    AGENTS_DIR: '/tmp/nanoclaw-test-agents',
+    DATA_DIR: '/tmp/nanoclaw-test-data',
+    GROUPS_DIR: '/tmp/nanoclaw-test-groups',
+    IDLE_TIMEOUT: 1800000, // 30min
+    OLLAMA_ADMIN_TOOLS: false,
+    OLLAMA_DEFAULT_MODEL: '',
+    ONECLI_API_KEY: '',
+    ONECLI_URL: 'http://localhost:10254',
+    TIMEZONE: 'America/Los_Angeles',
+    // Mirror the real contract: process.env first, then the (mocked)
+    // .env file layer.
+    getIntegrationEnv: () => {
+      const fileEnv = envMod.readEnvFile([]);
+      const merged: Record<string, string | undefined> = { ...fileEnv };
+      for (const [k, v] of Object.entries(process.env)) {
+        if (v) merged[k] = v;
+      }
+      return merged;
+    },
   };
 });
 

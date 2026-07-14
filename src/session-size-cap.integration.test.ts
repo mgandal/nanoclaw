@@ -254,33 +254,26 @@ describe('size-cap integration: real production session file (read-only)', () =>
 });
 
 /*
- * SCHEDULER GUARD — verification by code-reading (src/task-scheduler.ts).
+ * SCHEDULER GUARD — verification by code-reading (updated 2026-07-14).
  *
- * The scheduler's inline size guard cannot be driven without a heavy task harness,
- * and it is already covered structurally by the same checkSessionExpiry/path logic
- * proven above. Confirming the guard is correctly WIRED by source inspection:
+ * The scheduler no longer carries an inline size guard. runTask
+ * (src/task-scheduler.ts) delegates the whole session lifecycle to
+ * runAgentTurn (src/agent-turn.ts) with a SIZE-ONLY policy:
  *
- *   (a) Stats the BARE group folder path:           task-scheduler.ts:382-390
- *         path.join(DATA_DIR, 'sessions', task.group_folder, '.claude',
- *                   'projects', '-workspace-group', `${sessionId}.jsonl`)
- *       — identical formula to sessionFileSize (index.ts:186-194), keyed on the
- *         bare task.group_folder (not a compound key).
- *
- *   (b) Gated on context_mode === 'group':           task-scheduler.ts:381
- *         `if (sessionId && task.context_mode === 'group') { ... }`
- *       — and the sessionId itself is only set for group mode at line 372-373:
- *         `task.context_mode === 'group' ? sessions[task.group_folder] : undefined`.
- *
- *   (c) On oversize (sizeBytes > SESSION_MAX_SIZE_BYTES, line 397) it clears the
- *       session three ways:                           task-scheduler.ts:408-410
- *         delete sessions[task.group_folder];   // drop from the in-memory map
- *         deleteSession(task.group_folder);      // drop the DB row
- *         sessionId = undefined;                 // force a fresh session this run
- *
- *   (d) Logs the rotation:                            task-scheduler.ts:398-407
- *         logger.warn({ taskId, group, staleSessionId, sizeMB, capMB },
- *           'Oversized session in scheduled task — rotating to fresh session');
- *
- * All four conditions check out — the guard stats the correct path, fires only for
- * group-context tasks over the cap, fully clears the session, and logs the event.
+ *   (a) sessionKey: task.context_mode === 'group' ? task.group_folder : null
+ *       — isolated tasks run stateless; only group-context tasks carry a
+ *       session (task-scheduler.ts, runTask).
+ *   (b) sessionPolicy: { maxSizeBytes: SESSION_MAX_SIZE_BYTES } — idle/age
+ *       thresholds are deliberately absent; checkSessionExpiry receives
+ *       Infinity for both, which can never trip (Infinity > Infinity is
+ *       false), so scheduled group-context sessions stay warm across runs.
+ *   (c) runAgentTurn sizes the transcript via sessionFileSize on the BARE
+ *       group folder (parseCompoundKey on the sessionKey), the same helper
+ *       proven above — legacy compound group_folder rows now get a WORKING
+ *       size guard (the old inline guard statted the raw compound path,
+ *       which never existed, so it silently never fired for those rows).
+ *   (d) On expiry runAgentTurn deletes the in-memory map entry and the DB
+ *       row and spawns fresh — covered directly by
+ *       src/agent-turn.test.ts ("rotates an oversized session under a
+ *       size-only policy" and the compound-key bare-folder test).
  */

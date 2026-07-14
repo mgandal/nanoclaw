@@ -64,33 +64,49 @@ export class VaultDeltaWatcher {
     }
     if (isDirectory) {
       const windowMs = (this.cfg.coalesceMs ?? 30_000) + 5_000;
-      this.scanRecentFiles(abs, windowMs, 0);
+      const found = this.scanRecentFiles(abs, windowMs, 0);
+      // Fresh-mtime scanning misses changes that PRESERVE mtimes (mv or
+      // rsync -a of an existing tree into the vault), events delivered
+      // after the window, and trees nested past the depth cap. Never
+      // swallow those silently (the repo's silent-failure-wedge
+      // anti-pattern) — fall back to the pre-2026-07-14 coarse dir-path
+      // event so the router still sees SOMETHING changed here.
+      if (found === 0) this.enqueueFile(abs);
       return;
     }
     this.enqueueFile(abs);
   }
 
-  private scanRecentFiles(dir: string, windowMs: number, depth: number): void {
-    if (depth > 5) return;
+  /** Returns how many files were enqueued. */
+  private scanRecentFiles(
+    dir: string,
+    windowMs: number,
+    depth: number,
+  ): number {
+    if (depth > 5) return 0;
     let entries: string[];
     try {
       entries = fs.readdirSync(dir);
     } catch {
-      return;
+      return 0;
     }
+    let found = 0;
     for (const entry of entries) {
       const p = path.join(dir, entry);
       try {
         const s = fs.statSync(p);
         const fresh = Date.now() - s.mtimeMs <= windowMs;
-        if (s.isFile() && fresh) this.enqueueFile(p);
-        else if (s.isDirectory() && fresh) {
-          this.scanRecentFiles(p, windowMs, depth + 1);
+        if (s.isFile() && fresh) {
+          this.enqueueFile(p);
+          found += 1;
+        } else if (s.isDirectory() && fresh) {
+          found += this.scanRecentFiles(p, windowMs, depth + 1);
         }
       } catch {
         // entry vanished mid-scan
       }
     }
+    return found;
   }
 
   private enqueueFile(abs: string): void {
