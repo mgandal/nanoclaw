@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from email_ingest.types import IngestState, STATE_DIR, LOG_FILE, FollowUp, FOLLOWUPS_FILE
 from email_ingest.gmail_adapter import GmailAdapter
 from email_ingest.exchange_adapter import ExchangeAdapter
-from email_ingest.classifier import should_fast_skip, classify_email, OLLAMA_MODEL
+from email_ingest.classifier import should_fast_skip, classify_email, OLLAMA_MODEL, reset_circuit_breaker
 from email_ingest.exporter import export_email, retain_in_hindsight
 import email_ingest.followups as _followups_mod
 import email_ingest.extractor as _extractor_mod
@@ -37,6 +37,29 @@ HINDSIGHT_THRESHOLD = 0.7
 # inbox — we count and surface them separately.
 _TRANSIENT_SKIP_REASONS = {"classification_failed", "ollama_error"}
 HINDSIGHT_URL = os.environ.get("HINDSIGHT_URL", "http://localhost:8889")
+
+# Persist progress every N emails within a phase. The whole run is wrapped in
+# `gtimeout 1200` by sync-all.sh; on a backlog too large to finish in that
+# window the process is SIGKILL'd mid-loop. Checkpointing means the next run
+# resumes from the last batch instead of re-fetching the entire backlog (the
+# 2026-05-20 Exchange-freeze bug). 25 ≈ a couple minutes of classifier work —
+# small enough to bound lost work, large enough that save() I/O is negligible.
+CHECKPOINT_EVERY = int(os.environ.get("EMAIL_INGEST_CHECKPOINT_EVERY", "25"))
+
+# Max Exchange messages fetched+processed per run. ExchangeAdapter.fetch_since
+# reads EVERY body up front via the Mail.app AppleScript bridge BEFORE the
+# classify loop (so the in-loop checkpoint can't help if fetch_since itself
+# overruns). Body reads measured ~32s each on 2026-07-02 (do_read scans every
+# mailbox with `whose message id is` — O(mailboxes×messages)), up from the ~20s
+# the old default of 30 assumed. At 32s, 30 bodies = ~980s = 82% of the
+# `gtimeout 1200` budget: a single slow read under any Mail contention tips the
+# whole fetch_since over and it's SIGKILL'd before ONE email is saved (observed
+# 2026-07-02 when the launchd sync read Mail concurrently). 24 keeps the
+# pre-read near ~790s = ~66% of budget — headroom for variance — so each run
+# finishes, exports, and advances last_exchange_epoch; the backlog drains
+# incrementally (~144/day at 6 runs/day vs ~60-75 Penn msgs/day steady-state).
+# See systematic-debugging 2026-06-18 + 2026-07-02 RCA.
+DEFAULT_EXCHANGE_BATCH = int(os.environ.get("EMAIL_INGEST_EXCHANGE_BATCH", "24"))
 
 FOLLOWUP_GMAIL_SENDER = "mgandal@gmail.com"
 
@@ -58,6 +81,19 @@ def _setup_logging():
 log = logging.getLogger("email-ingest")
 
 
+def _maybe_checkpoint(state: "IngestState", idx: int) -> None:
+    """Persist progress every CHECKPOINT_EVERY emails within a phase loop.
+
+    `idx` is the 0-based loop index. Saving on (idx+1) % N == 0 means a kill
+    after the batch boundary leaves the just-processed batch's IDs on disk, so
+    the next run resumes instead of re-fetching the whole backlog. save() caps
+    and rewrites the small state file; at N=25 the I/O is negligible next to
+    per-email classification.
+    """
+    if CHECKPOINT_EVERY > 0 and (idx + 1) % CHECKPOINT_EVERY == 0:
+        state.save()
+
+
 def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: int):
     """Main ingestion loop."""
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -73,7 +109,78 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
     }
     all_classified = []
 
-    # --- Gmail ---
+    # Reset the per-process circuit breaker at the start of each run. It fast-fails
+    # remaining emails once Ollama proves down/contended (2026-07-02 RCA), but that
+    # state must not leak across runs — a fresh run always gets a fresh chance.
+    reset_circuit_breaker()
+
+    # --- Exchange FIRST (2026-07-02 RCA) ---
+    # Exchange is the fragile, bounded, slow phase: ExchangeAdapter.fetch_since
+    # reads every body up front via the ~20s/msg Mail.app AppleScript bridge, and
+    # the phase is capped at exchange_batch. Gmail is fast but greedy (unbounded
+    # fetch, ~85 msgs/run). Running Gmail first meant an Ollama-contended run spent
+    # its whole `gtimeout 1200` budget classifying Gmail and got SIGKILL'd BEFORE
+    # Exchange ran — the exact 72h-freeze the watchdog trips on. Exchange-first
+    # guarantees the bounded phase always gets budget; if Gmail is then cut short,
+    # its checkpoint/epoch logic already resumes cleanly next run.
+    exchange_epoch = state.last_exchange_epoch or state.default_epoch()
+    if backfill_days:
+        exchange_epoch = state.default_epoch(backfill_days)
+
+    exchange_exported = 0
+    exchange_fetched = 0
+    exchange = ExchangeAdapter(batch_limit=exchange_batch)
+    if exchange.is_available():
+        processed = set(state.processed_exchange_ids)
+        emails = exchange.fetch_since(exchange_epoch, processed)
+        exchange_fetched = len(emails)
+        stats["total_fetched"] += exchange_fetched
+
+        for idx, email in enumerate(emails):
+            skip = should_fast_skip(email)
+            if skip:
+                stats["fast_skipped"] += 1
+                state.processed_exchange_ids.append(email.id)
+                _maybe_checkpoint(state, idx)
+                continue
+
+            result = classify_email(email)
+            stats["classified"] += 1
+
+            if result.skip_reason:
+                log.warning("Classification failed for %s: %s", email.id, result.skip_reason)
+                if result.skip_reason in _TRANSIENT_SKIP_REASONS:
+                    stats["classify_failed"] += 1
+                # Do NOT mark as processed — retry on next run
+                continue
+
+            state.processed_exchange_ids.append(email.id)
+            all_classified.append((email, result.relevance))
+
+            if result.relevance >= RELEVANCE_THRESHOLD:
+                export_email(email, result)
+                stats["exported"] += 1
+                exchange_exported += 1
+                log.info("Exported [%.2f] %s: %s", result.relevance, email.source, email.subject[:60])
+
+                if result.relevance >= HINDSIGHT_THRESHOLD:
+                    retain_in_hindsight(email, result, HINDSIGHT_URL)
+                    stats["hindsight_retained"] += 1
+
+            _maybe_checkpoint(state, idx)
+
+        if exchange_exported > 0 or exchange_fetched == 0:
+            state.last_exchange_epoch = int(time.time())
+    else:
+        log.warning("Exchange adapter not available — skipping Exchange")
+
+    # Checkpoint after the Exchange phase, BEFORE Gmail. The whole run is wrapped
+    # in `gtimeout 1200` by sync-all.sh; persisting the advanced Exchange epoch +
+    # processed IDs here means a Gmail-phase SIGKILL can never lose Exchange
+    # progress. save() is idempotent and cheap.
+    state.save()
+
+    # --- Gmail SECOND ---
     gmail_epoch = state.last_gmail_epoch or state.default_epoch()
     if backfill_days:
         gmail_epoch = state.default_epoch(backfill_days)
@@ -91,12 +198,13 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
         gmail_fetched = len(emails)
         stats["total_fetched"] += gmail_fetched
 
-        for email in emails:
+        for idx, email in enumerate(emails):
             skip = should_fast_skip(email)
             if skip:
                 stats["fast_skipped"] += 1
                 log.debug("Fast-skip %s: %s (%s)", email.source, email.subject[:50], skip)
                 state.processed_gmail_ids.append(email.id)
+                _maybe_checkpoint(state, idx)
                 continue
 
             result = classify_email(email)
@@ -124,60 +232,15 @@ def run_ingest(state: IngestState, backfill_days: int | None, exchange_batch: in
             else:
                 log.debug("Below threshold [%.2f] %s: %s", result.relevance, email.source, email.subject[:60])
 
+            _maybe_checkpoint(state, idx)
+
         # Advance epoch only if exports happened OR zero new emails fetched
         if gmail_exported > 0 or gmail_fetched == 0:
             state.last_gmail_epoch = int(time.time())
     else:
         log.warning("Gmail adapter failed to connect — skipping Gmail")
 
-    # --- Exchange ---
-    exchange_epoch = state.last_exchange_epoch or state.default_epoch()
-    if backfill_days:
-        exchange_epoch = state.default_epoch(backfill_days)
-
-    exchange_exported = 0
-    exchange_fetched = 0
-    exchange = ExchangeAdapter(batch_limit=exchange_batch)
-    if exchange.is_available():
-        processed = set(state.processed_exchange_ids)
-        emails = exchange.fetch_since(exchange_epoch, processed)
-        exchange_fetched = len(emails)
-        stats["total_fetched"] += exchange_fetched
-
-        for email in emails:
-            skip = should_fast_skip(email)
-            if skip:
-                stats["fast_skipped"] += 1
-                state.processed_exchange_ids.append(email.id)
-                continue
-
-            result = classify_email(email)
-            stats["classified"] += 1
-
-            if result.skip_reason:
-                log.warning("Classification failed for %s: %s", email.id, result.skip_reason)
-                if result.skip_reason in _TRANSIENT_SKIP_REASONS:
-                    stats["classify_failed"] += 1
-                # Do NOT mark as processed — retry on next run
-                continue
-
-            state.processed_exchange_ids.append(email.id)
-            all_classified.append((email, result.relevance))
-
-            if result.relevance >= RELEVANCE_THRESHOLD:
-                export_email(email, result)
-                stats["exported"] += 1
-                exchange_exported += 1
-                log.info("Exported [%.2f] %s: %s", result.relevance, email.source, email.subject[:60])
-
-                if result.relevance >= HINDSIGHT_THRESHOLD:
-                    retain_in_hindsight(email, result, HINDSIGHT_URL)
-                    stats["hindsight_retained"] += 1
-
-        if exchange_exported > 0 or exchange_fetched == 0:
-            state.last_exchange_epoch = int(time.time())
-    else:
-        log.warning("Exchange adapter not available — skipping Exchange")
+    state.save()
 
     # --- Follow-ups pipeline (gated by EMAIL_FOLLOWUPS_ENABLED=1) ---
     try:
@@ -444,8 +507,9 @@ def main():
     parser.add_argument("--backfill", type=int, metavar="DAYS",
                         help="Backfill last N days (overrides epoch)")
     parser.add_argument("--status", action="store_true", help="Show state and exit")
-    parser.add_argument("--exchange-batch-size", type=int, default=100,
-                        help="Max Exchange emails per run (default: 100)")
+    parser.add_argument("--exchange-batch-size", type=int, default=DEFAULT_EXCHANGE_BATCH,
+                        help=f"Max Exchange emails per run (default: {DEFAULT_EXCHANGE_BATCH}; "
+                             "bounded so fetch_since completes within sync-all.sh's gtimeout 1200)")
     args = parser.parse_args()
 
     _setup_logging()

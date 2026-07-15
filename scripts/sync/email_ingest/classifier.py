@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import re
 import time
 
@@ -18,6 +19,29 @@ OLLAMA_MODEL = "phi4-mini"  # Explicit — does NOT use OLLAMA_MODEL env var
 OLLAMA_TIMEOUT = 30  # seconds per call
 OLLAMA_MAX_ATTEMPTS = 3  # 1 + 2 retries; absorbs Electron-app hiccups (sleep/wake, model swap)
 OLLAMA_BACKOFF_SEC = (1, 2)  # waits between attempts: 1s, then 2s; total worst-case ~3s overhead
+
+# --- Circuit breaker (2026-07-02 RCA) ---
+# When Ollama's single inference slot is monopolized by another consumer (e.g. a
+# 9-minute 262k-context web-extract call from a bun agent), EVERY classify call
+# times out: 3 attempts × OLLAMA_TIMEOUT = ~90s burned per email. At ~85 emails
+# that overruns sync-all.sh's `gtimeout 1200` and the whole email-ingest run is
+# SIGKILL'd — starving the Exchange phase that runs after Gmail. The breaker caps
+# that waste: after CIRCUIT_BREAKER_THRESHOLD *consecutive* transient failures we
+# assume Ollama is down/contended and fast-fail every remaining classify call in
+# THIS process (no HTTP, no wait), so the run exits in seconds instead of being
+# killed at 20min. Emails are re-queued (skip_reason set, not marked processed),
+# so the next run — after Ollama frees up — drains them cleanly. Any SUCCESS
+# resets the counter (transient contention, not a hard outage, keeps flowing).
+CIRCUIT_BREAKER_THRESHOLD = int(os.environ.get("EMAIL_INGEST_CIRCUIT_BREAKER", "8"))
+_consecutive_failures = 0
+_circuit_open = False
+
+
+def reset_circuit_breaker() -> None:
+    """Reset breaker state. Call at the start of each ingest run (per-process)."""
+    global _consecutive_failures, _circuit_open
+    _consecutive_failures = 0
+    _circuit_open = False
 
 
 def _sanitize_email_body(body: str, limit: int = 8192) -> str:
@@ -271,6 +295,18 @@ def parse_classification(raw: str) -> ClassificationResult:
 def classify_email(email: NormalizedEmail) -> ClassificationResult:
     """Classify and summarize an email via Ollama (single combined call).
     Applies personalized weight adjustments if profile exists."""
+    global _consecutive_failures, _circuit_open
+
+    # Circuit breaker: once tripped, fast-fail every remaining email in this run
+    # without an HTTP call or retry wait. Keeps a contended-Ollama run from
+    # burning ~90s/email into sync-all.sh's gtimeout 1200 and getting SIGKILL'd
+    # mid-Exchange. Re-queued (skip_reason), drained by the next run. (2026-07-02)
+    if _circuit_open:
+        return ClassificationResult(
+            relevance=0.0, topic="unknown", summary="",
+            entities=[], action_items=[], skip_reason="ollama_error",
+        )
+
     system = _build_system_prompt(email.source)
     if email.source == "gmail":
         prompt = build_gmail_prompt(email)
@@ -291,7 +327,20 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
             result = parse_classification(resp.json().get("response", ""))
 
             if result.skip_reason:
+                # A parse failure is a transient classifier problem (empty/garbled
+                # response under contention), so it counts toward the breaker too.
+                _consecutive_failures += 1
+                if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                    _circuit_open = True
+                    log.error(
+                        "Circuit breaker OPEN after %d consecutive classifier failures "
+                        "— fast-failing remaining emails this run (Ollama down/contended). "
+                        "Re-queued; next run drains them.", _consecutive_failures,
+                    )
                 return result
+
+            # Success — reset the breaker (transient contention, keep flowing).
+            _consecutive_failures = 0
 
             # Apply personalized weight adjustments
             original = result.relevance
@@ -324,6 +373,17 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
                             attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
                 time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
 
+    # Exhausted all attempts (or broke on 4xx) — a transient failure. Count it
+    # toward the breaker so a sustained outage trips fast instead of paying the
+    # full ~90s/email tax across the whole backlog.
+    _consecutive_failures += 1
+    if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+        _circuit_open = True
+        log.error(
+            "Circuit breaker OPEN after %d consecutive classifier failures — "
+            "fast-failing remaining emails this run (Ollama down/contended). "
+            "Re-queued; next run drains them.", _consecutive_failures,
+        )
     log.error("Ollama request failed after %d attempts: %s", OLLAMA_MAX_ATTEMPTS, last_err)
     return ClassificationResult(
         relevance=0.0, topic="unknown", summary="",

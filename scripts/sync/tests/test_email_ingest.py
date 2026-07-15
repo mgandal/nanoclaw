@@ -327,3 +327,259 @@ def test_c18_retain_decision_sends_bearer_when_safe():
     mock_req.post.assert_called_once()
     kwargs = mock_req.post.call_args.kwargs
     assert kwargs.get("headers", {}).get("Authorization") == "Bearer tok"
+
+
+# ─────────────────────────────────────────────────
+# Incremental state checkpointing — a kill/crash during the Exchange phase
+# must NOT lose the Gmail phase's progress.
+#
+# Production bug (2026-05-20 Exchange freeze): state.save() ran only at the very
+# end of run_ingest(), after BOTH the Gmail and Exchange phases. Under the
+# sync-all.sh `gtimeout 1200` wrapper the process was SIGKILL'd mid-Exchange
+# every run, so the advanced Gmail epoch was never persisted. Next run re-fetched
+# the entire Gmail backlog (~288 msgs) from the stale epoch, re-exhausting the
+# time budget before Exchange could run -> permanent starvation loop. The fix is
+# to checkpoint state to disk after the Gmail phase (and periodically within a
+# phase) so partial progress survives a kill.
+# ─────────────────────────────────────────────────
+
+def _read_persisted_state(tmp_state):
+    """Load the on-disk state file the fixture redirected STATE_FILE to."""
+    import json
+    state_file = tmp_state / "email-ingest-state.json"
+    if not state_file.exists():
+        return None
+    return json.loads(state_file.read_text())
+
+
+def test_exchange_epoch_persisted_to_disk_before_gmail_phase(tmp_state):
+    """After the Exchange phase advances the epoch, it must be written to disk
+    BEFORE the Gmail phase runs — so a Gmail-phase crash cannot roll it back.
+
+    Phase order is Exchange-FIRST (2026-07-02 RCA): Exchange is the fragile,
+    bounded, Mail.app-driven phase and must get budget before greedy Gmail can
+    consume it. This test mirrors the old Gmail-first invariant: the FIRST
+    phase's advanced epoch must be checkpointed before the SECOND phase's risky
+    adapter call can crash the process. We simulate the crash by making the
+    Gmail adapter raise, then assert the persisted state already reflects the
+    advanced Exchange epoch."""
+    mod = _load_email_ingest()
+
+    # Exchange phase runs first and advances its epoch (one exported email).
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = True
+    mock_exchange.fetch_since.return_value = [_make_email("x1")]
+
+    # Gmail phase blows up (stand-in for a SIGKILL mid-Gmail).
+    mock_gmail = MagicMock()
+    mock_gmail.connect.side_effect = RuntimeError("simulated mid-Gmail kill")
+
+    state = IngestState(last_exchange_epoch=1000)
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", return_value=_make_result(0.8)), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod, "export_email"), \
+         patch.object(mod, "retain_in_hindsight"):
+        # The Gmail phase raising must not prevent the Exchange checkpoint that
+        # already happened from being on disk.
+        with pytest.raises(RuntimeError):
+            mod.run_ingest(state, backfill_days=None, exchange_batch=30)
+
+    persisted = _read_persisted_state(tmp_state)
+    assert persisted is not None, "no state was checkpointed to disk at all"
+    assert persisted["last_exchange_epoch"] > 1000, (
+        "Exchange epoch advance was not persisted before the Gmail phase — "
+        "a mid-Gmail crash would roll it back and re-fetch/re-read the whole "
+        "Exchange backlog (the phase that is expensive to re-read)"
+    )
+    assert "x1" in persisted["processed_exchange_ids"]
+
+
+def test_gmail_progress_checkpointed_within_phase_on_mid_loop_crash(tmp_state):
+    """If the run is killed PART-WAY through the Gmail loop (backlog too big to
+    finish in one gtimeout window), the IDs processed so far must already be on
+    disk — so the next run resumes from there instead of re-fetching the whole
+    backlog. We crash on the 60th email and assert earlier IDs were persisted."""
+    mod = _load_email_ingest()
+
+    emails = [_make_email(f"g{i}") for i in range(100)]
+    mock_gmail = MagicMock()
+    mock_gmail.connect.return_value = True
+    mock_gmail.fetch_since.return_value = emails
+
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = False
+    mock_exchange.fetch_since.return_value = []
+
+    # classify succeeds for the first 60, then the process "dies".
+    call_count = {"n": 0}
+
+    def classify_then_crash(email):
+        call_count["n"] += 1
+        if call_count["n"] > 60:
+            raise RuntimeError("simulated SIGKILL mid-Gmail-loop")
+        return _make_result(0.1)  # below threshold: processed but not exported
+
+    state = IngestState(last_gmail_epoch=1000)
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", side_effect=classify_then_crash), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod, "export_email"), \
+         patch.object(mod, "retain_in_hindsight"):
+        with pytest.raises(RuntimeError):
+            mod.run_ingest(state, backfill_days=None, exchange_batch=0)
+
+    persisted = _read_persisted_state(tmp_state)
+    assert persisted is not None, (
+        "no intra-phase checkpoint reached disk — a mid-Gmail kill loses all "
+        "progress and the next run re-fetches the entire backlog"
+    )
+    # At least one full checkpoint batch of early IDs must have been persisted.
+    assert "g0" in persisted["processed_gmail_ids"]
+
+
+def test_default_exchange_batch_fits_time_budget():
+    """The per-run Exchange batch must be small enough that fetch_since (which
+    reads EVERY message body up front via the ~20s/msg AppleScript bridge)
+    completes inside sync-all.sh's `gtimeout 1200`. A batch of 100 reads for
+    ~33min and is ALWAYS SIGKILL'd before the classify loop / any checkpoint —
+    that was the un-drainable-Exchange bug. Cap the default at a budget-safe
+    size so each run completes and advances the epoch."""
+    mod = _load_email_ingest()
+    # ~20s per body read+classify; 1200s budget minus Gmail+search overhead
+    # => must stay well under ~55. Use 40 as the regression ceiling.
+    BUDGET_SAFE_CEILING = 40
+    assert hasattr(mod, "DEFAULT_EXCHANGE_BATCH"), (
+        "expected a named DEFAULT_EXCHANGE_BATCH constant to make the budget "
+        "limit explicit and testable"
+    )
+    assert mod.DEFAULT_EXCHANGE_BATCH <= BUDGET_SAFE_CEILING, (
+        f"default Exchange batch {mod.DEFAULT_EXCHANGE_BATCH} reads too many "
+        f"bodies to finish within gtimeout 1200 — fetch_since will be killed "
+        f"before any email is processed (must be <= {BUDGET_SAFE_CEILING})"
+    )
+
+
+def test_exchange_epoch_advances_when_bounded_batch_completes(tmp_state):
+    """When the Exchange phase fetches a bounded batch and exports at least one,
+    last_exchange_epoch must advance so the NEXT run continues forward through
+    the backlog instead of re-reading the same window. This is what makes the
+    backlog drain incrementally across runs under the time cap."""
+    mod = _load_email_ingest()
+
+    mock_gmail = MagicMock()
+    mock_gmail.connect.return_value = True
+    mock_gmail.fetch_since.return_value = []  # Gmail caught up
+
+    ex_emails = [_make_email(f"x{i}", source="exchange") for i in range(5)]
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = True
+    mock_exchange.fetch_since.return_value = ex_emails
+
+    state = IngestState(last_exchange_epoch=1000)
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", return_value=_make_result(0.8)), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod, "export_email"), \
+         patch.object(mod, "retain_in_hindsight"):
+        mod.run_ingest(state, backfill_days=None, exchange_batch=mod.DEFAULT_EXCHANGE_BATCH)
+
+    assert state.last_exchange_epoch > 1000, (
+        "Exchange epoch did not advance after a completed batch — the backlog "
+        "would never move forward across runs"
+    )
+    assert "x0" in state.processed_exchange_ids
+
+
+def test_exchange_phase_runs_before_gmail_phase(tmp_state):
+    """REGRESSION GUARD (2026-07-02 RCA): the Exchange phase MUST run before the
+    Gmail phase. Exchange is bounded + Mail.app-slow; Gmail is fast + greedy
+    (~85 msgs/run). When Ollama is contended and every classify call burns ~90s,
+    running Gmail first spends the whole `gtimeout 1200` budget on Gmail and the
+    process is SIGKILL'd BEFORE Exchange ever runs — the 72h Exchange-freeze the
+    watchdog trips on. We assert order by recording which adapter's fetch is
+    touched first."""
+    mod = _load_email_ingest()
+
+    order = []
+
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.side_effect = lambda: (order.append("exchange"), True)[1]
+    mock_exchange.fetch_since.return_value = []
+
+    mock_gmail = MagicMock()
+    mock_gmail.connect.side_effect = lambda: (order.append("gmail"), True)[1]
+    mock_gmail.fetch_since.return_value = []
+
+    state = IngestState()
+
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "classify_email", return_value=_make_result(0.8)), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod, "export_email"), \
+         patch.object(mod, "retain_in_hindsight"):
+        mod.run_ingest(state, backfill_days=None, exchange_batch=30)
+
+    assert order and order[0] == "exchange", (
+        f"Exchange must be touched before Gmail (got order={order}). Reverting to "
+        "Gmail-first reintroduces the budget-starvation freeze."
+    )
+    assert "gmail" in order, "Gmail phase should still run after Exchange"
+
+
+def test_circuit_breaker_bounds_wasted_time_under_ollama_outage(tmp_state):
+    """REGRESSION GUARD (2026-07-02 RCA): when Ollama is down/contended, the
+    classifier circuit breaker must fast-fail the run instead of paying the full
+    ~90s/email tax across the whole backlog (which overran gtimeout 1200 and got
+    the process SIGKILL'd mid-Exchange). We stub classify_email with a breaker
+    that opens after N consecutive failures and assert only ~N real attempts are
+    made even with a large backlog."""
+    mod = _load_email_ingest()
+    from email_ingest import classifier as clf
+
+    # Large Gmail backlog; Exchange empty (isolate the Gmail-outage path).
+    emails = [_make_email(f"g{i}") for i in range(100)]
+    mock_gmail = MagicMock()
+    mock_gmail.connect.return_value = True
+    mock_gmail.fetch_since.return_value = emails
+    mock_exchange = MagicMock()
+    mock_exchange.is_available.return_value = False
+    mock_exchange.fetch_since.return_value = []
+
+    # Simulate Ollama down: every HTTP post raises. Count real posts.
+    import requests
+    posts = {"n": 0}
+    def boom(*a, **k):
+        posts["n"] += 1
+        raise requests.ConnectionError("ollama down")
+
+    state = IngestState()
+    with patch.object(mod, "GmailAdapter", return_value=mock_gmail), \
+         patch.object(mod, "ExchangeAdapter", return_value=mock_exchange), \
+         patch.object(mod, "should_fast_skip", return_value=None), \
+         patch.object(mod, "run_followups_passes", return_value={}), \
+         patch.object(mod, "export_email"), \
+         patch.object(mod, "retain_in_hindsight"), \
+         patch.object(clf, "CIRCUIT_BREAKER_THRESHOLD", 5), \
+         patch.object(clf.time, "sleep", lambda s: None), \
+         patch.object(clf.requests, "post", side_effect=boom):
+        mod.run_ingest(state, backfill_days=None, exchange_batch=30)
+
+    # Breaker opens after 5 failing emails × 3 attempts = 15 posts; the remaining
+    # 95 emails must make ZERO posts. Ceiling well below 100×3 = 300.
+    assert posts["n"] <= 15, (
+        f"circuit breaker did not bound wasted work: {posts['n']} HTTP posts for a "
+        "100-email backlog under a total outage (expected <= threshold×attempts = 15). "
+        "Without the breaker this is 300 posts / ~90s×100 = SIGKILL mid-run."
+    )
