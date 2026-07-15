@@ -641,4 +641,3 @@ Verify:
 ```bash
 git add -A
 git commit -m "fix: test-driven adjustments for VAULT-claw knowledge hub"
-```

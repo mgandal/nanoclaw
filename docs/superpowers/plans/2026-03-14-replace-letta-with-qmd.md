@@ -457,4 +457,3 @@ Change the MCP Servers list to replace letta with qmd:
 - gmail (@gongrzhe/server-gmail-autoauth-mcp)
 - obsidian (conditional on /workspace/extra/claire-vault existing)
 - qmd (HTTP transport, conditional on QMD_URL env var)
-```

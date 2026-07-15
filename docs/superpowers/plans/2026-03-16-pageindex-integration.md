@@ -682,7 +682,6 @@ import sys
 import anthropic
 import fitz  # pymupdf
 
-
 def extract_pages(pdf_path: str) -> list[str]:
     """Extract text content per page from a PDF."""
     doc = fitz.open(pdf_path)
@@ -691,7 +690,6 @@ def extract_pages(pdf_path: str) -> list[str]:
         pages.append(page.get_text())
     doc.close()
     return pages
-
 
 def detect_toc(pages: list[str], client: anthropic.Anthropic, model: str) -> dict | None:
     """Ask Claude to detect and extract a table of contents from the first 20 pages."""
@@ -722,7 +720,6 @@ def detect_toc(pages: list[str], client: anthropic.Anthropic, model: str) -> dic
     except json.JSONDecodeError:
         return None
 
-
 def add_end_indices(node: dict, total_pages: int) -> None:
     """Fill in end_index for each node based on next sibling's start_index."""
     children = node.get("nodes", [])
@@ -733,7 +730,6 @@ def add_end_indices(node: dict, total_pages: int) -> None:
             else:
                 child["end_index"] = node.get("end_index", total_pages)
         add_end_indices(child, total_pages)
-
 
 def add_summaries(node: dict, pages: list[str], client: anthropic.Anthropic, model: str) -> None:
     """Add summaries to leaf nodes and nodes without summaries."""
@@ -765,7 +761,6 @@ def add_summaries(node: dict, pages: list[str], client: anthropic.Anthropic, mod
 
     for child in node.get("nodes", []):
         add_summaries(child, pages, client, model)
-
 
 def build_tree(pdf_path: str) -> dict:
     """Build a hierarchical tree from a PDF."""
@@ -813,7 +808,6 @@ def build_tree(pdf_path: str) -> dict:
 
     return toc
 
-
 def main():
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <pdf_path>", file=sys.stderr)
@@ -826,7 +820,6 @@ def main():
 
     tree = build_tree(pdf_path)
     print(json.dumps(tree))
-
 
 if __name__ == "__main__":
     main()
@@ -1437,4 +1430,3 @@ Expected: Logs show `PDF auto-indexed`, agent receives tree JSON. If adapter not
 ```bash
 git add -A
 git commit -m "feat: complete PageIndex integration for hierarchical PDF indexing"
-```

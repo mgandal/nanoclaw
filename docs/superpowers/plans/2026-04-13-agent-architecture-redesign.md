@@ -984,4 +984,3 @@ Add a section documenting:
 
 ```bash
 git commit -am "docs: update project memory with new architecture"
-```

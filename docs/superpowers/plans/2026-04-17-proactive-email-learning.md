@@ -65,19 +65,15 @@ from email_ingest.types import (
     FollowUp,
 )
 
-
 def test_followups_file_points_to_global_state():
     assert FOLLOWUPS_FILE.name == "followups.md"
     assert "groups/global/state" in str(FOLLOWUPS_FILE)
 
-
 def test_age_threshold_is_14_days():
     assert AGE_THRESHOLD_DAYS == 14
 
-
 def test_jaccard_threshold_is_point_six():
     assert JACCARD_THRESHOLD == 0.6
-
 
 def test_followup_dataclass_defaults():
     f = FollowUp(
@@ -115,7 +111,6 @@ FOLLOWUPS_FILE = (
 )
 AGE_THRESHOLD_DAYS = 14
 JACCARD_THRESHOLD = 0.6
-
 
 @dataclass
 class FollowUp:
@@ -173,23 +168,19 @@ from email_ingest.followups import (
 )
 from email_ingest.types import FollowUp
 
-
 def _sample(tmp_path: Path, content: str) -> Path:
     p = tmp_path / "followups.md"
     p.write_text(content)
     return p
-
 
 def test_parse_empty_file(tmp_path):
     p = _sample(tmp_path, EMPTY_FILE_TEMPLATE)
     items = parse_file(p)
     assert items == []
 
-
 def test_parse_missing_file_returns_empty(tmp_path):
     items = parse_file(tmp_path / "does-not-exist.md")
     assert items == []
-
 
 def test_parse_single_open_item(tmp_path):
     p = _sample(tmp_path, """# Follow-ups
@@ -214,7 +205,6 @@ def test_parse_single_open_item(tmp_path):
     assert f.thread == "gmail:17f3b2a88c1d4e55"
     assert f.status == "open"
 
-
 def test_parse_closed_section(tmp_path):
     p = _sample(tmp_path, """# Follow-ups
 
@@ -237,7 +227,6 @@ def test_parse_closed_section(tmp_path):
     assert items[0].status == "closed"
     assert items[0].closed_reason == "replied-in-thread"
 
-
 def test_roundtrip_preserves_fields(tmp_path):
     original = FollowUp(
         kind="they-owe-me",
@@ -255,33 +244,26 @@ def test_roundtrip_preserves_fields(tmp_path):
     assert len(parsed) == 1
     assert parsed[0] == original
 
-
 def test_normalize_what_strips_stopwords():
     assert normalize_what("Send the revised methods section for the paper") == {
         "send", "revised", "methods", "section", "paper",
     }
 
-
 def test_normalize_what_empty():
     assert normalize_what("") == set()
-
 
 def test_jaccard_identical():
     assert jaccard({"a", "b", "c"}, {"a", "b", "c"}) == 1.0
 
-
 def test_jaccard_disjoint():
     assert jaccard({"a"}, {"b"}) == 0.0
-
 
 def test_jaccard_empty_sets():
     assert jaccard(set(), set()) == 0.0
 
-
 def test_jaccard_partial_overlap():
     result = jaccard({"a", "b", "c", "d"}, {"a", "b", "e", "f"})
     assert abs(result - (2 / 6)) < 1e-9
-
 
 def test_is_duplicate_same_thread_similar_what():
     existing = FollowUp(
@@ -296,7 +278,6 @@ def test_is_duplicate_same_thread_similar_what():
     )
     assert is_duplicate(new, existing) is True
 
-
 def test_is_duplicate_different_thread_rejected():
     existing = FollowUp(
         kind="i-owe", who="Sarah", what="Send methods",
@@ -310,7 +291,6 @@ def test_is_duplicate_different_thread_rejected():
     )
     assert is_duplicate(new, existing) is False
 
-
 def test_is_duplicate_different_kind_rejected():
     existing = FollowUp(
         kind="i-owe", who="Sarah", what="Send methods",
@@ -323,7 +303,6 @@ def test_is_duplicate_different_kind_rejected():
         source_msg="gmail:msg2", created="2026-04-15T10:00:00Z",
     )
     assert is_duplicate(new, existing) is False
-
 
 def test_is_duplicate_closed_existing_does_not_match():
     existing = FollowUp(
@@ -341,7 +320,6 @@ def test_is_duplicate_closed_existing_does_not_match():
     # after closure is a new item.
     assert is_duplicate(new, existing) is False
 
-
 def test_atomic_write(tmp_path, monkeypatch):
     """Write goes through .tmp + rename, never truncates target on failure."""
     p = tmp_path / "followups.md"
@@ -357,7 +335,6 @@ def test_atomic_write(tmp_path, monkeypatch):
     assert "i-owe · X" in p.read_text()
     # No stray .tmp
     assert not (tmp_path / "followups.md.tmp").exists()
-
 
 def test_parse_preserves_stale_section(tmp_path):
     p = _sample(tmp_path, """# Follow-ups
@@ -377,7 +354,6 @@ def test_parse_preserves_stale_section(tmp_path):
     items = parse_file(p)
     assert len(items) == 1
     assert items[0].status == "stale"
-
 
 def test_parse_corrupt_entry_preserves_others(tmp_path):
     """A malformed entry between valid ones does not drop the valid ones."""
@@ -459,7 +435,6 @@ _KNOWN_FIELDS = {
     "status", "closed_reason", "closed_at",
 }
 
-
 def normalize_what(s: str) -> set[str]:
     """Lowercase, strip punctuation, remove stopwords, take first 8 tokens."""
     if not s:
@@ -470,7 +445,6 @@ def normalize_what(s: str) -> set[str]:
     tokens = [t for t in cleaned.split() if t and t not in STOPWORDS]
     return set(tokens[:8])
 
-
 def jaccard(a: set[str], b: set[str]) -> float:
     if not a and not b:
         return 0.0
@@ -478,7 +452,6 @@ def jaccard(a: set[str], b: set[str]) -> float:
     if not union:
         return 0.0
     return len(a & b) / len(union)
-
 
 def is_duplicate(new: FollowUp, existing: FollowUp) -> bool:
     """Whether `new` should dedupe into `existing` (skip the write)."""
@@ -490,7 +463,6 @@ def is_duplicate(new: FollowUp, existing: FollowUp) -> bool:
         return False
     sim = jaccard(normalize_what(new.what), normalize_what(existing.what))
     return sim >= JACCARD_THRESHOLD
-
 
 def parse_file(path: Path) -> list[FollowUp]:
     """Parse followups.md. Returns empty list if file missing.
@@ -562,7 +534,6 @@ def parse_file(path: Path) -> list[FollowUp]:
 
     return items
 
-
 def _render_entry(f: FollowUp) -> list[str]:
     created_date = f.created[:10] if len(f.created) >= 10 else f.created
     lines = [
@@ -582,7 +553,6 @@ def _render_entry(f: FollowUp) -> list[str]:
         lines.append(f"- **{k}:** {v}")
     lines.append("")
     return lines
-
 
 def write_file(path: Path, items: list[FollowUp]) -> None:
     """Atomically write followups.md from a list of items.
@@ -665,7 +635,6 @@ from email_ingest.extractor import (
 )
 from email_ingest.types import NormalizedEmail
 
-
 def _email(source="gmail", from_addr="mike@upenn.edu", subject="Re: methods",
            body="Thanks. I'll send the revised methods by Friday."):
     return NormalizedEmail(
@@ -674,7 +643,6 @@ def _email(source="gmail", from_addr="mike@upenn.edu", subject="Re: methods",
         date="2026-04-15T14:22:00Z", body=body,
         labels=[], metadata={"threadId": "abc"},
     )
-
 
 def test_parse_valid_i_owe():
     raw = json.dumps({
@@ -690,7 +658,6 @@ def test_parse_valid_i_owe():
     assert r.due == "2026-04-22"
     assert r.significant is False
 
-
 def test_parse_they_owe_me():
     raw = json.dumps({
         "kind": "they-owe-me", "who": "po@nih.gov",
@@ -700,7 +667,6 @@ def test_parse_they_owe_me():
     r = _parse_response(raw)
     assert r.kind == "they-owe-me"
     assert r.due == "none"
-
 
 def test_parse_none_kind_returns_result_not_none():
     raw = json.dumps({
@@ -712,7 +678,6 @@ def test_parse_none_kind_returns_result_not_none():
     assert r is not None
     assert r.kind == "none"
 
-
 def test_parse_markdown_fenced_response():
     raw = "```json\n" + json.dumps({
         "kind": "i-owe", "who": "X", "what": "Y", "due": "none",
@@ -722,18 +687,15 @@ def test_parse_markdown_fenced_response():
     assert r is not None
     assert r.kind == "i-owe"
 
-
 def test_parse_malformed_returns_none():
     assert _parse_response("not json") is None
     assert _parse_response("{incomplete") is None
     assert _parse_response("") is None
 
-
 def test_parse_missing_required_field_returns_none():
     # No 'kind' — invalid schema
     raw = json.dumps({"who": "X"})
     assert _parse_response(raw) is None
-
 
 def test_parse_significant_decision():
     raw = json.dumps({
@@ -745,7 +707,6 @@ def test_parse_significant_decision():
     assert r.significant is True
     assert r.decision_summary == "Decided to decline the renewal"
 
-
 def test_build_prompt_includes_direction():
     email = _email()
     prompt = build_prompt(email, direction="sent")
@@ -753,12 +714,10 @@ def test_build_prompt_includes_direction():
     assert "Subject: Re: methods" in prompt
     assert email.body in prompt
 
-
 def test_build_prompt_truncates_long_body():
     email = _email(body="x" * 5000)
     prompt = build_prompt(email, direction="received")
     assert len(prompt) < 3500  # headers + 2000-char body cap + preamble
-
 
 @patch("email_ingest.extractor.requests.post")
 def test_extract_makes_ollama_request(mock_post):
@@ -779,14 +738,12 @@ def test_extract_makes_ollama_request(mock_post):
     args, kwargs = mock_post.call_args
     assert kwargs["json"]["model"] == "phi4-mini"
 
-
 @patch("email_ingest.extractor.requests.post")
 def test_extract_network_error_returns_none(mock_post):
     import requests
     mock_post.side_effect = requests.RequestException("down")
     email = _email()
     assert extract(email, direction="sent") is None
-
 
 @patch("email_ingest.extractor.requests.post")
 def test_extract_empty_body_returns_none_without_ollama(mock_post):
@@ -846,7 +803,6 @@ Rules:
 - due must be explicit in the email; otherwise "none".
 """
 
-
 @dataclass
 class ExtractionResult:
     kind: str  # "i-owe" | "they-owe-me" | "none"
@@ -855,7 +811,6 @@ class ExtractionResult:
     due: str  # ISO date or "none"
     significant: bool
     decision_summary: str
-
 
 def build_prompt(email: NormalizedEmail, direction: str) -> str:
     body = email.body[:BODY_CAP] if email.body else ""
@@ -868,7 +823,6 @@ def build_prompt(email: NormalizedEmail, direction: str) -> str:
         "Body:",
         body,
     ])
-
 
 def _parse_response(raw: str) -> Optional[ExtractionResult]:
     cleaned = (raw or "").strip()
@@ -896,7 +850,6 @@ def _parse_response(raw: str) -> Optional[ExtractionResult]:
     except (KeyError, TypeError, ValueError) as e:
         log.warning("extractor: schema mismatch: %s (raw: %s)", e, raw[:200])
         return None
-
 
 def extract(email: NormalizedEmail, direction: str) -> Optional[ExtractionResult]:
     """Run phi4-mini extraction. Returns None on any failure."""
@@ -955,10 +908,8 @@ from datetime import datetime, timedelta, timezone
 from email_ingest.aging import apply_aging
 from email_ingest.types import FollowUp
 
-
 def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
 def _make(created: datetime, status: str = "open") -> FollowUp:
     return FollowUp(
@@ -967,14 +918,12 @@ def _make(created: datetime, status: str = "open") -> FollowUp:
         created=_iso(created), status=status,
     )
 
-
 def test_item_13_days_old_stays_open():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
     item = _make(now - timedelta(days=13))
     items, aged = apply_aging([item], now, threshold_days=14)
     assert aged == 0
     assert items[0].status == "open"
-
 
 def test_item_15_days_old_becomes_stale():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -983,14 +932,12 @@ def test_item_15_days_old_becomes_stale():
     assert aged == 1
     assert items[0].status == "stale"
 
-
 def test_already_stale_untouched():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
     item = _make(now - timedelta(days=30), status="stale")
     items, aged = apply_aging([item], now, threshold_days=14)
     assert aged == 0
     assert items[0].status == "stale"
-
 
 def test_closed_untouched():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -999,14 +946,12 @@ def test_closed_untouched():
     assert aged == 0
     assert items[0].status == "closed"
 
-
 def test_snoozed_untouched():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
     item = _make(now - timedelta(days=30), status="snoozed")
     items, aged = apply_aging([item], now, threshold_days=14)
     assert aged == 0
     assert items[0].status == "snoozed"
-
 
 def test_malformed_created_is_skipped():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -1018,7 +963,6 @@ def test_malformed_created_is_skipped():
     items, aged = apply_aging([item], now, threshold_days=14)
     assert aged == 0
     assert items[0].status == "open"
-
 
 def test_mixed_list():
     now = datetime(2026, 4, 17, tzinfo=timezone.utc)
@@ -1052,7 +996,6 @@ from email_ingest.types import FollowUp, AGE_THRESHOLD_DAYS
 
 log = logging.getLogger("email-ingest.aging")
 
-
 def _parse_iso(s: str) -> datetime | None:
     """Parse a subset of ISO 8601 (supports trailing Z). Returns None on failure."""
     if not s:
@@ -1066,7 +1009,6 @@ def _parse_iso(s: str) -> datetime | None:
         return dt
     except ValueError:
         return None
-
 
 def apply_aging(
     items: Iterable[FollowUp],
@@ -1137,7 +1079,6 @@ from unittest.mock import MagicMock, patch
 from email_ingest.gmail_adapter import GmailAdapter
 from email_ingest.exchange_adapter import ExchangeAdapter
 
-
 def test_gmail_fetch_thread_filters_by_epoch():
     adapter = GmailAdapter()
     fake_service = MagicMock()
@@ -1175,12 +1116,10 @@ def test_gmail_fetch_thread_filters_by_epoch():
     assert results[0].id == "m2"
     assert "SENT" in results[0].labels
 
-
 def test_gmail_fetch_thread_empty_when_not_connected():
     adapter = GmailAdapter()
     adapter._service = None
     assert adapter.fetch_thread_messages("t1", since_epoch=0) == []
-
 
 def test_gmail_fetch_thread_api_error_returns_empty():
     adapter = GmailAdapter()
@@ -1188,7 +1127,6 @@ def test_gmail_fetch_thread_api_error_returns_empty():
     fake_service.users.return_value.threads.return_value.get.return_value.execute.side_effect = Exception("boom")
     adapter._service = fake_service
     assert adapter.fetch_thread_messages("t1", since_epoch=0) == []
-
 
 @patch("email_ingest.exchange_adapter.subprocess.run")
 def test_exchange_fetch_thread_returns_empty_on_failure(mock_run):
@@ -1310,7 +1248,6 @@ from unittest.mock import MagicMock
 from email_ingest.closure import apply_closure
 from email_ingest.types import FollowUp, NormalizedEmail
 
-
 def _email(id_, from_addr, labels=None):
     return NormalizedEmail(
         id=id_, source="gmail", from_addr=from_addr,
@@ -1318,7 +1255,6 @@ def _email(id_, from_addr, labels=None):
         date="2026-04-18T12:00:00Z", body="", labels=labels or [],
         metadata={"threadId": "abc"},
     )
-
 
 def test_i_owe_closed_when_user_sends_later():
     item = FollowUp(
@@ -1338,7 +1274,6 @@ def test_i_owe_closed_when_user_sends_later():
     assert updated[0].status == "closed"
     assert updated[0].closed_reason == "replied-in-thread"
     assert updated[0].closed_at is not None
-
 
 def test_they_owe_me_closed_when_counterparty_replies():
     item = FollowUp(
@@ -1362,7 +1297,6 @@ def test_they_owe_me_closed_when_counterparty_replies():
     assert updated[0].status == "closed"
     assert updated[0].closed_reason == "counterparty-replied"
 
-
 def test_they_owe_me_third_party_does_not_close():
     item = FollowUp(
         kind="they-owe-me", who="po@nih.gov",
@@ -1382,7 +1316,6 @@ def test_they_owe_me_third_party_does_not_close():
     assert closed == 0
     assert updated[0].status == "open"
 
-
 def test_non_open_entries_untouched():
     item = FollowUp(
         kind="i-owe", who="X", what="y", due="none",
@@ -1398,7 +1331,6 @@ def test_non_open_entries_untouched():
     assert updated[0].status == "closed"
     gmail.fetch_thread_messages.assert_not_called()
 
-
 def test_thread_without_activity_stays_open():
     item = FollowUp(
         kind="i-owe", who="X", what="y", due="none",
@@ -1413,7 +1345,6 @@ def test_thread_without_activity_stays_open():
 
     assert closed == 0
     assert updated[0].status == "open"
-
 
 def test_exchange_thread_routed_to_exchange_adapter():
     item = FollowUp(
@@ -1473,9 +1404,7 @@ from email_ingest.types import FollowUp, NormalizedEmail
 
 log = logging.getLogger("email-ingest.closure")
 
-
 _USER_SENT_LABELS = {"SENT"}  # Gmail label id for sent mail
-
 
 def _parse_iso(s: str) -> Optional[datetime]:
     if not s:
@@ -1488,7 +1417,6 @@ def _parse_iso(s: str) -> Optional[datetime]:
     except ValueError:
         return None
 
-
 def _addr(raw: str) -> str:
     """Extract lowercased email address from a 'Name <addr@x>' or 'addr@x' string."""
     if not raw:
@@ -1497,20 +1425,17 @@ def _addr(raw: str) -> str:
     addr = m.group(1) if m else raw
     return addr.strip().lower()
 
-
 def _is_user_sent(msg: NormalizedEmail) -> bool:
     if msg.source == "gmail":
         return any(lbl in _USER_SENT_LABELS for lbl in msg.labels)
     # Exchange: mailbox metadata indicates sent; conservatively use metadata flag if present.
     return bool(msg.metadata.get("is_sent", False))
 
-
 def _source_and_id(thread: str) -> tuple[str, str]:
     if ":" in thread:
         src, tid = thread.split(":", 1)
         return src, tid
     return "", thread
-
 
 def _counterparty(item: FollowUp, gmail_adapter, exchange_adapter) -> str:
     """Return lowercased email address of the original asker for they-owe-me items."""
@@ -1524,7 +1449,6 @@ def _counterparty(item: FollowUp, gmail_adapter, exchange_adapter) -> str:
     if msg is None:
         return ""
     return _addr(msg.from_addr)
-
 
 def apply_closure(
     items: Iterable[FollowUp],
@@ -1630,7 +1554,6 @@ from unittest.mock import patch, MagicMock
 
 from email_ingest.types import FollowUp
 
-
 @patch.dict(os.environ, {"EMAIL_FOLLOWUPS_ENABLED": "1"})
 @patch("email_ingest.followups.write_file")
 @patch("email_ingest.followups.parse_file")
@@ -1655,7 +1578,6 @@ def test_flag_on_runs_followups_pipeline(
     )
     mock_parse.assert_called_once()
     mock_write.assert_called_once()
-
 
 @patch.dict(os.environ, {}, clear=True)
 @patch("email_ingest.followups.parse_file")
@@ -1718,7 +1640,6 @@ Append this function (before `def main()`):
 ```python
 FOLLOWUP_GMAIL_SENDER = "mgandal@gmail.com"
 
-
 def _direction_for(email: NormalizedEmail) -> str | None:
     """Return 'sent' | 'received' | None (skip)."""
     if email.source == "gmail":
@@ -1731,7 +1652,6 @@ def _direction_for(email: NormalizedEmail) -> str | None:
             return "sent"
         return "received"
     return None
-
 
 def _email_qualifies_for_extraction(
     email: NormalizedEmail, relevance: float
@@ -1750,7 +1670,6 @@ def _email_qualifies_for_extraction(
         return "received"
     return None
 
-
 def _ext_to_followup(
     email: NormalizedEmail, r: ExtractionResult
 ) -> FollowUp | None:
@@ -1768,7 +1687,6 @@ def _ext_to_followup(
         created=email.date,
         status="open",
     )
-
 
 def run_followups_passes(
     gmail_adapter,
@@ -1825,7 +1743,6 @@ def run_followups_passes(
         "asks_added": asks_added,
         "decisions_retained": decisions_retained,
     }
-
 
 def _retain_decision(email: NormalizedEmail, r: ExtractionResult) -> int:
     """Retain a decision to Hindsight. Fire-and-forget; returns 1 on send attempted."""

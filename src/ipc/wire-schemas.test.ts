@@ -74,14 +74,15 @@ const CASES: Array<Record<string, unknown> | unknown> = [
 ];
 
 describe('wire-schemas parity with hand-rolled guards', () => {
-  const pairs: Array<[string, (r: unknown) => unknown, (r: unknown) => unknown]> =
-    [
-      ['cancel_task', taskIdOld, wireParse(WIRE_SCHEMAS.cancel_task)],
-      ['pause_task', taskIdOld, wireParse(WIRE_SCHEMAS.pause_task)],
-      ['resume_task', taskIdOld, wireParse(WIRE_SCHEMAS.resume_task)],
-      ['message', messageOld, wireParse(WIRE_SCHEMAS.message)],
-      ['send_file', sendFileOld, wireParse(WIRE_SCHEMAS.send_file)],
-    ];
+  const pairs: Array<
+    [string, (r: unknown) => unknown, (r: unknown) => unknown]
+  > = [
+    ['cancel_task', taskIdOld, wireParse(WIRE_SCHEMAS.cancel_task)],
+    ['pause_task', taskIdOld, wireParse(WIRE_SCHEMAS.pause_task)],
+    ['resume_task', taskIdOld, wireParse(WIRE_SCHEMAS.resume_task)],
+    ['message', messageOld, wireParse(WIRE_SCHEMAS.message)],
+    ['send_file', sendFileOld, wireParse(WIRE_SCHEMAS.send_file)],
+  ];
 
   for (const [name, oldParse, newParse] of pairs) {
     it(`${name}: schema accepts/rejects exactly what the guard did`, () => {

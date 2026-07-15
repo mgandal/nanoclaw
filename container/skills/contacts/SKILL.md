@@ -88,4 +88,3 @@ Stage: [active/dormant/etc] | Last contact: [date]
 Next action: [pending item or "none"]
 Context: [1-2 sentence summary]
 Recent: [last 2-3 interactions]
-```

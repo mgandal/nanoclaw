@@ -16,9 +16,6 @@ Run these in parallel. For bridge services (Apple Notes / Todoist / Calendar) th
 # QMD (port 8181)
 curl -s -o /dev/null -w "QMD: %{http_code} %{time_total}s\n" --max-time 5 http://localhost:8181/health
 
-# SimpleMem (port 8200) — expected DOWN, replaced by Honcho 2026-04-06
-curl -s -o /dev/null -w "SimpleMem: %{http_code} %{time_total}s\n" --max-time 2 http://localhost:8200/api/health
-
 # Honcho (Docker, port 8010). /openapi.json is reliable; /health doesn't exist.
 curl -s -o /dev/null -w "Honcho: %{http_code} %{time_total}s\n" --max-time 5 http://localhost:8010/openapi.json
 
@@ -48,7 +45,6 @@ Report results in a table:
 | Service | Status | Latency | Notes |
 |---|---|---|---|
 | QMD | ... | ... | |
-| SimpleMem | DOWN | — | expected — replaced by Honcho |
 | Honcho | ... | ... | |
 | Hindsight | ... | ... | proxy + worker both must be UP |
 | Apple Notes | ... | ... | proxy 401 only healthy if upstream 8183 UP |

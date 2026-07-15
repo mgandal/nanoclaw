@@ -1,6 +1,6 @@
 ---
 name: memory-status
-description: Run a comprehensive diagnostic of all NanoClaw memory layers — health, stats, test queries, and actionable recommendations. Use when you want a status report on QMD, SimpleMem, Hindsight, Apple Notes, Todoist, SQLite, group memory, and the Obsidian vault.
+description: Run a comprehensive diagnostic of all NanoClaw memory layers — health, stats, test queries, and actionable recommendations. Use when you want a status report on QMD, Hindsight, Apple Notes, Todoist, SQLite, group memory, and the Obsidian vault.
 installed: true
 install_command: "/memory-status"
 ---
@@ -19,9 +19,6 @@ Run these **in parallel**. For bridge services (Apple Notes / Todoist / Calendar
 ```bash
 # QMD (port 8181, proxied from 8182)
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8181/health
-
-# SimpleMem (port 8200) — expected DOWN, replaced by Honcho 2026-04-06
-time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8200/api/health
 
 # Honcho (Docker, port 8010). /openapi.json is a reliable 200 endpoint; /v1/workspaces returns 404 and /health doesn't exist.
 time curl -s -o /dev/null -w "%{http_code} %{time_total}" http://localhost:8010/openapi.json
@@ -62,16 +59,6 @@ Use the `mcp__plugin_qmd_qmd__status` tool to get:
 - Total documents, documents needing embedding
 - Collection breakdown (name, doc count)
 - Vector index status
-
-### SimpleMem
-```bash
-# Get health details (includes memory count if available)
-curl -s http://localhost:8200/api/health
-```
-Also try listing memories via MCP if reachable — check Docker logs for recent activity:
-```bash
-docker logs simplemem --tail 20 2>&1
-```
 
 ### Hindsight
 ```bash
@@ -151,13 +138,6 @@ Use `mcp__plugin_qmd_qmd__query` with:
 
 Record: number of results, response time.
 
-### SimpleMem
-If reachable, test via curl (MCP JSON-RPC over SSE is complex; use Docker logs to confirm recent successful queries instead):
-```bash
-# Check last successful MCP interaction in logs
-docker logs simplemem --tail 50 2>&1 | grep -i "tools/call\|memory\|recall" | tail -5
-```
-
 ### Hindsight
 ```bash
 docker logs hindsight --tail 50 2>&1 | grep -i "tools/call\|memory\|recall\|remember" | tail -5
@@ -184,7 +164,6 @@ Present a single formatted report. Use this exact structure:
 | Layer | Status | Latency | Key Stats | Issues |
 |---|---|---|---|---|
 | QMD | ... | ... | ... | ... |
-| SimpleMem | ... | ... | ... | ... |
 | Hindsight | ... | ... | ... | ... |
 | Apple Notes | ... | ... | ... | ... |
 | Todoist | ... | ... | ... | ... |
@@ -200,7 +179,6 @@ Present a single formatted report. Use this exact structure:
 | Layer | Last Activity | Result |
 |---|---|---|
 | QMD | (test query result + latency) | ... |
-| SimpleMem | (from logs) | ... |
 | Hindsight | (from logs) | ... |
 | Apple Notes | (from logs) | ... |
 | Todoist | (from logs) | ... |
@@ -217,15 +195,13 @@ List any issues found with actionable fix commands. Examples:
 **Calibration — don't chase transient ECONNREFUSED.** The bridge proxies (8184/8186/8188) log `upstream error: connect ECONNREFUSED` whenever a forwarded request arrives during the ~50-200ms window when the supergateway child restarts. Steady-state rate is **~4-10 events/hour per bridge** — this is NOT a service outage; it's a race between the proxy and the restarting child. Only recommend kickstart when the rate spikes sharply (e.g. 50+/hour for many hours) OR when `lsof -ti -sTCP:LISTEN -i :<upstream-port>` returns empty (the upstream is genuinely dead, not just momentarily unreachable). Recommending `launchctl kickstart -k` on a low-rate baseline is a placebo — 2026-04-20 diagnostic session confirmed the supergateways had never crashed despite ~120 ECONNREFUSED events over 28h.
 
 If everything is healthy, say so:
-> All 8 memory layers operational. No issues detected.
+> All memory layers operational. No issues detected.
 ```
 
 ## Reference: Known Quirks
 
 - **QMD proxy**: port 8181 is a TCP proxy to 8182. If proxy fails but QMD is up, check `~/.cache/qmd/proxy.mjs`
 - **Bridge proxy / upstream split (Apple Notes / Todoist / Calendar)**: the public port (8184/8186/8188) is a proxy that enforces bearer-auth, with a supergateway upstream on a separate port (8183/8185/8187). A bare `curl` returns **401** from the proxy *even when the upstream is dead* — so the proxy-level check is a necessary-but-not-sufficient signal. Always pair it with `lsof -ti :<upstream>` to confirm the upstream is listening. Seen 2026-04-20: Todoist + Calendar upstreams had died; proxies still returned 401; `launchctl kickstart -k gui/$(id -u)/com.{todoist,calendar}-mcp` brought them back.
-- **SimpleMem health**: use `/api/health` not the MCP SSE URL (SSE hangs on GET). NOTE: SimpleMem was replaced by Honcho on 2026-04-06 — expect DOWN.
-- **SimpleMem JWT**: token in SIMPLEMEM_URL has an expiry — check `exp` claim (moot post-Honcho)
 - **Honcho health endpoint**: no `/health` route; `/v1/workspaces` returns 404 and `/v3/workspaces/list` returns 405. Use `/openapi.json` (reliable 200) or trust `docker ps` `(healthy)` which comes from Honcho's own internal probe
 - **QMD embed under Bun**: `$BUN_INSTALL` env var causes `qmd embed` to run under Bun, which lacks sqlite-vec. Run under Node instead: `node /Users/mgandal/.local/share/fnm/node-versions/v22.22.0/installation/lib/node_modules/@tobilu/qmd/dist/cli/qmd.js embed`
 - **Hindsight not in health monitor**: it is NOT in the `mcpEndpoints` array in `src/index.ts` — only checked by this skill

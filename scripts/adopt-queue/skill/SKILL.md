@@ -128,4 +128,3 @@ queue it
 /queue-adopt https://github.com/garrytan/gbrain
 <Simon detects archive/gbrain-20260410.md exists>
 ⚠️ You already adopted *gbrain* on 2026-04-10. Re-queue anyway? Reply yes/no.
-```

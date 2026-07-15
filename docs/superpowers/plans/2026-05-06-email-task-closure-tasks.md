@@ -201,7 +201,6 @@ git commit -m "feat(agent-runner): expose nanoclaw.task_reopen MCP tool"
 
 > If `dist/` is gitignored, only commit the source file.
 
-
 ---
 
 ## Stage B — Python module: task_closure.py
@@ -237,7 +236,6 @@ from email_ingest.task_closure import (
     Tier,
     DEFAULT_PROFILE,
 )
-
 
 def test_profile_defaults():
     p = ClosureProfile.default()
@@ -281,12 +279,10 @@ from typing import Iterable, Optional
 
 log = logging.getLogger("email-ingest.task-closure")
 
-
 class Tier(enum.Enum):
     AUTO_CLOSE = "auto_close"
     SUGGEST = "suggest"
     DROP = "drop"
-
 
 @dataclass(frozen=True)
 class OpenTask:
@@ -300,7 +296,6 @@ class OpenTask:
     group_folder: Optional[str]
     created_at: datetime  # UTC
 
-
 @dataclass(frozen=True)
 class ThreadActivity:
     thread_ref: str  # "gmail:<id>" | "exchange:<id>"
@@ -309,7 +304,6 @@ class ThreadActivity:
     counterparty_replied_count: int
     last_activity: datetime
     counterparty_addrs: tuple[str, ...]
-
 
 @dataclass
 class ClosureProfile:
@@ -328,9 +322,7 @@ class ClosureProfile:
             thresholds={"auto_close": 0.75, "suggest": 0.55},
         )
 
-
 DEFAULT_PROFILE = ClosureProfile.default()
-
 
 @dataclass(frozen=True)
 class ClosureDecision:
@@ -343,7 +335,6 @@ class ClosureDecision:
     rule: str
     reasoning: str
     candidates_considered: int
-
 
 def score_candidate(*args, **kwargs) -> float:
     """Score a (task, thread) pair. Implementation in Task B2."""
@@ -377,7 +368,6 @@ Append to test file:
 def _now() -> datetime:
     return datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
 
-
 def _task(**overrides) -> OpenTask:
     base = dict(
         id=42, title="Respond to Elise email", context=None, owner="mike",
@@ -387,7 +377,6 @@ def _task(**overrides) -> OpenTask:
     base.update(overrides)
     return OpenTask(**base)
 
-
 def _thread(**overrides) -> ThreadActivity:
     base = dict(
         thread_ref="gmail:abc", subject="Re: 10X PO status",
@@ -396,7 +385,6 @@ def _thread(**overrides) -> ThreadActivity:
     )
     base.update(overrides)
     return ThreadActivity(**base)
-
 
 def test_score_full_signal_known_contact():
     score = score_candidate(
@@ -411,7 +399,6 @@ def test_score_full_signal_known_contact():
     )
     assert 0.90 <= score <= 1.0
 
-
 def test_score_unknown_full_name_only_below_auto_close():
     score = score_candidate(
         task=_task(),
@@ -425,7 +412,6 @@ def test_score_unknown_full_name_only_below_auto_close():
     )
     assert 0.65 <= score <= 0.75
     assert score < 0.75
-
 
 def test_score_recency_decay():
     fresh = score_candidate(
@@ -444,7 +430,6 @@ def test_score_recency_decay():
     )
     assert fresh > stale
 
-
 def test_score_multi_open_task_penalty():
     base = score_candidate(
         task=_task(), thread=_thread(user_sent_count=1),
@@ -459,7 +444,6 @@ def test_score_multi_open_task_penalty():
         same_thread_other_open_tasks=1,
     )
     assert base - penalized == pytest.approx(0.30, abs=0.001)
-
 
 def test_score_clamps_to_unit_interval():
     score = score_candidate(
@@ -496,7 +480,6 @@ def _recency_factor(last_activity: datetime, now: datetime) -> float:
     if delta <= timedelta(days=30):
         return 0.5
     return 0.2
-
 
 def score_candidate(
     *,
@@ -553,22 +536,17 @@ git commit -m "feat(task-closure): scoring function"
 ```python
 from email_ingest.task_closure import assign_tier
 
-
 def test_tier_auto_close_clear_winner():
     assert assign_tier(top_score=0.86, runner_up=0.40, profile=DEFAULT_PROFILE) == Tier.AUTO_CLOSE
-
 
 def test_tier_too_close_to_call_drops_to_suggest():
     assert assign_tier(top_score=0.80, runner_up=0.78, profile=DEFAULT_PROFILE) == Tier.SUGGEST
 
-
 def test_tier_just_above_suggest():
     assert assign_tier(top_score=0.60, runner_up=0.20, profile=DEFAULT_PROFILE) == Tier.SUGGEST
 
-
 def test_tier_below_floor_drops():
     assert assign_tier(top_score=0.40, runner_up=0.10, profile=DEFAULT_PROFILE) == Tier.DROP
-
 
 def test_tier_no_runner_up_uses_zero():
     assert assign_tier(top_score=0.80, runner_up=None, profile=DEFAULT_PROFILE) == Tier.AUTO_CLOSE
@@ -578,7 +556,6 @@ def test_tier_no_runner_up_uses_zero():
 
 ```python
 RUNNER_UP_GAP_REQUIRED = 0.20
-
 
 def assign_tier(
     *,
@@ -603,14 +580,12 @@ git add scripts/sync/email_ingest/task_closure.py scripts/sync/tests/test_task_c
 git commit -m "feat(task-closure): tier assignment with runner-up gap rule"
 ```
 
-
 ### Task B4 — Entity extraction
 
 #### Step 1: Failing tests
 
 ```python
 from email_ingest.task_closure import extract_entities, ExtractedEntities
-
 
 def test_extract_email_address():
     e = extract_entities(
@@ -619,7 +594,6 @@ def test_extract_email_address():
     )
     assert "lucinda.bertsinger@pennmedicine.upenn.edu" in e.emails
 
-
 def test_extract_known_contact_first_name():
     e = extract_entities(
         title="Respond to Lucinda about R01 budget",
@@ -627,7 +601,6 @@ def test_extract_known_contact_first_name():
         contacts={"lucinda bertsinger": {"email": "lucinda.bertsinger@pennmedicine.upenn.edu"}},
     )
     assert "lucinda bertsinger" in e.contact_keys
-
 
 def test_extract_project_codes():
     e = extract_entities(
@@ -639,14 +612,12 @@ def test_extract_project_codes():
     assert any("RIS 97589" in p for p in e.project_codes)
     assert any("COGEDE-D-26-00011" in p for p in e.project_codes)
 
-
 def test_extract_unknown_full_name():
     e = extract_entities(
         title="Reach out to Joe Buxbaum re: ASD cohort",
         context=None, contacts={},
     )
     assert ("Joe", "Buxbaum") in e.unknown_full_names
-
 
 def test_extract_ignores_common_capitalized_words():
     e = extract_entities(
@@ -677,14 +648,12 @@ NAME_STOPWORDS = frozenset({
     "About", "With", "Re", "Subject", "Note",
 })
 
-
 @dataclass(frozen=True)
 class ExtractedEntities:
     emails: tuple[str, ...]
     contact_keys: tuple[str, ...]
     project_codes: tuple[str, ...]
     unknown_full_names: tuple[tuple[str, str], ...]
-
 
 def extract_entities(
     *,
@@ -747,7 +716,6 @@ git commit -m "feat(task-closure): entity extraction"
 ```python
 from email_ingest.task_closure import load_profile, save_profile
 
-
 def test_profile_round_trip(tmp_path):
     p = ClosureProfile(
         contact_base_trust=0.8,
@@ -764,11 +732,9 @@ def test_profile_round_trip(tmp_path):
     assert loaded.thresholds["auto_close"] == 0.80
     assert loaded.counterparty_trust == {"a@b.com": 0.95}
 
-
 def test_profile_missing_file_returns_defaults(tmp_path):
     p = load_profile(tmp_path / "absent.json")
     assert p.contact_base_trust == 0.7
-
 
 def test_profile_malformed_returns_defaults(tmp_path, caplog):
     out = tmp_path / "bad.json"
@@ -778,7 +744,6 @@ def test_profile_malformed_returns_defaults(tmp_path, caplog):
         p = load_profile(out)
     assert p.contact_base_trust == 0.7
     assert any("malformed" in r.message.lower() for r in caplog.records)
-
 
 def test_profile_newer_version_falls_back(tmp_path, caplog):
     out = tmp_path / "future.json"
@@ -794,7 +759,6 @@ def test_profile_newer_version_falls_back(tmp_path, caplog):
 ```python
 PROFILE_VERSION = 1
 
-
 def save_profile(profile: ClosureProfile, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -809,7 +773,6 @@ def save_profile(profile: ClosureProfile, path: Path) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2))
     tmp.replace(path)
-
 
 def load_profile(path: Path) -> ClosureProfile:
     if not path.exists():
@@ -848,7 +811,6 @@ git commit -m "feat(task-closure): profile JSON load/save with version guard"
 ```python
 from email_ingest.task_closure import append_jsonl_event, read_recent_reopens
 
-
 def test_append_jsonl_writes_one_line_per_event(tmp_path):
     log_path = tmp_path / "events.jsonl"
     append_jsonl_event(log_path, {"action": "closed", "task_id": 1})
@@ -857,7 +819,6 @@ def test_append_jsonl_writes_one_line_per_event(tmp_path):
     assert len(lines) == 2
     assert json.loads(lines[0])["task_id"] == 1
     assert "ts" in json.loads(lines[0])
-
 
 def test_read_recent_reopens(tmp_path):
     log_path = tmp_path / "events.jsonl"
@@ -869,7 +830,6 @@ def test_read_recent_reopens(tmp_path):
     log_path.write_text("\n".join(rows) + "\n")
     recent = read_recent_reopens(log_path, window_days=7, now=fixed_now)
     assert recent == {100, 101}
-
 
 def test_read_recent_reopens_skips_corrupt_lines(tmp_path, caplog):
     log_path = tmp_path / "events.jsonl"
@@ -889,7 +849,6 @@ def test_read_recent_reopens_skips_corrupt_lines(tmp_path, caplog):
 ```python
 import fcntl
 
-
 def append_jsonl_event(path: Path, event: dict) -> None:
     """Append one JSONL event under exclusive file lock."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -902,7 +861,6 @@ def append_jsonl_event(path: Path, event: dict) -> None:
             fp.write(line)
         finally:
             fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
-
 
 def read_recent_reopens(path: Path, *, window_days: int, now: datetime) -> set[int]:
     if not path.exists():
@@ -944,7 +902,6 @@ git add scripts/sync/email_ingest/task_closure.py scripts/sync/tests/test_task_c
 git commit -m "feat(task-closure): JSONL audit log with fcntl locking"
 ```
 
-
 ### Task B7 — SQLite read/write helpers
 
 #### Step 1: Failing tests
@@ -952,7 +909,6 @@ git commit -m "feat(task-closure): JSONL audit log with fcntl locking"
 ```python
 import sqlite3
 from email_ingest.task_closure import fetch_open_tasks, close_task_in_db
-
 
 def _make_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "messages.db"
@@ -986,12 +942,10 @@ def _make_db(tmp_path: Path) -> Path:
     conn.close()
     return db_path
 
-
 def test_fetch_open_tasks_excludes_closed(tmp_path):
     db_path = _make_db(tmp_path)
     open_tasks = fetch_open_tasks(db_path)
     assert {t.title for t in open_tasks} == {"Open task A", "Open task B"}
-
 
 def test_close_task_flips_status_and_writes_completed_at(tmp_path):
     db_path = _make_db(tmp_path)
@@ -1006,7 +960,6 @@ def test_close_task_flips_status_and_writes_completed_at(tmp_path):
     assert completed_at is not None
     assert "auto" in (context or "")
 
-
 def test_close_task_idempotent_against_race(tmp_path):
     db_path = _make_db(tmp_path)
     [task_a] = [t for t in fetch_open_tasks(db_path) if t.title == "Open task A"]
@@ -1019,7 +972,6 @@ def test_close_task_idempotent_against_race(tmp_path):
 ```python
 import sqlite3
 
-
 def _parse_db_ts(s: str) -> datetime:
     s = s.replace(" ", "T")
     if s.endswith("Z"):
@@ -1027,7 +979,6 @@ def _parse_db_ts(s: str) -> datetime:
     if "+" not in s and "-" not in s[10:]:
         s = s + "+00:00"
     return datetime.fromisoformat(s)
-
 
 def fetch_open_tasks(db_path: Path) -> list[OpenTask]:
     conn = sqlite3.connect(db_path)
@@ -1058,7 +1009,6 @@ def fetch_open_tasks(db_path: Path) -> list[OpenTask]:
             group_folder=r["group_folder"], created_at=created,
         ))
     return out
-
 
 def close_task_in_db(db_path: Path, task_id: int, *, reasoning: str) -> bool:
     note = f"[auto-closed: {reasoning[:200]}]"
@@ -1099,7 +1049,6 @@ This task combines the Path A flow, the dry-run guard, the cooling-off filter, a
 from email_ingest.task_closure import scan_and_close, ClosureRunReport
 from unittest.mock import MagicMock
 
-
 class _FakeAdapter:
     def __init__(self, threads: dict[str, list]):
         self._threads = threads
@@ -1107,7 +1056,6 @@ class _FakeAdapter:
 
     def fetch_thread_messages(self, thread_id, since_epoch):
         return self._threads.get(thread_id, [])
-
 
 def _user_sent_msg():
     m = MagicMock()
@@ -1117,7 +1065,6 @@ def _user_sent_msg():
     m.id = "m1"
     m.subject = "Re: thing"
     return m
-
 
 def test_scan_path_a_auto_closes_when_user_replied(tmp_path):
     db_path = _make_db(tmp_path)
@@ -1152,7 +1099,6 @@ def test_scan_path_a_auto_closes_when_user_replied(tmp_path):
     assert closed[0]["thread_ref"] == "gmail:t-elise"
     assert report.closed_count == 1
 
-
 def test_scan_dry_run_does_not_mutate_db(tmp_path):
     db_path = _make_db(tmp_path)
     conn = sqlite3.connect(db_path)
@@ -1179,7 +1125,6 @@ def test_scan_dry_run_does_not_mutate_db(tmp_path):
     events = [json.loads(l) for l in (tmp_path / "events.jsonl").read_text().splitlines()]
     actions = [e["action"] for e in events]
     assert any(a.startswith("dry-") for a in actions)
-
 
 def test_scan_respects_cooling_off(tmp_path):
     """A task with a recent 'reopened' event is masked from auto-close."""
@@ -1221,7 +1166,6 @@ def test_scan_respects_cooling_off(tmp_path):
 PATH_A_ACTIVITY_WINDOW_DAYS = 90
 COOLING_OFF_DAYS = 7
 
-
 @dataclass
 class ClosureRunReport:
     closed_count: int = 0
@@ -1230,7 +1174,6 @@ class ClosureRunReport:
     skipped_count: int = 0
     decisions: list[ClosureDecision] = field(default_factory=list)
 
-
 def _is_user_sent(msg) -> bool:
     labels = getattr(msg, "labels", None) or []
     if "SENT" in labels:
@@ -1238,13 +1181,11 @@ def _is_user_sent(msg) -> bool:
     meta = getattr(msg, "metadata", None) or {}
     return bool(meta.get("is_sent", False))
 
-
 def _classify_kind(task: OpenTask) -> str:
     text = (task.title or "").lower() + " " + (task.context or "").lower()
     if any(p in text for p in ["awaiting", "follow up with", "they owe", "waiting for"]):
         return "they-owe-me"
     return "i-owe"
-
 
 def _msg_dt(m) -> Optional[datetime]:
     ts = getattr(m, "timestamp", None) or (getattr(m, "metadata", None) or {}).get("internalDate")
@@ -1256,7 +1197,6 @@ def _msg_dt(m) -> Optional[datetime]:
         return _parse_db_ts(str(ts))
     except (ValueError, OSError):
         return None
-
 
 def _path_a_should_close(task: OpenTask, thread_msgs: list, now: datetime) -> tuple[bool, str, tuple[str, ...]]:
     cutoff = now - timedelta(days=PATH_A_ACTIVITY_WINDOW_DAYS)
@@ -1278,7 +1218,6 @@ def _path_a_should_close(task: OpenTask, thread_msgs: list, now: datetime) -> tu
             if not _is_user_sent(m):
                 return True, "Counterparty replied in thread since task creation.", addrs
         return False, "", addrs
-
 
 def scan_and_close(
     *,
@@ -1362,7 +1301,6 @@ def scan_and_close(
     tmp.replace(pending_path)
 
     return report
-
 
 def _emit_decision(
     decision: ClosureDecision,
@@ -1499,7 +1437,6 @@ class ThreadCandidate:
     user_sent_count: int
     counterparty_replied_count: int
 
-
 def _gather_candidate_threads(
     *,
     entities: ExtractedEntities,
@@ -1547,7 +1484,6 @@ def _gather_candidate_threads(
             ))
     return out
 
-
 def _match_strength_for(
     entities: ExtractedEntities, candidate: ThreadCandidate, contacts: dict[str, dict]
 ) -> float:
@@ -1562,7 +1498,6 @@ def _match_strength_for(
         if code.lower() in (candidate.subject or "").lower():
             return 0.3
     return 0.5
-
 
 def _is_known_contact(candidate: ThreadCandidate, contacts: dict[str, dict]) -> bool:
     cand_set = set(candidate.counterparty_addrs)
@@ -1662,7 +1597,6 @@ git commit -m "feat(task-closure): Path B retroactive matching"
 ```python
 from unittest.mock import MagicMock
 from email_ingest.gmail_adapter import GmailAdapter
-
 
 def test_search_threads_since_uses_query_addrs():
     g = GmailAdapter()
@@ -1801,7 +1735,6 @@ git add scripts/sync/email_ingest/gmail_adapter.py scripts/sync/email_ingest/exc
 git commit -m "feat(adapters): search_threads_since for retroactive task closure"
 ```
 
-
 ---
 
 ## Stage C — Trainer module
@@ -1824,10 +1757,8 @@ from pathlib import Path
 
 from email_ingest.task_closure_trainer import train, compute_counterparty_trust
 
-
 def _now() -> datetime:
     return datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
-
 
 def _ev(action, task_id, *, age_days=1, addr=None, rule="retroactive_full_email_match"):
     ts = (_now() - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1836,16 +1767,13 @@ def _ev(action, task_id, *, age_days=1, addr=None, rule="retroactive_full_email_
         out["thread_addrs"] = [addr]
     return out
 
-
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(e) for e in events) + "\n")
-
 
 def test_compute_counterparty_trust_high_for_clean_record():
     events = [_ev("closed", i, addr="lucinda@x.com") for i in range(1, 5)]
     trust = compute_counterparty_trust(events)
     assert trust["lucinda@x.com"] >= 0.85
-
 
 def test_compute_counterparty_trust_low_after_reopens():
     events = [
@@ -1856,7 +1784,6 @@ def test_compute_counterparty_trust_low_after_reopens():
     ]
     trust = compute_counterparty_trust(events)
     assert trust["noisy@x.com"] <= 0.30
-
 
 def test_train_writes_profile(tmp_path):
     log_path = tmp_path / "events.jsonl"
@@ -1871,7 +1798,6 @@ def test_train_writes_profile(tmp_path):
     profile = json.loads(out_path.read_text())
     assert profile["version"] == 1
     assert "a@x.com" in profile["counterparty_trust"]
-
 
 def test_train_handles_empty_jsonl(tmp_path):
     log_path = tmp_path / "events.jsonl"
@@ -1909,13 +1835,11 @@ log = logging.getLogger("email-ingest.task-closure-trainer")
 DEFAULT_JSONL = Path.home() / ".cache" / "email-ingest" / "task-closures.jsonl"
 DEFAULT_PROFILE = Path.home() / ".cache" / "email-ingest" / "task-closure-profile.json"
 
-
 def _parse_ts(s: str) -> datetime | None:
     try:
         return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None
-
 
 def _load_events(path: Path, lookback_days: int, now: datetime) -> list[dict]:
     if not path.exists():
@@ -1935,7 +1859,6 @@ def _load_events(path: Path, lookback_days: int, now: datetime) -> list[dict]:
             continue
         out.append(obj)
     return out
-
 
 def compute_counterparty_trust(events: list[dict]) -> dict[str, float]:
     closed_by_task: dict[int, list[str]] = {}
@@ -1963,7 +1886,6 @@ def compute_counterparty_trust(events: list[dict]) -> dict[str, float]:
                 d["stuck"] += 1
     return {a: round(d["stuck"] / d["total"], 3) for a, d in counts.items() if d["total"] >= 1}
 
-
 def compute_rule_precision(events: list[dict]) -> dict[str, float]:
     fired: dict[str, int] = {}
     rule_by_task: dict[int, str] = {}
@@ -1987,7 +1909,6 @@ def compute_rule_precision(events: list[dict]) -> dict[str, float]:
             stuck[rule] = stuck.get(rule, 0) + 1
     return {r: round(stuck.get(r, 0) / n, 3) for r, n in fired.items() if n > 0}
 
-
 def train(
     jsonl_path: Path,
     out_path: Path,
@@ -2006,7 +1927,6 @@ def train(
     log.info("trainer: wrote profile (cp=%d, rules=%d, lookback=%d)",
              len(cp_trust), len(rule_precision), lookback_days)
 
-
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
     p = argparse.ArgumentParser()
@@ -2018,7 +1938,6 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     train(Path(args.jsonl), Path(args.out), args.lookback_days)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
@@ -2072,7 +1991,6 @@ Append to `task_closure.py`:
 ```python
 import argparse
 
-
 def explain_task(
     *,
     db_path: Path, task_id: int,
@@ -2121,7 +2039,6 @@ def explain_task(
         },
         "candidates": scored,
     }
-
 
 def rollback_task(*, db_path: Path, task_id: int, jsonl_path: Path) -> dict:
     conn = sqlite3.connect(db_path)
@@ -2172,7 +2089,6 @@ def rollback_task(*, db_path: Path, task_id: int, jsonl_path: Path) -> dict:
         return {"success": True}
     return {"success": False, "error": "race during rollback"}
 
-
 def _load_contacts_from_claude_md(path: Path) -> dict[str, dict]:
     if not path.exists():
         log.info("contacts: %s not found, skipping", path)
@@ -2193,7 +2109,6 @@ def _load_contacts_from_claude_md(path: Path) -> dict[str, dict]:
             if len(cells) >= 3 and "@" in cells[2]:
                 out[cells[0].lower()] = {"email": cells[2].lower()}
     return out
-
 
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO)
@@ -2246,7 +2161,6 @@ def main(argv: list[str] | None = None) -> int:
              report.closed_count, report.suggested_count,
              report.cooling_off_count, report.skipped_count)
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
