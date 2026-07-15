@@ -1,123 +1,69 @@
 #!/bin/bash
-# Refresh the temporary API key in .env by capturing it from a claude -p call.
-# Runs a one-shot HTTP server that intercepts the x-api-key or Authorization
-# header from claude's API request, then updates .env and restarts NanoClaw.
+# Refresh NanoClaw's Claude Code OAuth token in .env.
 #
-# Usage: ./scripts/refresh-api-key.sh
-# Designed to run as a launchd scheduled task.
-
+# ROBUST PATH (2026-07-14 rewrite): renew claude's keychain token via `claude -p`,
+# then copy the fresh accessToken into .env. This REPLACES the old HTTP
+# capture-proxy mechanism, which used Python `server.serve_forever()` with an
+# ignored `server.timeout` and HUNG INDEFINITELY (23.5h wedge on 2026-07-13,
+# PID 80295) whenever the inner `claude -p` made no request to the proxy
+# (i.e. whenever claude itself was logged out / couldn't silently refresh).
+# A wedged run held launchd's slot so NO subsequent 4h renewal could fire,
+# causing recurring keychain expiry -> nanoclaw 401s.
+#
+# Guarantees now:
+#   - HARD `timeout` on the only blocking call -> can never wedge the slot again.
+#   - Expired-token guard -> refuses to clobber a good .env with a dead token.
+#   - Copier-only for the token (keychain is source of truth), same as refresh-oauth.sh.
+#
+# Runs via launchd (com.nanoclaw.key-refresh) every 4h. Credential proxy re-reads
+# .env per request, so no container restart is required.
 set -euo pipefail
 
-ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
-LOG="$(cd "$(dirname "$0")/.." && pwd)/logs/key-refresh.log"
-CAPTURE_PORT=3098
-
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../.env"
+LOG="$SCRIPT_DIR/../logs/key-refresh.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }
 
-log "Starting API key refresh"
+kc_field() {  # $1 = accessToken | expiresAt-minutes-remaining
+  security find-generic-password -s "Claude Code-credentials" -a "mgandal" -w 2>/dev/null \
+    | python3 -c "
+import json,sys,time
+d=json.load(sys.stdin)['claudeAiOauth']
+if '$1'=='token': print(d.get('accessToken',''))
+else: print(int((d.get('expiresAt',0)/1000 - time.time())/60))
+" 2>/dev/null
+}
 
-# Start capture server that grabs the key from claude's request
-python3 -c "
-import http.server, json, sys, urllib.request, ssl, threading, os
+log "Starting API key refresh (renew keychain + sync)"
 
-captured_key = None
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        global captured_key
-        # Check for x-api-key header first, then Authorization Bearer
-        key = self.headers.get('x-api-key', '')
-        if not key:
-            auth = self.headers.get('Authorization', '')
-            if auth.startswith('Bearer '):
-                key = auth[7:]
-
-        if key and not captured_key:
-            captured_key = key
-
-        # Forward to real API
-        length = int(self.headers.get('content-length', 0))
-        body = self.rfile.read(length) if length else b''
-        req = urllib.request.Request(
-            'https://api.anthropic.com' + self.path,
-            data=body, method='POST'
-        )
-        for h in self.headers:
-            if h.lower() not in ('host', 'content-length', 'transfer-encoding', 'connection'):
-                req.add_header(h, self.headers[h])
-        req.add_header('Content-Length', str(len(body)))
-        ctx = ssl.create_default_context()
-        try:
-            resp = urllib.request.urlopen(req, context=ctx, timeout=30)
-            self.send_response(resp.status)
-            for h, v in resp.getheaders():
-                if h.lower() not in ('transfer-encoding',):
-                    self.send_header(h, v)
-            self.end_headers()
-            self.wfile.write(resp.read())
-        except Exception as e:
-            self.send_response(502)
-            self.end_headers()
-            self.wfile.write(str(e).encode())
-
-        if captured_key:
-            with open('/tmp/nanoclaw-refreshed-key', 'w') as f:
-                f.write(captured_key)
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
-
-    def log_message(self, *args):
-        pass
-
-server = http.server.HTTPServer(('127.0.0.1', $CAPTURE_PORT), Handler)
-server.timeout = 45
-try:
-    server.serve_forever()
-except:
-    pass
-" &
-CAPTURE_PID=$!
-
-sleep 1
-
-# Run claude -p with our capture proxy as base URL
-# Use minimal env to simulate launchd context
-env -i \
-  HOME="$HOME" \
-  USER="$(whoami)" \
-  PATH="/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin" \
-  ANTHROPIC_BASE_URL="http://127.0.0.1:$CAPTURE_PORT" \
-  claude -p "respond with: ok" --output-format text > /dev/null 2>&1 || true
-
-# Wait for capture server
-wait $CAPTURE_PID 2>/dev/null || true
-
-# Read captured key
-if [ -f /tmp/nanoclaw-refreshed-key ]; then
-    NEW_KEY=$(cat /tmp/nanoclaw-refreshed-key)
-    rm -f /tmp/nanoclaw-refreshed-key
-
-    if [ -z "$NEW_KEY" ]; then
-        log "ERROR: Captured empty key"
-        exit 1
-    fi
-
-    # Update CLAUDE_CODE_OAUTH_TOKEN in .env with the fresh token
-    if grep -q '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE"; then
-        sed -i '' "s|^CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN=$NEW_KEY|" "$ENV_FILE"
-    else
-        echo "CLAUDE_CODE_OAUTH_TOKEN=$NEW_KEY" >> "$ENV_FILE"
-    fi
-
-    log "OAuth token refreshed successfully (prefix: ${NEW_KEY:0:15}...)"
-
-    # Restart NanoClaw. kickstart -k sends SIGTERM, waits for exit, then
-    # relaunches — keeping the service registered in launchd's domain.
-    # Do NOT use bootout/bootstrap: bootout removes the service from the
-    # domain, and if bootstrap fails (race, timeout), the service stays
-    # unloaded permanently, causing crash-loop alerts from the watchdog.
-    launchctl kickstart -k "gui/$(id -u)/com.nanoclaw" 2>/dev/null || true
-    log "NanoClaw gracefully restarted"
-else
-    log "ERROR: Failed to capture API key from claude CLI"
-    exit 1
+# 1. Renew claude's own keychain OAuth token (non-interactive when the refresh
+#    token is still alive). HARD timeout so this can NEVER wedge the launchd slot.
+if ! timeout 60 claude -p "ok" --max-turns 1 >/dev/null 2>&1; then
+  log "WARNING: 'claude -p' returned non-zero (logged out or rate-limited) — will still try to sync if keychain token is valid"
 fi
+
+# 2. Extract fresh token from keychain (source of truth).
+NEW_KEY=$(kc_field token)
+if [ -z "$NEW_KEY" ]; then
+  log "ERROR: Could not extract OAuth token from keychain — claude is logged out; needs interactive '/login' at the Mac"
+  exit 1
+fi
+
+# 2b. GUARD: never write an already-expired token (that is exactly what clobbered
+#     a good .env on 2026-07-13, flipping working auth to 401).
+REMAIN=$(kc_field minutes)
+if [ -n "$REMAIN" ] && [ "$REMAIN" -lt 5 ]; then
+  log "ERROR: keychain token expired (${REMAIN}min left) — NOT clobbering .env; needs interactive '/login'"
+  exit 1
+fi
+
+# 3. Copy into .env only if changed.
+CURRENT_KEY=$(grep '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
+if [ "$NEW_KEY" = "$CURRENT_KEY" ]; then
+  log "Token unchanged (valid ${REMAIN}min), no update needed"
+  exit 0
+fi
+sed -i '' "s|^CLAUDE_CODE_OAUTH_TOKEN=.*|CLAUDE_CODE_OAUTH_TOKEN=$NEW_KEY|" "$ENV_FILE"
+log "OAuth token refreshed (prefix: ${NEW_KEY:0:15}..., valid ${REMAIN}min) — credential proxy picks it up automatically"
+
+exit 0
