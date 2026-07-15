@@ -893,6 +893,44 @@ async function runQuery(
     `Crystallized skills tracked for invocation: ${[...crystallizedSkillNames].join(', ') || '(none)'}`,
   );
 
+  // Hindsight retain must not fire on scheduled tasks — bot-generated content
+  // should not pollute the memory bank. The system-prompt hint alone is not
+  // enforcement (the LLM can ignore it), so we strip the Hindsight tools from
+  // allowedTools structurally for scheduled tasks — mirroring the Honcho guard
+  // that sets honchoSession=null for scheduled tasks. (round-2 memory audit 2026-06-23)
+  const allowedTools = [
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'Glob',
+    'Grep',
+    'WebSearch',
+    'WebFetch',
+    'Task',
+    'TaskOutput',
+    'TaskStop',
+    'TeamCreate',
+    'TeamDelete',
+    'SendMessage',
+    'TodoWrite',
+    'ToolSearch',
+    'Skill',
+    'NotebookEdit',
+    'mcp__nanoclaw__*',
+    'mcp__qmd__*',
+    'mcp__honcho__*',
+    'mcp__hindsight__*',
+
+    'mcp__apple_notes__*',
+    'mcp__ollama__*',
+    'mcp__todoist__*',
+    'mcp__gmail__*',
+    'mcp__calendar__*',
+    'mcp__slack__*',
+    'mcp__mail_bridge__*',
+  ].filter((t) => !(containerInput.isScheduledTask && t === 'mcp__hindsight__*'));
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -907,38 +945,7 @@ async function runQuery(
             append: systemPromptAppend,
           }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read',
-        'Write',
-        'Edit',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',
-        'TaskOutput',
-        'TaskStop',
-        'TeamCreate',
-        'TeamDelete',
-        'SendMessage',
-        'TodoWrite',
-        'ToolSearch',
-        'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*',
-        'mcp__qmd__*',
-        'mcp__honcho__*',
-        'mcp__hindsight__*',
-
-        'mcp__apple_notes__*',
-        'mcp__ollama__*',
-        'mcp__todoist__*',
-        'mcp__gmail__*',
-        'mcp__calendar__*',
-        'mcp__slack__*',
-        'mcp__mail_bridge__*',
-      ],
+      allowedTools,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
