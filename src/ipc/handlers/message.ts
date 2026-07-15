@@ -1,6 +1,7 @@
 import { logger } from '../../logger.js';
 import { deliverSendMessage } from '../delivery.js';
 import type { IpcHandler, IpcHandlerContext } from '../handler.js';
+import { WIRE_SCHEMAS, wireParse } from '../wire-schemas.js';
 
 /**
  * `message` (send_message) — deliver an agent/group message to a chatJid.
@@ -34,18 +35,7 @@ export const messageHandler: IpcHandler<Input> = {
   // the payload in errors/ instead of unlinking it as processed.
   rethrowExecuteErrors: true,
 
-  parse(raw) {
-    if (typeof raw !== 'object' || raw === null) return null;
-    const r = raw as Record<string, unknown>;
-    if (typeof r.chatJid !== 'string' || r.chatJid.length === 0) return null;
-    if (typeof r.text !== 'string' || r.text.length === 0) return null;
-    return {
-      chatJid: r.chatJid,
-      text: r.text,
-      sender: typeof r.sender === 'string' ? r.sender : undefined,
-      webAppUrl: typeof r.webAppUrl === 'string' ? r.webAppUrl : undefined,
-    };
-  },
+  parse: wireParse(WIRE_SCHEMAS.message),
 
   authorize(input, ctx) {
     // Authorization: a group may send to its own jid; main may send anywhere.

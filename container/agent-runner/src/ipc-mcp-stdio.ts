@@ -94,7 +94,7 @@ Inputs:
 - file_path: absolute path inside the container. Typical roots are /workspace/group/ for per-group outputs and /workspace/extra/ for vault files. Relative paths will be rejected.
 - caption: optional text sent alongside the file.
 
-Returns: "File sent: <basename>" on success; error object with "File not found: <path>" if the path does not exist at call time.`,
+Returns: "File queued: <basename>" once the request is accepted — this is fire-and-forget. The host then applies trust-gating and (for non-main callers) an extension allowlist + credential blocklist before delivering; a gated or rejected file will NOT arrive and produces no further signal here. "File not found: <path>" if the path does not exist at call time.`,
   {
     file_path: z.string().describe('Absolute path to the file inside the container (e.g., /workspace/group/report.pdf)'),
     caption: z.string().optional().describe('Optional caption/message to send with the file'),
@@ -113,7 +113,10 @@ Returns: "File sent: <basename>" on success; error object with "File not found: 
       timestamp: new Date().toISOString(),
     });
 
-    return { content: [{ type: 'text' as const, text: `File sent: ${path.basename(args.file_path)}` }] };
+    // Honest wording: the file is QUEUED, not confirmed sent. Delivery,
+    // trust-gating, and the credential/extension filters all run host-side
+    // after this returns (2026-07-15).
+    return { content: [{ type: 'text' as const, text: `File queued: ${path.basename(args.file_path)}` }] };
   },
 );
 

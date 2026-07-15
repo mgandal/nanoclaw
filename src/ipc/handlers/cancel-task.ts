@@ -1,6 +1,7 @@
 import { deleteTask, getTaskById } from '../../db.js';
 import { logger } from '../../logger.js';
 import type { IpcHandler } from '../handler.js';
+import { WIRE_SCHEMAS, wireParse } from '../wire-schemas.js';
 
 interface Input {
   taskId: string;
@@ -9,11 +10,7 @@ interface Input {
 export const cancelTaskHandler: IpcHandler<Input> = {
   type: 'cancel_task',
 
-  parse(raw) {
-    if (typeof raw !== 'object' || raw === null) return null;
-    const { taskId } = raw as { taskId?: unknown };
-    return typeof taskId === 'string' && taskId.length > 0 ? { taskId } : null;
-  },
+  parse: wireParse(WIRE_SCHEMAS.cancel_task),
 
   authorize({ taskId }, ctx) {
     const task = getTaskById(taskId);

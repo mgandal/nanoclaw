@@ -11,6 +11,7 @@ import type {
   IpcHandler,
   IpcHandlerContext,
 } from '../handler.js';
+import { WIRE_SCHEMAS, wireParse } from '../wire-schemas.js';
 
 /**
  * `send_file` — deliver a file from an agent/group workspace to a chatJid.
@@ -50,17 +51,7 @@ export const sendFileHandler: IpcHandler<Input, ExecuteResult> = {
   // the payload in errors/ instead of unlinking it as processed.
   rethrowExecuteErrors: true,
 
-  parse(raw) {
-    if (typeof raw !== 'object' || raw === null) return null;
-    const r = raw as Record<string, unknown>;
-    if (typeof r.chatJid !== 'string' || r.chatJid.length === 0) return null;
-    if (typeof r.filePath !== 'string' || r.filePath.length === 0) return null;
-    return {
-      chatJid: r.chatJid,
-      filePath: r.filePath,
-      caption: typeof r.caption === 'string' ? r.caption : undefined,
-    };
-  },
+  parse: wireParse(WIRE_SCHEMAS.send_file),
 
   authorize(input, ctx) {
     // Authorization: a group may send to its own jid; main may send anywhere.

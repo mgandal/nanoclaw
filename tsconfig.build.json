@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "//": "Emit config. Excludes test files (they never belong in dist/, and wire-contract.test.ts cross-imports the container copy outside rootDir \u2192 TS6059 on emit). Type errors in tests are still caught by `typecheck` (tsconfig.json, --noEmit, no rootDir constraint).",
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts"
+  ],
+  "compilerOptions": {
+    "rootDir": "./src"
+  }
+}
