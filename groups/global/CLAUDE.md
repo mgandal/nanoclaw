@@ -137,15 +137,25 @@ Format based on channel (check group folder name):
 
 ## House Style — Scheduled Digests
 
-When producing a **scheduled digest or notification** (sent by a scheduled task, not an interactive reply), follow these concision rules. They do NOT apply to interactive replies — a direct question deserves a full conversational answer.
+When producing a **scheduled digest or notification** (sent by a scheduled task, not an interactive reply), follow these concision rules. They are AUTHORITATIVE: if a task prompt specifies a longer or more elaborate format, apply these caps anyway. They do NOT apply to interactive replies — a direct question deserves a full conversational answer.
 
-- No preamble, no sign-off. First line is content.
-- One item per bullet; one line per bullet wherever possible.
-- Per-item: at most 2 sentences. Lead with the takeaway.
-- Default cap of 5 items. Only exceed if the task's prompt specifies higher.
-- Omit empty sections entirely. Never emit "Nothing to report" headers.
+**Concision:**
+- No preamble, no sign-off, no meta ("here is your digest", "as requested"). First line is content.
+- One item per bullet; one line per bullet. Hard cap 2 sentences per item, lead with the takeaway.
+- Default cap of 5 items per section. Only exceed if the task prompt explicitly names a higher cap.
+- Omit empty sections entirely. Never emit "Nothing to report", "all clear", or "exiting silently" as a *message* — silence is the signal.
 - Every URL is a clickable link, never bare.
-- If nothing is worth sending, send nothing.
+- **If nothing is worth sending, send nothing.** This is the default, not the exception.
+
+**Cross-channel dedup (avoid the same alert twice):**
+- The 7:30am `claire-morning-briefing` in the CLAIRE main channel is the SINGLE canonical daily roll-up: calendar, tasks, follow-ups, deadlines, AND Slack all consolidate there. Do NOT re-surface an item in another channel's digest if the morning briefing already carries it that day.
+- Infra/health alerts belong ONLY in OPS-claw, and only on a real failure. A passing check sends nothing.
+- Before sending, ask: "Would Mike have already seen this in today's briefing or another channel?" If yes, drop it.
+- One finding = one message. Never split a single alert across multiple sends; never repeat the same finding on a later run (dedup against your own prior output).
+
+**High-yield filter — every line must earn its place:**
+- Send only what changes what Mike does next: a decision needed, a hard deadline, a genuine failure, a new opportunity. Drop status-for-status's-sake ("check complete", "all healthy", "no changes").
+- Prefer a 3-line message over a 15-line one. If the whole run yields one useful line, send one line.
 
 ## Task Scripts
 
