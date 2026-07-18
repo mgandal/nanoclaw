@@ -86,7 +86,8 @@ describe('credential-proxy', () => {
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
     delete process.env.NANOCLAW_PROXY_TOKEN_FILE;
     const { rmSync } = await import('fs');
-    if (tokenScratchDir) rmSync(tokenScratchDir, { recursive: true, force: true });
+    if (tokenScratchDir)
+      rmSync(tokenScratchDir, { recursive: true, force: true });
   });
 
   async function startProxy(env: Record<string, string>): Promise<number> {
