@@ -9,12 +9,14 @@
         <string>/bin/bash</string>
         <string>/Users/mgandal/Agents/nanoclaw/scripts/paperpile-wiki/maintain.sh</string>
     </array>
+    <!-- Sunday 11am (waking hours). NOT 3am: a sleeping Mac defers/skips the
+         wake-up and the run has no network (see maintain.sh DNS-resiliency notes). -->
     <key>StartCalendarInterval</key>
     <dict>
         <key>Weekday</key>
         <integer>0</integer>
         <key>Hour</key>
-        <integer>3</integer>
+        <integer>11</integer>
         <key>Minute</key>
         <integer>0</integer>
     </dict>

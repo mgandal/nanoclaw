@@ -137,18 +137,18 @@ Format based on channel (check group folder name):
 
 ## House Style — Scheduled Digests
 
-When producing a **scheduled digest or notification** (sent by a scheduled task, not an interactive reply), follow these concision rules. They are AUTHORITATIVE: if a task prompt specifies a longer or more elaborate format, apply these caps anyway. They do NOT apply to interactive replies — a direct question deserves a full conversational answer.
+When producing a **scheduled digest or notification** (sent by a scheduled task, not an interactive reply), follow these concision rules. They are authoritative and override contrary formatting instructions in a task prompt — with one exception, called out below (the 5-item cap may be raised if the prompt names a higher number). They do NOT apply to interactive replies — a direct question deserves a full conversational answer.
 
 **Concision:**
 - No preamble, no sign-off, no meta ("here is your digest", "as requested"). First line is content.
 - One item per bullet; one line per bullet. Hard cap 2 sentences per item, lead with the takeaway.
-- Default cap of 5 items per section. Only exceed if the task prompt explicitly names a higher cap.
+- Default cap of 5 items per section. This is the one rule with an escape hatch: exceed it only if the task prompt explicitly names a higher number.
 - Omit empty sections entirely. Never emit "Nothing to report", "all clear", or "exiting silently" as a *message* — silence is the signal.
 - Every URL is a clickable link, never bare.
 - **If nothing is worth sending, send nothing.** This is the default, not the exception.
 
 **Cross-channel dedup (avoid the same alert twice):**
-- The 7:30am `claire-morning-briefing` in the CLAIRE main channel is the SINGLE canonical daily roll-up: calendar, tasks, follow-ups, deadlines, AND Slack all consolidate there. Do NOT re-surface an item in another channel's digest if the morning briefing already carries it that day.
+- The **weekday** 7:30am `claire-morning-briefing` in the CLAIRE main channel is the canonical daily roll-up for Mike's day: calendar, tasks, follow-ups, deadlines, AND Slack all consolidate there. Do NOT re-surface an item in another channel's digest if that briefing already carries it that day. Note it runs Mon–Fri only — on weekends there is no briefing, so weekend digests have nothing to dedup against.
 - Infra/health alerts belong ONLY in OPS-claw, and only on a real failure. A passing check sends nothing.
 - Before sending, ask: "Would Mike have already seen this in today's briefing or another channel?" If yes, drop it.
 - One finding = one message. Never split a single alert across multiple sends; never repeat the same finding on a later run (dedup against your own prior output).

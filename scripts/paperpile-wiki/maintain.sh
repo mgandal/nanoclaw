@@ -30,11 +30,29 @@ echo "=========================================="
 PROXY_PORT="$(grep -E '^CREDENTIAL_PROXY_PORT=' "$PROJECT_ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'\'' ')"
 PROXY_PORT="${PROXY_PORT:-3002}"
 PROXY_TOKEN_FILE="$PROJECT_ROOT/store/.credential-proxy-token"
-if [ -r "$PROXY_TOKEN_FILE" ]; then
+# The token file can be STALE: if the main process crashed (SIGKILL, no clean
+# 'close'), the file survives but its token no longer matches any running proxy,
+# and any new proxy minted a different randomUUID(). Trusting the file blindly
+# would export a dead token and fail every request with a silent 403. So we
+# require BOTH: the file is readable AND the proxy port is actually accepting
+# connections right now. On either failure, fall through to the actionable
+# warning instead of failing deep inside synthesis.
+proxy_reachable() {
+    # Prefer a TCP probe (no auth needed); nc is on the launchd PATH.
+    if command -v nc >/dev/null 2>&1; then
+        nc -z -w 2 127.0.0.1 "$PROXY_PORT" >/dev/null 2>&1
+    else
+        # Fallback: bash /dev/tcp
+        (exec 3<>"/dev/tcp/127.0.0.1/${PROXY_PORT}") >/dev/null 2>&1 && exec 3>&- 3<&-
+    fi
+}
+if [ -r "$PROXY_TOKEN_FILE" ] && proxy_reachable; then
     PROXY_TOKEN="$(cat "$PROXY_TOKEN_FILE")"
     export ANTHROPIC_BASE_URL="http://127.0.0.1:${PROXY_PORT}/${PROXY_TOKEN}"
     export ANTHROPIC_API_KEY="sk-proxy-placeholder"  # SDK needs a non-empty key; proxy injects the real credential
     echo "Auth: routing Claude via credential proxy on :${PROXY_PORT}"
+elif [ -r "$PROXY_TOKEN_FILE" ]; then
+    echo "WARNING: credential proxy token file present but proxy not reachable on :${PROXY_PORT} — the NanoClaw main process may have crashed (stale token). Synthesis will fail auth; not exporting a dead token."
 else
     echo "WARNING: credential proxy token not found at $PROXY_TOKEN_FILE — is the NanoClaw main process running? Synthesis will fail auth."
 fi
