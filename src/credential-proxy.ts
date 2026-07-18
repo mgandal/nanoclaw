@@ -16,9 +16,49 @@ import { request as httpRequest, RequestOptions } from 'http';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import { writeFileSync, unlinkSync, chmodSync } from 'fs';
+import { resolve as resolvePath } from 'path';
 
 /** Random token for proxy authentication (validated via URL path prefix). */
 export const proxyToken = randomUUID();
+
+/**
+ * Runtime file that publishes the ephemeral proxy token to host-side helper
+ * scripts (e.g. scripts/paperpile-wiki/maintain.sh) so they can route Anthropic
+ * calls through this proxy without importing in-process state. In-process
+ * children (PageIndex, containers) receive the token directly and do NOT need
+ * this file. Written 0600 on listen, removed on close. Lives under store/
+ * (gitignored) alongside the DB.
+ */
+// Path is overridable via NANOCLAW_PROXY_TOKEN_FILE so tests can redirect it to
+// a scratch location and never write/delete the real runtime file.
+export function proxyTokenFilePath(): string {
+  return (
+    process.env.NANOCLAW_PROXY_TOKEN_FILE ??
+    resolvePath('store/.credential-proxy-token')
+  );
+}
+
+/** Default path (production). Prefer proxyTokenFilePath() where an override may apply. */
+export const PROXY_TOKEN_FILE = resolvePath('store/.credential-proxy-token');
+
+function writeProxyTokenFile(): void {
+  const p = proxyTokenFilePath();
+  try {
+    writeFileSync(p, proxyToken, { mode: 0o600 });
+    chmodSync(p, 0o600); // enforce perms even if the file pre-existed
+  } catch (err) {
+    logger.warn({ err, path: p }, 'Could not write proxy token file');
+  }
+}
+
+function removeProxyTokenFile(): void {
+  try {
+    unlinkSync(proxyTokenFilePath());
+  } catch {
+    // Already gone / never written — fine.
+  }
+}
 
 const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10 MB
 const UPSTREAM_TIMEOUT = 120_000; // 120 seconds
@@ -233,6 +273,9 @@ export function startCredentialProxy(
     });
 
     server.listen(port, host, () => {
+      writeProxyTokenFile();
+      // Remove the token file when the proxy stops so a stale token can't linger.
+      server.on('close', removeProxyTokenFile);
       logger.info({ port, host, authMode }, 'Credential proxy started');
       resolve(server);
     });

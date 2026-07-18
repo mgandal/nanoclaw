@@ -11,7 +11,11 @@ vi.mock('./logger.js', () => ({
   logger: { info: vi.fn(), error: vi.fn(), debug: vi.fn(), warn: vi.fn() },
 }));
 
-import { startCredentialProxy, proxyToken } from './credential-proxy.js';
+import {
+  startCredentialProxy,
+  proxyToken,
+  PROXY_TOKEN_FILE,
+} from './credential-proxy.js';
 
 function makeRequest(
   port: number,
@@ -49,9 +53,21 @@ describe('credential-proxy', () => {
   let proxyPort: number;
   let upstreamPort: number;
   let lastUpstreamHeaders: http.IncomingHttpHeaders;
+  let tokenScratchDir: string;
+  let tokenScratchFile: string;
 
   beforeEach(async () => {
     lastUpstreamHeaders = {};
+
+    // Redirect the proxy token file to a per-test scratch path so no test
+    // writes or deletes the real runtime file (store/.credential-proxy-token),
+    // which a live NanoClaw process may own.
+    const { mkdtempSync } = await import('fs');
+    const os = await import('os');
+    const path = await import('path');
+    tokenScratchDir = mkdtempSync(path.join(os.tmpdir(), 'nc-proxytok-'));
+    tokenScratchFile = path.join(tokenScratchDir, '.credential-proxy-token');
+    process.env.NANOCLAW_PROXY_TOKEN_FILE = tokenScratchFile;
 
     upstreamServer = http.createServer((req, res) => {
       lastUpstreamHeaders = { ...req.headers };
@@ -68,6 +84,9 @@ describe('credential-proxy', () => {
     await new Promise<void>((r) => proxyServer?.close(() => r()));
     await new Promise<void>((r) => upstreamServer?.close(() => r()));
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
+    delete process.env.NANOCLAW_PROXY_TOKEN_FILE;
+    const { rmSync } = await import('fs');
+    if (tokenScratchDir) rmSync(tokenScratchDir, { recursive: true, force: true });
   });
 
   async function startProxy(env: Record<string, string>): Promise<number> {
@@ -77,6 +96,24 @@ describe('credential-proxy', () => {
     proxyServer = await startCredentialProxy(0);
     return (proxyServer.address() as AddressInfo).port;
   }
+
+  it('publishes the proxy token to a 0600 file on listen and removes it on close', async () => {
+    const { existsSync, readFileSync, statSync } = await import('fs');
+    proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
+
+    // Written to the redirected scratch path (see beforeEach), never prod.
+    expect(existsSync(tokenScratchFile)).toBe(true);
+    expect(readFileSync(tokenScratchFile, 'utf-8')).toBe(proxyToken);
+    // World/group bits must be off — token is a bearer-auth credential.
+    expect(statSync(tokenScratchFile).mode & 0o077).toBe(0);
+    // The exported default constant must still be the production path.
+    expect(PROXY_TOKEN_FILE.endsWith('store/.credential-proxy-token')).toBe(
+      true,
+    );
+
+    await new Promise<void>((r) => proxyServer.close(() => r()));
+    expect(existsSync(tokenScratchFile)).toBe(false);
+  });
 
   it('API-key mode injects x-api-key and strips placeholder', async () => {
     proxyPort = await startProxy({ ANTHROPIC_API_KEY: 'sk-ant-real-key' });
