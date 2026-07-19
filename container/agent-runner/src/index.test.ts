@@ -367,6 +367,21 @@ describe('buildMcpServers', () => {
     expect(nonMainServers.nanoclaw.env.NANOCLAW_IS_MAIN).toBe('0');
   });
 
+  it('passes NANOCLAW_AGENT_NAME when the spawn is agent-attributed, omits it otherwise', () => {
+    // The MCP server stamps this into task_* IPC payloads so the host
+    // trust gate can attribute agent calls from bare group dirs.
+    const attributed = buildMcpServers('/path.js', {
+      ...baseInput,
+      agentName: 'einstein',
+    });
+    expect(attributed.nanoclaw.env.NANOCLAW_AGENT_NAME).toBe('einstein');
+
+    const unattributed = buildMcpServers('/path.js', baseInput);
+    expect(
+      'NANOCLAW_AGENT_NAME' in unattributed.nanoclaw.env,
+    ).toBe(false);
+  });
+
   it('includes QMD server when QMD_URL is set', () => {
     process.env.QMD_URL = 'http://localhost:8181/mcp';
     const servers = buildMcpServers('/path.js', baseInput);

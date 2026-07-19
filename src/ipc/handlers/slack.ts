@@ -116,12 +116,13 @@ export const slackDmReadHandler: IpcHandler<SlackDmReadInput, ExecuteResult> = {
  *    referenced by 9 live trust.yaml files (claire, coo, einstein, freud,
  *    marvin, simon, steve, vincent, warren) AND by the agent-facing MCP
  *    tool description at ipc-mcp-stdio.ts:1569.
- *  - postHocNotify: true opts into the Batch 2F.1 dispatcher branch that
- *    fires fireNotifyIfRequested AFTER writeResultFile, gated on bridge
- *    success. Together with the trust gate's decision.notify boolean
- *    (autonomous → silent, notify → ping), this preserves the legacy
- *    "notify level fires firePostHocNotify on bridge 2xx" behavior at
- *    ipc.ts:1163-1172.
+ *  - Post-hoc notify: the dispatcher fires fireNotifyIfRequested AFTER
+ *    writeResultFile for every result-kind handler whose gate decision
+ *    has notify=true and whose result payload reports success (the old
+ *    per-handler postHocNotify opt-in flag was removed 2026-07-19).
+ *    Together with the trust gate's decision.notify boolean (autonomous
+ *    → silent, notify → ping), this preserves the legacy "notify level
+ *    fires firePostHocNotify on bridge 2xx" behavior at ipc.ts:1163-1172.
  *  - authorize accepts non-agent callers (no agentName check) — matches
  *    imessageSendHandler at imessage.ts:184-202. The non-agent path
  *    flows through gateAndStage's NON_AGENT_DECISION (autonomous, no
@@ -170,7 +171,6 @@ export const slackDmHandler: IpcHandler<
         user_email: input.user_email,
       },
       actionTypeOverride: 'send_slack_dm',
-      postHocNotify: true,
     };
   },
 

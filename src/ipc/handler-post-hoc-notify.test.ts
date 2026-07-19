@@ -15,26 +15,29 @@ import {
 } from './handler.js';
 
 /**
- * Dispatcher contract tests for `postHocNotify` (Batch 2F.1).
+ * Dispatcher contract tests for the result-kind post-hoc notify.
+ *
+ * Since 2026-07-19 the notify is driven purely by the trust gate's
+ * `decision.notify` — the old per-handler `postHocNotify` opt-in flag
+ * (Batch 2F.1) is gone; it made trust level `notify` a silent no-op on
+ * every result-kind handler that didn't set it.
  *
  * Pins:
- *   1. On a result-kind handler with postHocNotify + decision.notify +
- *      success payload, sendMessage fires once and the notify text
- *      contains the auditActionType (override-aware).
+ *   1. On a result-kind handler with decision.notify + success payload,
+ *      sendMessage fires once and the notify text contains the
+ *      auditActionType (override-aware).
  *   2. Autonomous trust (decision.notify=false) → no sendMessage.
  *   3. Bridge failure (result.success=false) → no sendMessage.
- *   4. Opt-out (no postHocNotify on auth) → no sendMessage, even with
- *      trust=notify. Regression guard for the `auth.postHocNotify &&`
- *      AND-chain.
+ *   4. No handler-side opt-in is needed: trust=notify alone fires the
+ *      receipt (the inverse of the old opt-in pin).
  *   5. Ordering: result file lives on disk before sendMessage is awaited.
  *      Uses outer-scope capture (NOT throw-inside-spy — firePostHocNotify
  *      swallows spy throws at trust-notify.ts:46-53).
  *   5a. Bail (executed=false) → no sendMessage. Regression guard for the
  *       `executed &&` AND-chain.
- *   6. Contract violation: postHocNotify + skipGate → loud deny with
- *      `denied_contract_violation` audit row, no execute, no notify.
+ *   7. On-allowlist skipGate control: execute runs, no violation row.
  */
-describe('postHocNotify dispatcher behavior', () => {
+describe('result-kind post-hoc notify dispatcher behavior', () => {
   const SOURCE_GROUP = 'telegram_pn';
   const MAIN_JID = 'tg:pn-main';
   let dataDir: string;
@@ -118,7 +121,7 @@ describe('postHocNotify dispatcher behavior', () => {
 
   // ---- Test 1: success path with override ----
 
-  it('1. postHocNotify + success + decision.notify → sendMessage once, with auditActionType in text', async () => {
+  it('1. trust=notify + success payload → sendMessage once, with auditActionType in text', async () => {
     fs.writeFileSync(
       path.join(agentDir, 'trust.yaml'),
       'actions:\n  audit_x: notify\n',
@@ -138,7 +141,6 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        postHocNotify: true,
       }),
       execute: () => ({
         executed: true,
@@ -159,7 +161,7 @@ describe('postHocNotify dispatcher behavior', () => {
 
   // ---- Test 2: autonomous trust → no notify ----
 
-  it('2. postHocNotify + success + autonomous trust → sendMessage NOT called', async () => {
+  it('2. success + autonomous trust → sendMessage NOT called', async () => {
     fs.writeFileSync(
       path.join(agentDir, 'trust.yaml'),
       'actions:\n  audit_x: autonomous\n',
@@ -179,7 +181,6 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        postHocNotify: true,
       }),
       execute: () => ({ executed: true, result: { success: true } }),
     };
@@ -193,7 +194,7 @@ describe('postHocNotify dispatcher behavior', () => {
 
   // ---- Test 3: bridge failure → no notify ----
 
-  it('3. postHocNotify + result.success=false → sendMessage NOT called', async () => {
+  it('3. trust=notify + result.success=false → sendMessage NOT called', async () => {
     fs.writeFileSync(
       path.join(agentDir, 'trust.yaml'),
       'actions:\n  audit_x: notify\n',
@@ -213,7 +214,6 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        postHocNotify: true,
       }),
       execute: () => ({
         executed: true,
@@ -228,9 +228,9 @@ describe('postHocNotify dispatcher behavior', () => {
     expect(sent).toHaveLength(0);
   });
 
-  // ---- Test 4: opt-out → no notify ----
+  // ---- Test 4: no opt-in flag needed — trust=notify alone fires ----
 
-  it('4. !postHocNotify + success + decision.notify → sendMessage NOT called (opt-in regression guard)', async () => {
+  it('4. plain result-kind handler + success + decision.notify → sendMessage fires (no opt-in flag exists)', async () => {
     fs.writeFileSync(
       path.join(agentDir, 'trust.yaml'),
       'actions:\n  audit_x: notify\n',
@@ -250,8 +250,8 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        // postHocNotify INTENTIONALLY OMITTED — pins that the
-        // dispatcher's AND-chain requires the opt-in flag.
+        // No notify-related flag — the trust decision alone drives the
+        // receipt. This is the inverse of the pre-2026-07-19 opt-in pin.
       }),
       execute: () => ({ executed: true, result: { success: true } }),
     };
@@ -260,7 +260,8 @@ describe('postHocNotify dispatcher behavior', () => {
     await dispatch({ type: 'wire_x', requestId: 'req-4' });
 
     expect(fs.existsSync(resultFile('req-4'))).toBe(true);
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].text).toContain('did x');
   });
 
   // ---- Test 5: ordering (file before notify) ----
@@ -293,7 +294,6 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        postHocNotify: true,
       }),
       execute: () => ({ executed: true, result: { success: true } }),
     };
@@ -306,7 +306,7 @@ describe('postHocNotify dispatcher behavior', () => {
 
   // ---- Test 5a: executed=false bail → no notify ----
 
-  it('5a. postHocNotify + execute returns {executed: false} → sendMessage NOT called', async () => {
+  it('5a. trust=notify + execute returns {executed: false} → sendMessage NOT called', async () => {
     fs.writeFileSync(
       path.join(agentDir, 'trust.yaml'),
       'actions:\n  audit_x: notify\n',
@@ -323,7 +323,6 @@ describe('postHocNotify dispatcher behavior', () => {
         notifySummary: 'did x',
         payloadForStaging: { type: 'wire_x' },
         actionTypeOverride: 'audit_x',
-        postHocNotify: true,
       }),
       execute: () => ({ executed: false }),
     };
@@ -332,60 +331,9 @@ describe('postHocNotify dispatcher behavior', () => {
     await dispatch({ type: 'wire_x', requestId: 'req-5a' });
 
     // Dispatcher writes synthetic failure payload (handler.ts:378) but
-    // the postHocNotify executed-guard blocks the notify.
+    // the executed-guard blocks the notify.
     expect(fs.existsSync(resultFile('req-5a'))).toBe(true);
     expect(sent).toHaveLength(0);
-  });
-
-  // ---- Test 6: postHocNotify + skipGate → loud deny ----
-
-  it('6. postHocNotify + skipGate → denied_contract_violation audit row, no execute, no notify', async () => {
-    // Regression guard for the new postHocNotify+skipGate contract check
-    // (Batch 2F.1, handler.ts authorize-time loud-deny).
-    //
-    // Note: wire_x is NOT on SKIP_GATE_ALLOWLIST. The off-allowlist
-    // skipGate check at handler.ts:292-321 would catch this on its own.
-    // The postHocNotify-specific loud-deny check is for the case where
-    // a handler IS on SKIP_GATE_ALLOWLIST and accidentally combines the
-    // two flags. We test wire_x here because it is the cleaner failure
-    // mode (the new check fires whether or not the type is allowlisted).
-    let executed = false;
-
-    const handler: IpcHandler<{ ok: boolean }, void> = {
-      type: 'wire_x',
-      // No responseKind — notify-kind. We do NOT actually want the
-      // result-kind path to run; we want to prove the loud-deny fires
-      // BEFORE the dispatcher reaches either branch.
-      parse: (raw) =>
-        typeof raw === 'object' && raw !== null ? { ok: true } : null,
-      authorize: () => ({
-        target: 'target-x',
-        notifySummary: 'did x',
-        payloadForStaging: { type: 'wire_x' },
-        actionTypeOverride: 'audit_x',
-        skipGate: true,
-        postHocNotify: true,
-      }),
-      execute: () => {
-        executed = true;
-        return undefined;
-      },
-    };
-    registerIpcHandler(handler);
-
-    await dispatch({ type: 'wire_x' });
-
-    expect(executed).toBe(false);
-    expect(sent).toHaveLength(0);
-
-    const rows = getDb()
-      .prepare(
-        'SELECT action_type, outcome FROM agent_actions WHERE agent_name = ?',
-      )
-      .all(agentName) as { action_type: string; outcome: string }[];
-    expect(rows).toHaveLength(1);
-    expect(rows[0].action_type).toBe('wire_x');
-    expect(rows[0].outcome).toBe('denied_contract_violation');
   });
 
   // ---- Test 7: schedule_wakeup-style on-allowlist skipGate → execute runs ----

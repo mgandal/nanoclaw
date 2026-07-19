@@ -107,6 +107,7 @@ export const pageindexIndexHandler: IpcHandler<IndexInput, ExecuteResult> = {
   type: 'pageindex_index',
   responseKind: 'result',
   resultsDirName: 'pageindex_results',
+  payloadAgentAttribution: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
@@ -122,7 +123,10 @@ export const pageindexIndexHandler: IpcHandler<IndexInput, ExecuteResult> = {
       target: 'pageindex',
       auditSummary: input.pdfPath?.slice(0, 100) ?? '(no path)',
       notifySummary: `indexed ${input.pdfPath?.slice(0, 80) ?? '(no path)'}`,
-      payloadForStaging: { type: 'pageindex_index' },
+      // Full raw request staged so an /approve replay carries pdfPath
+      // and friends — a thin {type} payload deterministically fails
+      // replay (runPageindexIndex rejects a missing pdfPath).
+      payloadForStaging: { type: 'pageindex_index', ...input.raw },
       // Batch 4 closure: writes go through the gate. Agents need a
       // trust.yaml `pageindex_index` entry (all 9 ship `autonomous`);
       // non-agent callers pass via NON_AGENT_DECISION.

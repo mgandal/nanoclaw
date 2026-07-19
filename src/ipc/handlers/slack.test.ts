@@ -435,9 +435,9 @@ describe('slack_dm_read handler', () => {
  *  - wire-format result-file path matches container hardcoded
  *    `slack_results/`
  *  - actionTypeOverride preserves audit action_type as `send_slack_dm`
- *  - postHocNotify wires through the dispatcher's new branch (Batch
- *    2F.1) on bridge 2xx + trust=notify, stays silent on autonomous
- *    or bridge failure
+ *  - the post-hoc notify fires via the dispatcher's result-kind branch
+ *    on bridge 2xx + trust=notify, stays silent on autonomous or
+ *    bridge failure (driven by decision.notify since 2026-07-19)
  *  - dispatcher catches fetch rejection (network down) AND
  *    response.json() rejection (non-JSON body) — both produce failure
  *    result files and skip the notify (isSuccessPayload guard)
@@ -552,7 +552,6 @@ describe('slack_dm handler', () => {
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.postHocNotify).toBe(true);
     expect(auth!.actionTypeOverride).toBe('send_slack_dm');
   });
 
@@ -572,7 +571,6 @@ describe('slack_dm handler', () => {
       ctx,
     );
     expect(auth).not.toBeNull();
-    expect(auth!.postHocNotify).toBe(true);
     expect(auth!.actionTypeOverride).toBe('send_slack_dm');
     expect(auth!.target).toBe('alice@example.com');
     expect(auth!.auditSummary).toBe('x'.repeat(200));

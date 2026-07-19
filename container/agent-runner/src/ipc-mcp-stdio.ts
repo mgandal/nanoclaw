@@ -22,6 +22,10 @@ const BUS_QUEUE_PATH = path.join(IPC_DIR, 'bus-queue.json');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+// Agent identity for trust-gate attribution of task_* calls. Empty for
+// non-agent spawns; stamped after ...args so a model-supplied `agent`
+// field can never override it.
+const agentName = process.env.NANOCLAW_AGENT_NAME || '';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -1032,6 +1036,7 @@ Returns: JSON { success: true, id: <new task id> } on success, or { success: fal
       requestId,
       ...args,
       groupFolder,
+      ...(agentName ? { agent: agentName } : {}),
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
@@ -1076,6 +1081,7 @@ Returns: JSON { success: true, tasks: [{id, title, context, owner, priority, due
       requestId,
       ...args,
       groupFolder,
+      ...(agentName ? { agent: agentName } : {}),
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
@@ -1123,6 +1129,7 @@ Returns on auth denial: { success: false, error: "not authorized: only the creat
       requestId,
       ...args,
       groupFolder,
+      ...(agentName ? { agent: agentName } : {}),
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
@@ -1164,6 +1171,7 @@ Returns on auth denial: { success: false, error: "not authorized: ..." }.`,
       requestId,
       ...args,
       groupFolder,
+      ...(agentName ? { agent: agentName } : {}),
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);

@@ -32,3 +32,6 @@ actions:
   task_close: autonomous
   task_reopen: autonomous
   pageindex_index: autonomous
+  # task_list has gated agent callers since Batch 2C — entry added with
+  # payload-attribution wiring (2026-07-19) so agent list calls execute.
+  task_list: autonomous

@@ -215,6 +215,11 @@ export function buildMcpServers(mcpServerPath: string, containerInput: Container
         NANOCLAW_CHAT_JID: containerInput.chatJid,
         NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
         NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+        // Agent-attributed spawns stamp their identity so the MCP server
+        // can attribute task_* IPC payloads for the host trust gate.
+        ...(containerInput.agentName
+          ? { NANOCLAW_AGENT_NAME: containerInput.agentName }
+          : {}),
       },
     },
     ollama: {

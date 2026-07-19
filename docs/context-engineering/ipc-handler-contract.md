@@ -43,8 +43,8 @@ export interface IpcHandler<TInput> {
 ```
 
 `IpcAuthorization` may additionally declare `skipGate: true` to opt out of the
-trust gate (see **Rule 4**), `postHocNotify: true` / `suppressNotifyWhenTargetIs`
-to shape the post-hoc notify (see **Rule 3**, step 5), and the
+trust gate (see **Rule 4**), `suppressNotifyWhenTargetIs` to shape the
+post-hoc notify (see **Rule 3**, step 5), and the
 `actionTypeOverride` / `auditTarget` / `auditSummary` audit overrides.
 
 ## Six load-bearing rules
@@ -116,24 +116,25 @@ Dispatch order is fixed:
    audit types to match — the override is a one-way bridge for existing
    mismatches, not a design escape hatch.
 
-   The dispatcher also honors `auth.postHocNotify` (Batch 2F.1) on
-   `responseKind: 'result'` handlers. When set, the dispatcher fires
-   `fireNotifyIfRequested` AFTER `writeResultFile`, gated on five AND'd
-   conditions: `postHocNotify === true`, no throw from execute, `executed`
-   is true, `decision` is non-null, and the handler's result payload is
-   `{success: true, ...}` (checked via `isSuccessPayload`). The notify
-   additionally AND's with `decision.notify` and `agentName` inside
-   `fireNotifyIfRequested`, so autonomous trust and non-agent callers
-   are silent automatically. `slack_dm` is THE canonical case (hybrid:
-   structured result file for the in-container agent AND user-facing
-   Telegram notify). Combining `postHocNotify` with `skipGate` is a
-   contract violation and produces a `denied_contract_violation` audit
-   row (parallel to the off-allowlist `skipGate` check).
+   The dispatcher fires the post-hoc notify for `responseKind: 'result'`
+   handlers whenever the trust gate asked for one (2026-07-19; the old
+   per-handler `postHocNotify` opt-in flag from Batch 2F.1 is gone — it
+   made trust level `notify` a silent no-op on every handler that didn't
+   set it). `fireNotifyIfRequested` runs AFTER `writeResultFile`, gated
+   on: `decision.notify === true`, no throw from execute, `executed` is
+   true, and the handler's result payload is `{success: true, ...}`
+   (checked via `isSuccessPayload` — a bridge 4xx/5xx stays silent). The
+   notify additionally AND's with `agentName` inside
+   `fireNotifyIfRequested`, so non-agent callers are silent
+   automatically; autonomous trust is silent because `decision.notify`
+   is false. `slack_dm` is the canonical beneficiary (hybrid: structured
+   result file for the in-container agent AND user-facing Telegram
+   notify when its trust level is `notify`).
 
    The dispatcher also honors `auth.suppressNotifyWhenTargetIs?: string`
    (added for the `message` handler migration). When set, the dispatcher
    skips the post-hoc notify if `auth.target` equals this value — applied to
-   BOTH the `notify`-kind branch and the `result`-kind `postHocNotify`
+   BOTH the `notify`-kind branch and the `result`-kind notify
    branch. This exists for delivery-shaped handlers whose notify is
    chatJid-aware: the generic receipt always goes to the main jid, so a
    handler that *delivers to* the main jid would echo the receipt into the
@@ -267,12 +268,10 @@ When adding a new IPC action:
      exists only to preserve legacy `trust.yaml` keys during migration.
      If you find yourself wanting it for a new action, rename the wire
      type to match instead.
-   - Do not set `postHocNotify` for a brand-new handler. The flag exists
-     to bridge legacy hybrid handlers (`slack_dm`) that surface BOTH a
-     structured result AND a user-facing notification. New handlers
-     should be one or the other. If you genuinely need both, your spec
-     must justify it — and you must NOT combine `postHocNotify` with
-     `skipGate` (contract violation, dispatcher loudly denies).
+   - Result-kind handlers get the post-hoc notify automatically when an
+     agent's trust level for the action is `notify` — write
+     `notifySummary` accordingly (and keep it empty if surfacing the
+     input would leak something, as `knowledge_search` does).
 5. Write `execute(input, ctx)`. Side effects only. Return the result payload
    for `'result'` kinds.
 6. Register in `src/ipc/handlers/index.ts` (core) or your skill's

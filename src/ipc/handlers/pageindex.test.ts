@@ -276,6 +276,11 @@ describe('pageindex_* cluster handlers', () => {
           .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
           .all(agentName) as Array<Record<string, unknown>>;
         expect(pending).toHaveLength(1);
+        // The staged payload must carry the full original request — an
+        // /approve replay re-parses it, and runPageindexIndex rejects a
+        // missing pdfPath. Regression pin for the thin-payload bug.
+        const stagedPayload = JSON.parse(String(pending[0].payload_json));
+        expect(stagedPayload.pdfPath).toBe('/workspace/group/doc.pdf');
 
         const result = readAgentResult(agentName, 'req-px-draft');
         expect(result).not.toBeNull();

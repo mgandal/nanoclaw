@@ -363,6 +363,119 @@ describe('tasks_* cluster handlers', () => {
       }
     });
 
+    it('payload agent field attributes the gate from a BARE group dir (production path)', async () => {
+      // Production containers write IPC into the bare group dir — the
+      // compound-dir attribution never fires there. The container MCP
+      // server stamps `agent` into the payload instead; the dispatcher
+      // must attribute the gate from it.
+      const agentName = makeAgent('actions:\n  task_add: autonomous\n');
+      const title = `payload-attr-task-${agentName}`;
+      try {
+        await dispatch(
+          {
+            type: 'task_add',
+            requestId: 'req-payload-attr',
+            title,
+            agent: agentName,
+          },
+          false,
+        );
+
+        const result = readResult('req-payload-attr');
+        expect(result).not.toBeNull();
+        expect(result!.success).toBe(true);
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('task_add');
+        expect(actions[0].outcome).toBe('allowed');
+        expect(String(actions[0].summary)).toContain('[payload-agent]');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('payload agent with draft trust stages from a bare group dir', async () => {
+      const agentName = makeAgent('actions:\n  task_add: draft\n');
+      const title = `payload-draft-task-${agentName}`;
+      try {
+        await dispatch(
+          {
+            type: 'task_add',
+            requestId: 'req-payload-draft',
+            title,
+            agent: agentName,
+          },
+          false,
+        );
+
+        const tasks = getDb()
+          .prepare('SELECT * FROM tasks WHERE title = ?')
+          .all(title);
+        expect(tasks).toHaveLength(0);
+
+        const pending = getDb()
+          .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+          .all(agentName);
+        expect(pending).toHaveLength(1);
+
+        const result = readResult('req-payload-draft');
+        expect(result).not.toBeNull();
+        expect(result!.staged).toBe(true);
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('malformed payload agent field drops the call with a failure result file', async () => {
+      const title = `malformed-agent-task-${Date.now()}`;
+      await dispatch(
+        {
+          type: 'task_add',
+          requestId: 'req-bad-agent',
+          title,
+          agent: '../evil',
+        },
+        false,
+      );
+
+      // Task NOT created — fail-safe drop, not silent unattributed execute.
+      const tasks = getDb()
+        .prepare('SELECT * FROM tasks WHERE title = ?')
+        .all(title);
+      expect(tasks).toHaveLength(0);
+
+      const result = readResult('req-bad-agent');
+      expect(result).not.toBeNull();
+      expect(result!.success).toBe(false);
+      expect(String(result!.message)).toMatch(/agent/i);
+    });
+
+    it('payload-attributed task_list gates and writes an allowed audit row', async () => {
+      const agentName = makeAgent('actions:\n  task_list: autonomous\n');
+      try {
+        await dispatch(
+          { type: 'task_list', requestId: 'req-payload-list', agent: agentName },
+          false,
+        );
+
+        const result = readResult('req-payload-list');
+        expect(result).not.toBeNull();
+        expect(result!.success).toBe(true);
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('task_list');
+        expect(actions[0].outcome).toBe('allowed');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
     it('non-agent caller still executes with no audit row (NON_AGENT_DECISION parity)', async () => {
       const title = `nonagent-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await dispatch(

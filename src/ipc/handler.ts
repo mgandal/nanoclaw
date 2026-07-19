@@ -7,7 +7,12 @@ import { logger } from '../logger.js';
 import { parseCompoundKey, fsPathToCompoundKey } from '../compound-key.js';
 import { RegisteredGroup } from '../types.js';
 import type { IpcDeps } from '../ipc.js';
-import { gateAndStage, fireNotifyIfRequested } from './trust-gate.js';
+import { isValidAgentName } from './file-validation.js';
+import {
+  gateAndStage,
+  fireNotifyIfRequested,
+  type GateDecision,
+} from './trust-gate.js';
 
 /**
  * Read-only IPC actions allowed to declare `skipGate: true` in their
@@ -139,39 +144,6 @@ export interface IpcAuthorization {
    */
   skipGate?: true;
   /**
-   * On `responseKind: 'result'` handlers, fire a post-hoc Telegram notify
-   * after the result file is written. The notify fires only when ALL of:
-   *   1. `auth.postHocNotify === true` (this flag)
-   *   2. `executeThrew === false` (execute did not throw)
-   *   3. `executed === true` (handler did not bail with `{executed: false}`)
-   *   4. `decision !== null` (handler did not skipGate)
-   *   5. `isSuccessPayload(resultPayload)` (the handler returned
-   *      `{success: true, ...}` in its result payload — i.e. the side
-   *      effect actually succeeded; a bridge 4xx/5xx that returns
-   *      `{success: false}` skips the notify)
-   *
-   * The notify additionally AND's with `decision.notify` and
-   * `input.agentName` inside `fireNotifyIfRequested` (trust-gate.ts:61).
-   * Net effect: autonomous trust = silent; non-agent callers = silent;
-   * bridge failure = silent.
-   *
-   * Legitimate use: legacy hybrid handlers that both surface a structured
-   * result to the in-container agent (via result file) AND notify the user
-   * out-of-band (via Telegram). `slack_dm` is the canonical case. New
-   * handlers should choose one or the other if possible.
-   *
-   * Combining `postHocNotify` with `skipGate` is a contract violation —
-   * the dispatcher loudly denies and writes a `denied_contract_violation`
-   * audit row (parallel to the off-allowlist skipGate check above).
-   *
-   * Has no effect on `responseKind: 'notify'` handlers — those already
-   * fire `fireNotifyIfRequested` via the dispatcher's existing notify
-   * branch (the postHocNotify code path is nested inside
-   * `if (responseKind === 'result')`, so it cannot run for notify-kind
-   * handlers).
-   */
-  postHocNotify?: true;
-  /**
    * Suppress the post-hoc notify when `auth.target` equals this jid.
    *
    * The generic notify (`fireNotifyIfRequested`) always sends its receipt to
@@ -183,8 +155,8 @@ export interface IpcAuthorization {
    * (`mainJidForSelfCheck !== data.chatJid`).
    *
    * Has no effect when the gate did not request a notify, or when `target`
-   * differs from this value. Applies to both the `result`-kind postHocNotify
-   * branch and the `notify`-kind branch.
+   * differs from this value. Applies to both the `result`-kind and the
+   * `notify`-kind notify branches.
    */
   suppressNotifyWhenTargetIs?: string;
 }
@@ -250,6 +222,22 @@ export interface IpcHandler<TInput, TResult extends ExecuteResult = void> {
    * file so the container poller doesn't hang.
    */
   readonly rethrowExecuteErrors?: boolean;
+  /**
+   * Accept payload-based agent attribution. Production containers write
+   * IPC into their bare group dir (never a compound `group--agent` dir),
+   * so directory-derived `ctx.agentName` is null for every container
+   * call. Handlers that opt in let the dispatcher attribute the trust
+   * gate from a validated top-level `agent` string in the payload —
+   * stamped by the container MCP server from NANOCLAW_AGENT_NAME, not
+   * model-supplied. Malformed names drop the call outright (fail-safe);
+   * a well-formed name that matches no data/agents/ dir still
+   * attributes and falls to the trust gate's 'ask' default (staged,
+   * visible — never a silent bypass). Directory attribution wins when
+   * present. Audit rows from payload-attributed calls carry a
+   * ` [payload-agent]` summary suffix so forensics can distinguish the
+   * two sources.
+   */
+  readonly payloadAgentAttribution?: true;
   parse(raw: unknown): TInput | null;
   authorize(input: TInput, ctx: IpcHandlerContext): IpcAuthorization | null;
   execute(input: TInput, ctx: IpcHandlerContext): Promise<TResult> | TResult;
@@ -345,6 +333,37 @@ export async function dispatchIpcAction(
   // didn't run).
   ctx.requestId = requestId;
 
+  // Payload-based agent attribution — see IpcHandler.payloadAgentAttribution.
+  // Runs before parse so the synthetic parse-drop audit rows are
+  // attributed too.
+  let payloadAttributed = false;
+  if (handler.payloadAgentAttribution && ctx.agentName === null) {
+    const claimed = (data as { agent?: unknown }).agent;
+    if (claimed !== undefined) {
+      if (typeof claimed !== 'string' || !isValidAgentName(claimed)) {
+        logger.warn(
+          { type: data.type, sourceGroup: ctx.sourceGroup, requestId },
+          'IPC payload agent field malformed — dropping action',
+        );
+        if (responseKind === 'result' && requestId !== null) {
+          writeResultFile(
+            ctx.dataDir,
+            ctx.sourceGroup,
+            handler.resultsDirName ?? `${handler.type}_results`,
+            requestId,
+            {
+              success: false,
+              message: 'Error: malformed agent field — action not executed',
+            },
+          );
+        }
+        return { handled: true };
+      }
+      ctx.agentName = claimed;
+      payloadAttributed = true;
+    }
+  }
+
   const input = handler.parse(data);
   if (input === null) {
     logger.warn(
@@ -364,46 +383,6 @@ export async function dispatchIpcAction(
 
   const auth = handler.authorize(input, ctx);
   if (auth === null) return { handled: true };
-
-  // Batch 2F.1: postHocNotify + skipGate is a contract violation. The
-  // skipGate path returns `decision === null`, which would block the
-  // postHocNotify branch silently. We make the violation loud, matching
-  // the existing off-allowlist skipGate precedent below. This guards
-  // against a future handler accidentally combining the two flags.
-  //
-  // Precedence: this check fires BEFORE the off-allowlist skipGate
-  // check at line ~356. A handler with BOTH violations is attributed
-  // here (the more specific intent foot-gun) rather than as off-
-  // allowlist. Either attribution is correct; we prefer the narrower.
-  if (auth.postHocNotify === true && auth.skipGate === true) {
-    logger.error(
-      {
-        type: handler.type,
-        sourceGroup: ctx.sourceGroup,
-        agentName: ctx.agentName,
-      },
-      'IPC handler combined postHocNotify with skipGate — contract violation',
-    );
-    if (ctx.agentName) {
-      try {
-        insertAgentAction({
-          agent_name: ctx.agentName,
-          group_folder: ctx.baseGroup,
-          action_type: handler.type,
-          trust_level: 'contract_violation',
-          summary: `postHocNotify + skipGate (target=${auth.target.slice(0, 100)})`,
-          target: auth.auditTarget ?? auth.target,
-          outcome: 'denied_contract_violation',
-        });
-      } catch (err) {
-        logger.error(
-          { err, type: handler.type },
-          'Failed to write postHocNotify+skipGate contract-violation audit row',
-        );
-      }
-    }
-    return { handled: true };
-  }
 
   // Rule 4: skipGate is honored only for allowlisted types. An off-allowlist
   // handler declaring skipGate is a contract violation. We deny + log AND
@@ -447,17 +426,50 @@ export async function dispatchIpcAction(
   const auditSummary = auth.auditSummary ?? auth.target;
   const auditTarget = auth.auditTarget ?? auth.target;
   const auditActionType = auth.actionTypeOverride ?? handler.type;
+  const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
+  // Forensic marker: audit rows whose attribution came from the payload
+  // (container-stamped `agent` field) are distinguishable from
+  // directory-derived attribution.
+  const gateSummary = payloadAttributed
+    ? `${auditSummary} [payload-agent]`
+    : auditSummary;
 
-  const decision = wantsSkipGate
-    ? null
-    : gateAndStage({
+  // The gate performs synchronous DB writes (audit row, staging insert).
+  // A throw here — SQLITE_BUSY past the busy_timeout, malformed staging
+  // payload — must not escape the dispatcher: for result-kind handlers
+  // that would skip the Rule-1 result file and hang the container poller
+  // for its full timeout. Loud-but-contained, like the execute() catch.
+  let decision: GateDecision | null;
+  try {
+    decision = wantsSkipGate
+      ? null
+      : gateAndStage({
+          agentName: ctx.agentName,
+          baseGroup: ctx.baseGroup,
+          actionType: auditActionType,
+          summary: gateSummary,
+          target: auditTarget,
+          payloadForStaging: auth.payloadForStaging,
+        });
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        type: handler.type,
+        sourceGroup: ctx.sourceGroup,
+        requestId,
         agentName: ctx.agentName,
-        baseGroup: ctx.baseGroup,
-        actionType: auditActionType,
-        summary: auditSummary,
-        target: auditTarget,
-        payloadForStaging: auth.payloadForStaging,
+      },
+      'Trust gate threw during dispatch — dropping action',
+    );
+    if (responseKind === 'result' && requestId !== null) {
+      writeResultFile(ctx.dataDir, ctx.sourceGroup, resultsDirName, requestId, {
+        success: false,
+        message: 'Error: trust gate failure — action not executed',
       });
+    }
+    return { handled: true };
+  }
   if (decision !== null && !decision.allowed) {
     // Phase 0c (R3-C3 amendment): write a stage-result file for result-kind
     // handlers so the container poller doesn't hang IPC_TIMEOUT_MS waiting
@@ -474,8 +486,6 @@ export async function dispatchIpcAction(
       requestId !== null &&
       decision.pendingId !== null
     ) {
-      const resultsDirName =
-        handler.resultsDirName ?? `${handler.type}_results`;
       writeResultFile(ctx.dataDir, ctx.sourceGroup, resultsDirName, requestId, {
         executed: false,
         staged: true,
@@ -535,7 +545,6 @@ export async function dispatchIpcAction(
         : resultPayload !== undefined
           ? resultPayload
           : { success: true };
-    const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
     writeResultFile(
       ctx.dataDir,
       ctx.sourceGroup,
@@ -544,21 +553,23 @@ export async function dispatchIpcAction(
       filePayload,
     );
 
-    // Batch 2F.1: postHocNotify for hybrid handlers (slack_dm). Fires
-    // AFTER the result file write so the in-container agent sees the
-    // file before the user receives the Telegram notify. The 5 AND'd
-    // guards collectively express: opt-in, no throw, no bail, gate ran
-    // (not skipGate), bridge reported real success.
+    // Trust-level `notify` semantics for result-kind handlers: execute,
+    // write the result file, THEN send the post-hoc receipt to main —
+    // ordering guarantees the in-container agent sees the file before
+    // the user sees the Telegram notify. The guards express: gate ran
+    // (not skipGate) and asked for a notify, no throw, no bail, and the
+    // side effect reported real success ({success:true} payload — a
+    // bridge 4xx/5xx stays silent).
     //
-    // fireNotifyIfRequested internally AND's with decision.notify and
-    // input.agentName (trust-gate.ts:61), so autonomous trust and
-    // non-agent callers are silent without needing dispatcher-side
-    // checks for those conditions.
+    // History: this branch used to require a handler-side postHocNotify
+    // opt-in (Batch 2F.1), which made trust level 'notify' a silent
+    // no-op for every result-kind handler that didn't set it — the
+    // 2026-07-19 review killed the flag; decision.notify alone drives.
     if (
-      auth.postHocNotify &&
+      decision !== null &&
+      decision.notify &&
       !executeThrew &&
       executed &&
-      decision !== null &&
       isSuccessPayload(resultPayload) &&
       !notifySuppressedBySelfEcho(auth)
     ) {

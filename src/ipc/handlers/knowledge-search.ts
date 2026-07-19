@@ -33,11 +33,11 @@ export const knowledgeSearchHandler: IpcHandler<Input, Result> = {
     return {
       target: 'agent-knowledge',
       auditSummary: input.query.slice(0, 100),
-      // result-kind handlers without postHocNotify never reach the notify
-      // branch in dispatcher (handler.ts:501-513 gates on responseKind!=='result'),
-      // so this field is unreachable today. Setting '' anyway to avoid leaking
-      // the agent's query if someone later adds postHocNotify: true without
-      // re-auditing this field — matches the sibling skill_search at skills.ts:81.
+      // Since 2026-07-19 the dispatcher fires the result-kind notify
+      // whenever the gate decision says notify=true, so a trust.yaml
+      // `knowledge_search: notify` entry WOULD surface this text to main.
+      // Keep it empty to avoid leaking the agent's query — matches the
+      // sibling skill_search at skills.ts:81.
       notifySummary: '',
       payloadForStaging: {
         type: 'knowledge_search',

@@ -36,6 +36,7 @@ export const taskAddHandler: IpcHandler<AddInput, ExecuteResult> = {
   type: 'task_add',
   responseKind: 'result',
   resultsDirName: 'task_results',
+  payloadAgentAttribution: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
@@ -68,6 +69,7 @@ export const taskListHandler: IpcHandler<ListInput, ExecuteResult> = {
   type: 'task_list',
   responseKind: 'result',
   resultsDirName: 'task_results',
+  payloadAgentAttribution: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
@@ -102,6 +104,7 @@ export const taskCloseHandler: IpcHandler<CloseInput, ExecuteResult> = {
   type: 'task_close',
   responseKind: 'result',
   resultsDirName: 'task_results',
+  payloadAgentAttribution: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
@@ -142,6 +145,7 @@ export const taskReopenHandler: IpcHandler<ReopenInput, ExecuteResult> = {
   type: 'task_reopen',
   responseKind: 'result',
   resultsDirName: 'task_results',
+  payloadAgentAttribution: true,
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;
