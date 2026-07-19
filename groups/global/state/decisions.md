@@ -37,7 +37,7 @@
 
 ### 2026-04-11 - Replace qwen3:8b with phi4-mini, add Qwen3-Coder-Next via MLX
 **Decision:** (1) Delete qwen3:8b from Ollama entirely. Replace with phi4-mini (2.5GB) for all classification/extraction tasks: Honcho deriver, 5 dialectic levels, summary, dream, SimpleMem, Hindsight. (2) Add Qwen3-Coder-Next-4bit (80B/3B MoE, 44.9GB) via mlx_lm.server on port 8080 as primary coding model. (3) Remove Homebrew ollama (lacked MLX libs), use Ollama.app only.
-**Context:** qwen3:8b had inference hang bug on Ollama 0.20.x (documented since Apr 4). Head-to-head test: phi4-mini returns in 4.8s vs 18.7s for same extraction task — qwen3:8b wastes tokens on thinking overhead. phi4-mini uses 7x less VRAM (2.5GB vs 17GB), extracts more granular facts, is stable. Coder-Next via native MLX gets 80 tok/s (vs ~24-40 tok/s via Ollama GGUF). Ollama's MLX runner doesn't support Coder-Next yet. New Ollama model set: qwen3.5:35b-a3b-coding-nvfp4 (generalist), phi4-mini (classification), nomic-embed-text (embeddings).
+**Context:** qwen3:8b had inference hang bug on Ollama 0.20.x (documented since Apr 4). Head-to-head test: phi4-mini returns in 4.8s vs 18.7s for same extraction task — qwen3:8b wastes tokens on thinking overhead. phi4-mini uses 7x less VRAM (2.5GB vs 17GB), extracts more granular facts, is stable. Coder-Next via native MLX gets 80 tok/s (vs ~24-40 tok/s via Ollama GGUF). Ollama's MLX runner doesn't support Coder-Next yet. New Ollama model set: qwen3.6:35b-a3b-coding-nvfp4 (generalist; was originally written as 3.5 in this decision but Ollama published it under the 3.6 tag — fixed 2026-05-18), phi4-mini (classification), nomic-embed-text (embeddings).
 **Status:** Active
 
 ### 2026-04-04 - M3Max Has 128GB Unified Memory

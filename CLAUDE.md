@@ -119,6 +119,13 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 - When a user provides a new API token, trust it — don't claim it's identical to the old one
 - When hitting auth errors, verify you're using the correct API version before cycling through other hypotheses
 
+## Ollama model config — three sources, keep in sync
+
+- `.env` — runtime: `OLLAMA_MODEL` (classification, `src/config.ts:219`), `OLLAMA_DEFAULT_MODEL` (generalist, `src/config.ts:32`)
+- `data/env/env` — template that regenerates `.env`; fix here too or the bug returns
+- `groups/global/state/decisions.md` — rationale doc; update inline when the actual pulled tag differs from the decided tag (Ollama can republish under shifted version tags)
+- Keep `src/config.ts` fallbacks aligned with `.env` — a hardcoded `'qwen3:8b'` fallback (decommissioned 2026-05-18) sat inert at line 219 until 2026-07-19, shielded only by the `.env` override
+
 ## Container Build Cache
 
 The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.

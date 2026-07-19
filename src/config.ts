@@ -216,7 +216,7 @@ export const MAX_ERRORS_PER_HOUR = 20;
 export const OLLAMA_HOST = normalizeOllamaHost(
   process.env.OLLAMA_HOST || 'http://localhost:11434',
 );
-export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen3:8b';
+export const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'phi4-mini';
 export const OLLAMA_TIMEOUT = parseInt(
   process.env.OLLAMA_TIMEOUT || '30000',
   10,
