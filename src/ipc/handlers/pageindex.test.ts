@@ -1,10 +1,23 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from 'vitest';
 
-import { DATA_DIR } from '../../config.js';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
+import {
+  makeTrustAgent,
+  rmTrustAgent,
+  sweepStaleFixtureAgents,
+  readIpcResult,
+} from '../test-fixtures.js';
 import { IpcDeps } from '../../ipc.js';
 import { type MountMapping } from '../../pageindex.js';
 import {
@@ -223,32 +236,23 @@ describe('pageindex_* cluster handlers', () => {
   });
 
   describe('Batch 4 gate closure (pageindex_index write)', () => {
-    const makeAgent = (trustYaml: string): string => {
-      const agentName = `px-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const agentDir = path.join(DATA_DIR, 'agents', agentName);
-      fs.mkdirSync(agentDir, { recursive: true });
-      fs.writeFileSync(path.join(agentDir, 'trust.yaml'), trustYaml);
-      return agentName;
-    };
-    const rmAgent = (agentName: string) =>
-      fs.rmSync(path.join(DATA_DIR, 'agents', agentName), {
-        recursive: true,
-        force: true,
-      });
+    // Shared fixtures (src/ipc/test-fixtures.ts); beforeAll sweep clears
+    // dirs orphaned by a previously killed run.
+    const PREFIX = 'px-gate';
+    beforeAll(() => sweepStaleFixtureAgents(PREFIX));
+    const makeAgent = (trustYaml: string): string =>
+      makeTrustAgent(PREFIX, trustYaml);
+    const rmAgent = rmTrustAgent;
     const readAgentResult = (
       agentName: string,
       requestId: string,
-    ): Record<string, unknown> | null => {
-      const file = path.join(
+    ): Record<string, unknown> | null =>
+      readIpcResult(
         dataDir,
-        'ipc',
         `${MAIN_GROUP_FOLDER}--${agentName}`,
         'pageindex_results',
-        `${requestId}.json`,
+        requestId,
       );
-      if (!fs.existsSync(file)) return null;
-      return JSON.parse(fs.readFileSync(file, 'utf-8'));
-    };
 
     it('pageindex_index from agent with draft trust stages; runner never called', async () => {
       const agentName = makeAgent('actions:\n  pageindex_index: draft\n');

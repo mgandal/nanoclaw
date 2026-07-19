@@ -950,4 +950,3 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
     expect([...SKIP_GATE_ALLOWLIST].sort()).toEqual(expected);
   });
 });
-

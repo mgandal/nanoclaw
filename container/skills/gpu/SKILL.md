@@ -77,7 +77,7 @@ For each candidate, score or note:
 | 2× RTX 4090 workstation | 96GB | Newegg, B&H, CDW |
 | NVIDIA RTX PRO 6000 (Blackwell) | 96GB | B&H, CDW |
 | NVIDIA RTX 6000 Ada (used) | 48GB×1 | Newegg, eBay |
-| NVIDIA GB10 / DGX Spark | 128GB | Apple, NVIDIA direct |
+| NVIDIA GB10 / DGX Spark | 128GB | NVIDIA direct, PNY, ASUS/Dell partner builds |
 | Used H100 PCIe 80GB | 80GB | serverpartdeals, eBay |
 | AMD MI300X (used) | 192GB | serverpartdeals, eBay |
 | Mac Studio M5 Ultra | 192GB unified | Apple |

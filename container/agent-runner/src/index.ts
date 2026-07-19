@@ -28,7 +28,7 @@ import { createHonchoClient } from './honcho-client.js';
 import { HonchoSession } from './honcho-session.js';
 import type { ImageMediaType } from './screenshot-image.js';
 
-export interface ToolCallRecord {
+interface ToolCallRecord {
   tool: string;
   paramsHash: string;
   timestamp: string;
@@ -715,7 +715,9 @@ async function runQuery(
       lastAssistantUuid = (message as { uuid: string }).uuid;
     }
 
-    // Capture tool_use content blocks for pattern engine (structural data only — no content)
+    // Capture tool_use content blocks for the host action_log audit
+    // pipeline (structural data only — no content). Host side:
+    // collectToolCalls → insertActionLogEntries.
     if (message.type === 'assistant') {
       const assistantMsg = message as { message?: { content?: Array<{ type: string; name?: string; input?: unknown }> } };
       const contentBlocks = assistantMsg.message?.content;
@@ -754,14 +756,12 @@ async function runQuery(
 
     if (message.type === 'result') {
       resultCount++;
-      let textResult =
+      const textResult =
         'result' in message ? (message as { result?: string }).result : null;
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
-      const isSuccess =
-        (message as { subtype?: string }).subtype === 'success';
-      if (isSuccess && textResult) {
+      if ((message as { subtype?: string }).subtype === 'success' && textResult) {
         // Last result wins: handles future SDK streams where subagent results
         // may interleave; we want the outer-loop final result for Honcho sync.
         lastSuccessAssistantText = textResult;
@@ -1183,7 +1183,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Emit tool-call summary for pattern engine (host reads after container exits)
+  // Emit tool-call summary; the host reads it after container exit and
+  // ingests rows into the action_log audit table (collectToolCalls in
+  // src/container-runner.ts).
   if (sessionToolCalls.length > 0) {
     const outputDir = '/workspace/ipc/output';
     fs.mkdirSync(outputDir, { recursive: true });

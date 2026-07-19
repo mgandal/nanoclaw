@@ -120,10 +120,10 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 
 ## Ollama model config — three sources, keep in sync
 
-- `.env` — runtime: `OLLAMA_MODEL` (classification, `src/config.ts:219`), `OLLAMA_DEFAULT_MODEL` (generalist, `src/config.ts:32`)
-- `data/env/env` — template that regenerates `.env`; fix here too or the bug returns
+- `.env` — the SOURCE of truth at runtime: `OLLAMA_MODEL` (classification, `src/config.ts:219`), `OLLAMA_DEFAULT_MODEL` (generalist, `src/config.ts:32`)
+- `data/env/env` — a manually-synced SNAPSHOT of `.env` consumed by channel-skill installers (`cp .env data/env/env`); nothing regenerates either file from the other. After editing `.env`, re-run the copy — otherwise the stale snapshot drifts and installer-driven syncs resurrect the old value
 - `groups/global/state/decisions.md` — rationale doc; update inline when the actual pulled tag differs from the decided tag (Ollama can republish under shifted version tags)
-- Keep `src/config.ts` fallbacks aligned with `.env` — a hardcoded `'qwen3:8b'` fallback (decommissioned 2026-05-18) sat inert at line 219 until 2026-07-19, shielded only by the `.env` override
+- Keep `src/config.ts` fallbacks aligned with `.env` — a hardcoded `'qwen3:8b'` fallback (decommission decided 2026-04-11; tag fix 2026-05-18) sat inert at line 219 until 2026-07-19, shielded only by the `.env` override
 
 ## Container Build Cache
 

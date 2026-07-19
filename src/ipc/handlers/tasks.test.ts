@@ -1,10 +1,15 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 
-import { DATA_DIR } from '../../config.js';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
+import {
+  makeTrustAgent,
+  rmTrustAgent,
+  sweepStaleFixtureAgents,
+  readIpcResult,
+} from '../test-fixtures.js';
 import { IpcDeps } from '../../ipc.js';
 import {
   _resetHandlersForTests,
@@ -24,9 +29,11 @@ import {
  * semantics, group-attribution rules, cooling-off events) is tested
  * separately in src/tasks-ipc.test.ts + src/tasks-ipc-reopen.test.ts via
  * the legacy handleTasksIpc wrapper. Here we focus on the contract
- * surface — that all four register, share `task_results/`, and that
- * skipGate flows correctly: write-actions (add/close/reopen) and the
- * read-action (list) all bypass the gate today (Rule 5 preservation).
+ * surface — all four register, share `task_results/`, and the Batch 4
+ * trust shape holds: agent-attributed callers (compound dir OR payload
+ * `agent` field) go through the gate (autonomous executes + audit row,
+ * draft/ask stages, missing entry falls to 'ask'), while non-agent
+ * callers execute via NON_AGENT_DECISION with no audit row.
  */
 describe('tasks_* cluster handlers', () => {
   const SOURCE_GROUP = 'telegram_other';
@@ -190,39 +197,27 @@ describe('tasks_* cluster handlers', () => {
   });
 
   describe('Batch 4 gate closure (task_* writes)', () => {
-    // Fixture agents live under the real DATA_DIR/agents like the Phase 4
-    // gate-activation tests in skills.test.ts — gateAndStage loads
-    // trust.yaml from AGENTS_DIR, which is not test-overridable.
-    const makeAgent = (trustYaml: string | null): string => {
-      const agentName = `tasks-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const agentDir = path.join(DATA_DIR, 'agents', agentName);
-      fs.mkdirSync(agentDir, { recursive: true });
-      if (trustYaml !== null) {
-        fs.writeFileSync(path.join(agentDir, 'trust.yaml'), trustYaml);
-      }
-      return agentName;
-    };
-    const rmAgent = (agentName: string) =>
-      fs.rmSync(path.join(DATA_DIR, 'agents', agentName), {
-        recursive: true,
-        force: true,
-      });
+    // Shared fixtures (src/ipc/test-fixtures.ts): agents live under the
+    // real DATA_DIR/agents (gateAndStage reads AGENTS_DIR, not
+    // test-overridable); the beforeAll sweep clears dirs orphaned by a
+    // previously killed run.
+    const PREFIX = 'tasks-gate';
+    beforeAll(() => sweepStaleFixtureAgents(PREFIX));
+    const makeAgent = (trustYaml: string): string =>
+      makeTrustAgent(PREFIX, trustYaml);
+    const rmAgent = rmTrustAgent;
     // Result files land under the FULL compound source dir
     // (ipc/{group}--{agent}/task_results/), not the bare group.
     const readAgentResult = (
       agentName: string,
       requestId: string,
-    ): Record<string, unknown> | null => {
-      const file = path.join(
+    ): Record<string, unknown> | null =>
+      readIpcResult(
         dataDir,
-        'ipc',
         `${SOURCE_GROUP}--${agentName}`,
         'task_results',
-        `${requestId}.json`,
+        requestId,
       );
-      if (!fs.existsSync(file)) return null;
-      return JSON.parse(fs.readFileSync(file, 'utf-8'));
-    };
 
     it('task_add from agent with draft trust stages instead of executing', async () => {
       const agentName = makeAgent('actions:\n  task_add: draft\n');

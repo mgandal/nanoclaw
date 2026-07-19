@@ -17,11 +17,16 @@ import type {
  * The mount resolution moves into execute() here — only this cluster needs
  * mount info, so plumbing it through the dispatcher would be overkill.
  *
- * Trust shape:
- *   The if-ladder bypassed the gate for both actions. Rule 5 preserves
- *   that via skipGate. pageindex_fetch is already on SKIP_GATE_ALLOWLIST
- *   as read-only; pageindex_index is a write, added to the allowlist with
- *   a TODO(Batch4) marker so closing the bypass is deliberate future work.
+ * Trust shape (Batch 4 closure, 2026-07-19):
+ *   pageindex_fetch is read-only and stays on SKIP_GATE_ALLOWLIST
+ *   (skipGate for every caller). pageindex_index is a WRITE and is
+ *   gated: agent-attributed callers (directory- or payload-attributed)
+ *   go through gateAndStage — all 9 agents ship trust.yaml
+ *   `pageindex_index: autonomous`; a missing entry falls to the 'ask'
+ *   default and stages. Non-agent callers pass via NON_AGENT_DECISION.
+ *   Do NOT re-add skipGate to pageindexIndexHandler — the type is off
+ *   the allowlist, so the dispatcher would deny every call as a
+ *   contract violation (Rule 4).
  */
 
 /**
