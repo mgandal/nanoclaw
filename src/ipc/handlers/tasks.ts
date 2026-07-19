@@ -13,29 +13,18 @@ import type { ExecuteResult, IpcHandler } from '../handler.js';
  *
  * Migrated from the if-ladder arms at git show 7b25dfc6:src/ipc.ts:1146-
  * 1160 (the bracket `task_add|task_list|task_close|task_reopen` arm).
- * The if-ladder bypassed the trust gate for all four actions — Rule 5
- * preserves that for now via skipGate for non-agent callers + omitting
- * skipGate for agent callers (which falls back to gateAndStage, but since
- * task_* is not on SKIP_GATE_ALLOWLIST the dispatcher would treat
- * agent-side skipGate as a contract violation).
  *
- * Per-action notes:
- *   - task_list — read-only, on SKIP_GATE_ALLOWLIST. skipGate always.
- *   - task_add, task_close, task_reopen — writes. Today bypass the gate
- *     entirely. The migration ships that behaviour (no skipGate request
- *     for agent callers → gateAndStage fires → but with no trust.yaml
- *     entry, the gate defaults to autonomous → audit row gets written
- *     where today there isn't one). That's a Rule 5 deviation worth
- *     calling out, but the alternative (skipGate: true for off-allowlist
- *     types) would trigger Rule 4's deny + violation audit, breaking the
- *     handlers entirely. The pragmatic choice: ship the audit-row-now
- *     behaviour. A separate follow-up commit can add the writes to
- *     SKIP_GATE_ALLOWLIST or to the trust matrix.
+ * Per-action trust shape (Batch 4 closure, 2026-07-19):
+ *   - task_list — read-only, on SKIP_GATE_ALLOWLIST. skipGate for
+ *     non-agent callers; agent callers go through the gate.
+ *   - task_add, task_close, task_reopen — writes, gated. Agent callers
+ *     hit gateAndStage: all 9 agents ship trust.yaml `autonomous`
+ *     entries (execute + agent_actions audit row); an agent without an
+ *     entry falls to 'ask' and stages for /approve. Non-agent callers
+ *     execute via the NON_AGENT_DECISION short-circuit, no audit row.
  *
- * payloadForStaging shapes are minimal — the if-ladder didn't stage
- * task_* actions at all (no gateAndStage call), so any shape works for
- * the moment. Including the full data record is the safe default; a
- * future trust matrix entry can refine it.
+ * payloadForStaging carries the full data record so an /approve replay
+ * has everything the original call had.
  */
 
 interface AddInput {
@@ -60,10 +49,6 @@ export const taskAddHandler: IpcHandler<AddInput, ExecuteResult> = {
       auditSummary: input.title?.slice(0, 100) ?? '(no title)',
       notifySummary: `added task '${input.title?.slice(0, 80) ?? '(no title)'}'`,
       payloadForStaging: { type: 'task_add', ...input.raw },
-      // Rule 5: the if-ladder bypassed the gate for task_*. Preserved
-      // here via skipGate; on SKIP_GATE_ALLOWLIST with the TODO(Batch4)
-      // marker. A separate commit will close this bypass.
-      skipGate: true as const,
     };
   },
 
@@ -137,7 +122,6 @@ export const taskCloseHandler: IpcHandler<CloseInput, ExecuteResult> = {
           : (input.titleMatch?.slice(0, 100) ?? '(no match)'),
       notifySummary: `closed task ${input.id !== undefined ? `#${input.id}` : input.titleMatch?.slice(0, 80)}`,
       payloadForStaging: { type: 'task_close', ...input.raw },
-      skipGate: true as const, // Rule 5 — see task_add note.
     };
   },
 
@@ -171,7 +155,6 @@ export const taskReopenHandler: IpcHandler<ReopenInput, ExecuteResult> = {
       auditSummary: input.id !== undefined ? `reopen #${input.id}` : '(no id)',
       notifySummary: `reopened task #${input.id ?? '?'}`,
       payloadForStaging: { type: 'task_reopen', ...input.raw },
-      skipGate: true as const, // Rule 5 — see task_add note.
     };
   },
 

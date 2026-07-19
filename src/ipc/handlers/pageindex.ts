@@ -123,8 +123,9 @@ export const pageindexIndexHandler: IpcHandler<IndexInput, ExecuteResult> = {
       auditSummary: input.pdfPath?.slice(0, 100) ?? '(no path)',
       notifySummary: `indexed ${input.pdfPath?.slice(0, 80) ?? '(no path)'}`,
       payloadForStaging: { type: 'pageindex_index' },
-      // Rule 5 preservation. TODO(Batch4): gate writes.
-      skipGate: true as const,
+      // Batch 4 closure: writes go through the gate. Agents need a
+      // trust.yaml `pageindex_index` entry (all 9 ship `autonomous`);
+      // non-agent callers pass via NON_AGENT_DECISION.
     };
   },
 

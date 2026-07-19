@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
+import { DATA_DIR } from '../../config.js';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
 import {
@@ -152,12 +153,10 @@ describe('tasks_* cluster handlers', () => {
     expect(result!.tasks).toEqual([]);
   });
 
-  it('write actions skip the gate (no audit row written today — Rule 5 preservation)', async () => {
-    // Even with an agent caller (compoundSource has +agent suffix),
-    // task_add carries skipGate: true and the type is on
-    // SKIP_GATE_ALLOWLIST, so no audit row should appear. This pin
-    // protects against accidentally closing the bypass without the
-    // explicit Batch 4 follow-up.
+  it('write actions from agent callers hit the gate (Batch 4 closure)', async () => {
+    // Inverse of the old Rule 5 pin: an agent caller with NO trust.yaml
+    // (loadAgentTrust returns {actions:{}}) falls to the 'ask' default —
+    // the action stages and an audit row appears. The bypass is closed.
     const agentName = `tasks-agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await dispatch(
       {
@@ -174,8 +173,9 @@ describe('tasks_* cluster handlers', () => {
       .prepare(
         "SELECT * FROM agent_actions WHERE action_type = 'task_add' AND agent_name = ?",
       )
-      .all(agentName);
-    expect(rows).toHaveLength(0);
+      .all(agentName) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].outcome).toBe('staged');
   });
 
   it('rejects malformed requestId at the dispatcher (Rule 2)', async () => {
@@ -187,5 +187,197 @@ describe('tasks_* cluster handlers', () => {
       true,
     );
     expect(fs.existsSync(resultsDir)).toBe(false);
+  });
+
+  describe('Batch 4 gate closure (task_* writes)', () => {
+    // Fixture agents live under the real DATA_DIR/agents like the Phase 4
+    // gate-activation tests in skills.test.ts — gateAndStage loads
+    // trust.yaml from AGENTS_DIR, which is not test-overridable.
+    const makeAgent = (trustYaml: string | null): string => {
+      const agentName = `tasks-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const agentDir = path.join(DATA_DIR, 'agents', agentName);
+      fs.mkdirSync(agentDir, { recursive: true });
+      if (trustYaml !== null) {
+        fs.writeFileSync(path.join(agentDir, 'trust.yaml'), trustYaml);
+      }
+      return agentName;
+    };
+    const rmAgent = (agentName: string) =>
+      fs.rmSync(path.join(DATA_DIR, 'agents', agentName), {
+        recursive: true,
+        force: true,
+      });
+    // Result files land under the FULL compound source dir
+    // (ipc/{group}--{agent}/task_results/), not the bare group.
+    const readAgentResult = (
+      agentName: string,
+      requestId: string,
+    ): Record<string, unknown> | null => {
+      const file = path.join(
+        dataDir,
+        'ipc',
+        `${SOURCE_GROUP}--${agentName}`,
+        'task_results',
+        `${requestId}.json`,
+      );
+      if (!fs.existsSync(file)) return null;
+      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    };
+
+    it('task_add from agent with draft trust stages instead of executing', async () => {
+      const agentName = makeAgent('actions:\n  task_add: draft\n');
+      const title = `staged-task-${agentName}`;
+      try {
+        await dispatch(
+          { type: 'task_add', requestId: 'req-gate-draft', title },
+          false,
+          `${SOURCE_GROUP}--${agentName}`,
+        );
+
+        // Task NOT created — the gate short-circuited before execute().
+        const tasks = getDb()
+          .prepare('SELECT * FROM tasks WHERE title = ?')
+          .all(title);
+        expect(tasks).toHaveLength(0);
+
+        // Audit row: staged.
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('task_add');
+        expect(actions[0].outcome).toBe('staged');
+
+        // pending_actions row for /approve.
+        const pending = getDb()
+          .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(pending).toHaveLength(1);
+        expect(pending[0].action_type).toBe('task_add');
+
+        // Stage-result file so the container poller doesn't hang (Phase 0c).
+        const result = readAgentResult(agentName, 'req-gate-draft');
+        expect(result).not.toBeNull();
+        expect(result!.executed).toBe(false);
+        expect(result!.staged).toBe(true);
+        expect(typeof result!.pendingId).toBe('string');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('task_add from agent with autonomous trust executes AND writes an allowed audit row', async () => {
+      const agentName = makeAgent('actions:\n  task_add: autonomous\n');
+      const title = `auto-task-${agentName}`;
+      try {
+        await dispatch(
+          { type: 'task_add', requestId: 'req-gate-auto', title },
+          false,
+          `${SOURCE_GROUP}--${agentName}`,
+        );
+
+        const result = readAgentResult(agentName, 'req-gate-auto');
+        expect(result).not.toBeNull();
+        expect(result!.success).toBe(true);
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('task_add');
+        expect(actions[0].trust_level).toBe('autonomous');
+        expect(actions[0].outcome).toBe('allowed');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('agent with trust.yaml lacking task_* entries falls to ask and stages (fail-safe default)', async () => {
+      const agentName = makeAgent('actions:\n  send_message: notify\n');
+      try {
+        await dispatch(
+          {
+            type: 'task_close',
+            requestId: 'req-gate-default',
+            id: 999999,
+          },
+          false,
+          `${SOURCE_GROUP}--${agentName}`,
+        );
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('task_close');
+        expect(actions[0].outcome).toBe('staged');
+        expect(actions[0].trust_level).toBe('ask');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('task_reopen from agent with draft trust stages without touching the task', async () => {
+      // Seed a closed task via the non-agent path.
+      const title = `reopen-target-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await dispatch(
+        { type: 'task_add', requestId: 'req-seed-add', title },
+        true,
+        'telegram_main',
+      );
+      const seeded = getDb()
+        .prepare('SELECT * FROM tasks WHERE title = ?')
+        .get(title) as { id: number; status: string };
+      await dispatch(
+        {
+          type: 'task_close',
+          requestId: 'req-seed-close',
+          id: seeded.id,
+          outcome: 'done',
+        },
+        true,
+        'telegram_main',
+      );
+
+      const agentName = makeAgent('actions:\n  task_reopen: draft\n');
+      try {
+        await dispatch(
+          { type: 'task_reopen', requestId: 'req-gate-reopen', id: seeded.id },
+          false,
+          `${SOURCE_GROUP}--${agentName}`,
+        );
+
+        // Task still closed — execute() never ran.
+        const after = getDb()
+          .prepare('SELECT * FROM tasks WHERE id = ?')
+          .get(seeded.id) as Record<string, unknown>;
+        expect(after.status).not.toBe('open');
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].outcome).toBe('staged');
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('non-agent caller still executes with no audit row (NON_AGENT_DECISION parity)', async () => {
+      const title = `nonagent-task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await dispatch(
+        { type: 'task_add', requestId: 'req-gate-nonagent', title },
+        false,
+      );
+
+      const result = readResult('req-gate-nonagent');
+      expect(result).not.toBeNull();
+      expect(result!.success).toBe(true);
+
+      const actions = getDb()
+        .prepare("SELECT * FROM agent_actions WHERE action_type = 'task_add'")
+        .all();
+      expect(actions).toHaveLength(0);
+    });
   });
 });

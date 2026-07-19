@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+import { DATA_DIR } from '../../config.js';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import { IpcDeps } from '../../ipc.js';
 import { type MountMapping } from '../../pageindex.js';
@@ -186,11 +187,20 @@ describe('pageindex_* cluster handlers', () => {
     expect(fs.existsSync(resultsDir)).toBe(false);
   });
 
-  it('both actions skip the gate (no audit row — Rule 5 preservation)', async () => {
-    // pageindex_fetch is on SKIP_GATE_ALLOWLIST as read-only; pageindex_index
-    // is on the allowlist with TODO(Batch4). Both bypass the gate even for
-    // agent callers — preserves the if-ladder's behaviour.
+  it('pageindex_index from agent hits the gate; pageindex_fetch still skips (Batch 4 closure)', async () => {
+    // pageindex_fetch stays on SKIP_GATE_ALLOWLIST (read-only, no audit
+    // row). pageindex_index is gated: an agent with no trust.yaml falls
+    // to the 'ask' default and stages, leaving one audit row.
     const agentName = `px-agent-${Date.now()}`;
+    await dispatch(
+      {
+        type: 'pageindex_fetch',
+        requestId: 'req-fetch-skip',
+        pdfPath: 'x.pdf',
+      },
+      false,
+      `${MAIN_GROUP_FOLDER}--${agentName}`,
+    );
     await dispatch(
       {
         type: 'pageindex_index',
@@ -206,7 +216,114 @@ describe('pageindex_* cluster handlers', () => {
       .prepare(
         "SELECT * FROM agent_actions WHERE action_type IN ('pageindex_fetch', 'pageindex_index') AND agent_name = ?",
       )
-      .all(agentName);
-    expect(rows).toHaveLength(0);
+      .all(agentName) as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].action_type).toBe('pageindex_index');
+    expect(rows[0].outcome).toBe('staged');
+  });
+
+  describe('Batch 4 gate closure (pageindex_index write)', () => {
+    const makeAgent = (trustYaml: string): string => {
+      const agentName = `px-gate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const agentDir = path.join(DATA_DIR, 'agents', agentName);
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(path.join(agentDir, 'trust.yaml'), trustYaml);
+      return agentName;
+    };
+    const rmAgent = (agentName: string) =>
+      fs.rmSync(path.join(DATA_DIR, 'agents', agentName), {
+        recursive: true,
+        force: true,
+      });
+    const readAgentResult = (
+      agentName: string,
+      requestId: string,
+    ): Record<string, unknown> | null => {
+      const file = path.join(
+        dataDir,
+        'ipc',
+        `${MAIN_GROUP_FOLDER}--${agentName}`,
+        'pageindex_results',
+        `${requestId}.json`,
+      );
+      if (!fs.existsSync(file)) return null;
+      return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    };
+
+    it('pageindex_index from agent with draft trust stages; runner never called', async () => {
+      const agentName = makeAgent('actions:\n  pageindex_index: draft\n');
+      try {
+        await dispatch(
+          {
+            type: 'pageindex_index',
+            requestId: 'req-px-draft',
+            pdfPath: '/workspace/group/doc.pdf',
+          },
+          false,
+          `${MAIN_GROUP_FOLDER}--${agentName}`,
+        );
+
+        expect(mockIndex).not.toHaveBeenCalled();
+
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].action_type).toBe('pageindex_index');
+        expect(actions[0].outcome).toBe('staged');
+
+        const pending = getDb()
+          .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(pending).toHaveLength(1);
+
+        const result = readAgentResult(agentName, 'req-px-draft');
+        expect(result).not.toBeNull();
+        expect(result!.staged).toBe(true);
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
+    it('pageindex_index from agent with autonomous trust executes with allowed audit row', async () => {
+      const agentName = makeAgent('actions:\n  pageindex_index: autonomous\n');
+      try {
+        await dispatch(
+          {
+            type: 'pageindex_index',
+            requestId: 'req-px-auto',
+            pdfPath: '/workspace/group/doc.pdf',
+          },
+          false,
+          `${MAIN_GROUP_FOLDER}--${agentName}`,
+        );
+
+        // Gate allowed the action and wrote the audit row. Note: execute()
+        // itself then throws for compound `group--agent` sources because
+        // resolveMountsForGroup → resolveGroupFolderPath rejects `--`
+        // (pre-existing quirk, identical under the old skipGate bypass) —
+        // so we assert the gate decision + dispatcher result-file contract,
+        // not the runner call.
+        const actions = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName) as Array<Record<string, unknown>>;
+        expect(actions).toHaveLength(1);
+        expect(actions[0].trust_level).toBe('autonomous');
+        expect(actions[0].outcome).toBe('allowed');
+
+        // No staging: gate passed it through to execute.
+        const pending = getDb()
+          .prepare('SELECT * FROM pending_actions WHERE agent_name = ?')
+          .all(agentName);
+        expect(pending).toHaveLength(0);
+
+        // Dispatcher always writes a result file (Rule 1) so the poller
+        // never hangs — here the execute-threw failure shape.
+        const result = readAgentResult(agentName, 'req-px-auto');
+        expect(result).not.toBeNull();
+      } finally {
+        rmAgent(agentName);
+      }
+    });
   });
 });

@@ -2049,6 +2049,9 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
     // Single regression sentinel for the WHOLE allowlist. If any entry is
     // added, removed, or renamed without updating this list, the test
     // breaks loudly. Sorted-array compare so ordering changes do not break.
+    // Batch 4 closure (2026-07-19): task_add / task_close / task_reopen /
+    // pageindex_index removed — the last gate-bypassing writes now flow
+    // through gateAndStage (trust.yaml `autonomous` for all 9 agents).
     const expected = [
       'crystallize_candidate',
       'crystallize_candidate_fetch',
@@ -2059,15 +2062,11 @@ describe('skill_* SKIP_GATE_ALLOWLIST membership', () => {
       'kg_query',
       'knowledge_search',
       'pageindex_fetch',
-      'pageindex_index',
       'schedule_wakeup',
       'skill_invoked',
       'skill_search',
       'slack_dm_read',
-      'task_add',
-      'task_close',
       'task_list',
-      'task_reopen',
     ].sort();
     expect([...SKIP_GATE_ALLOWLIST].sort()).toEqual(expected);
   });

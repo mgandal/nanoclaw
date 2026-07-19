@@ -31,16 +31,14 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   'imessage_search',
   'imessage_read',
   'imessage_list_contacts',
-  // Writes that bypassed the gate in the if-ladder. Migrated here as
-  // "preserve current behaviour" (Rule 5). Each entry is a known
-  // silent-failure-wedge candidate: closing the bypass is a Batch 4
-  // follow-up that adds a trust.yaml entry + removes the type from
-  // this list, in one focused commit per action.
-  // TODO(Batch4): gate task_add / task_close / task_reopen / pageindex_index.
-  'task_add',
-  'task_close',
-  'task_reopen',
-  'pageindex_index',
+  // Batch 4 closure (2026-07-19): task_add / task_close / task_reopen /
+  // pageindex_index REMOVED from this list — the last write-actions that
+  // bypassed the gate. All 9 agents' trust.yaml carry explicit
+  // `autonomous` entries for the four types (behaviour parity: they
+  // execute immediately, but now leave agent_actions audit rows).
+  // An agent whose trust.yaml lacks an entry falls to the 'ask' default
+  // and stages — fail-safe, not silent. Non-agent callers are unaffected
+  // (NON_AGENT_DECISION short-circuit in trust-gate.ts).
   // Phase 4 (2026-05-19): save_skill + crystallize_skill REMOVED from this
   // list as the gate-activation policy flip went live. All 9 agents'
   // trust.yaml carry `save_skill: draft` + `crystallize_skill: draft`, so
