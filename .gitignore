@@ -40,6 +40,11 @@ groups/global/state/followups.md
 groups/global/state/bugs.md
 groups/global/state/*.archived-*.md
 groups/global/state/*-report.md
+# - .herenow-key: here.now mini-app auth key (secret, per-install)
+# - followup-hub-state.json / relay-last-id.txt: poller runtime cursors
+groups/global/state/.herenow-key
+groups/global/state/followup-hub-state.json
+groups/global/state/relay-last-id.txt
 !groups/telegram_claire/CLAUDE.md
 !groups/telegram_claire/memory_guardian/
 groups/telegram_claire/memory_guardian/**/__pycache__/
