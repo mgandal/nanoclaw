@@ -34,179 +34,7 @@ export interface ToolCallRecord {
   timestamp: string;
 }
 
-const CRYSTALLIZE_OFFER_MIN_DISTINCT_MCP = 3;
-const CRYSTALLIZE_OFFER_MAX_RESPONSE_CHARS = 2000;
-
-/**
- * Phase 3 of skill crystallization: pure-function heuristic that decides
- * whether to nudge the user with "want me to /crystallize this?". The
- * suggestion fires only if all four conditions hold:
- *   1. The flag is on (per-group opt-in).
- *   2. The response is short enough that the suffix won't bury the answer.
- *   3. There are at least N distinct MCP tool calls (3 by default).
- *   4. Distinctness is by (tool, paramsHash) so 5 identical retries don't
- *      trigger a crystallize offer for a non-recipe pattern.
- *
- * Pure: no I/O, no env reads — `offerEnabled` is passed in, so callers
- * can control the env-flag check from one site. Easy to unit test.
- */
-export function shouldOfferCrystallize(
-  toolCalls: readonly ToolCallRecord[],
-  responseSize: number,
-  opts: { offerEnabled: boolean },
-): boolean {
-  if (!opts.offerEnabled) return false;
-  if (responseSize > CRYSTALLIZE_OFFER_MAX_RESPONSE_CHARS) return false;
-  const distinctMcp = new Set<string>();
-  for (const c of toolCalls) {
-    if (!c.tool.startsWith('mcp__')) continue;
-    distinctMcp.add(`${c.tool}|${c.paramsHash}`);
-  }
-  return distinctMcp.size >= CRYSTALLIZE_OFFER_MIN_DISTINCT_MCP;
-}
-
-/**
- * Append a passive crystallize suggestion to a result string. Returns the
- * input unchanged if null. The suffix uses italics + parens to read as a
- * sidebar, not a directive — the user is free to ignore.
- */
-export function appendCrystallizeOffer(
-  result: string | null,
-  toolCallCount: number,
-): string | null {
-  if (result == null) return result;
-  return `${result}\n\n_(I made ${toolCallCount} tool calls solving that. Want me to /crystallize this as a reusable skill?)_`;
-}
-
 const sessionToolCalls: ToolCallRecord[] = [];
-
-// Test seam: lets unit tests redirect IPC file writes to a tmpdir.
-let STOP_HOOK_TASK_DIR = '/workspace/ipc/tasks';
-export function __setStopHookTaskDirForTests(dir: string): void {
-  STOP_HOOK_TASK_DIR = dir;
-}
-
-export interface ToolSeqEntry {
-  tool: string;
-  argSummary: string;
-  resultSummary: string;
-}
-
-/**
- * Parse a JSONL transcript file and extract a structural sequence of
- * tool_use / tool_result pairs. Used by the Stop hook to build a
- * trace summary for crystallize candidates. Truncates arg + result
- * to 80 chars each to keep traces bounded.
- *
- * Returns empty array on missing or unreadable file.
- */
-export function extractToolSequence(transcriptPath: string): ToolSeqEntry[] {
-  let raw: string;
-  try { raw = fs.readFileSync(transcriptPath, 'utf-8'); }
-  catch { return []; }
-
-  const out: ToolSeqEntry[] = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      const blocks = entry?.message?.content;
-      if (!Array.isArray(blocks)) continue;
-      for (const b of blocks) {
-        if (b?.type === 'tool_use' && typeof b.name === 'string') {
-          out.push({
-            tool: b.name,
-            argSummary: JSON.stringify(b.input ?? {}).slice(0, 80),
-            resultSummary: '',
-          });
-        } else if (b?.type === 'tool_result' && typeof b.content === 'string') {
-          if (out.length > 0) {
-            out[out.length - 1].resultSummary = b.content.slice(0, 80);
-          }
-        }
-      }
-    } catch { /* malformed line, skip */ }
-  }
-  return out;
-}
-
-/**
- * Stop hook — when an agent session turn ends, fire a `crystallize_candidate`
- * IPC if the turn looks like a recipe worth crystallizing. Gates:
- *   1. R3 re-entry guard (stop_hook_active=true → skip)
- *   2. Must have an agentName (only crystallize for known agents)
- *   3. Assistant message >= 500 chars (verbosity)
- *   4. >= 3 distinct meaningful tools (mcp__* or Skill)
- *   5. No sentence-start failure phrases ("I couldn't", "we cannot", etc.)
- *   6. No "unclear whether/if/how" patterns
- *
- * Filename includes group+agent+ts+rand for I8 collision/spoofing
- * resistance. Fire-and-forget — host IPC watcher picks up the file and
- * routes it to crystallizeCandidateHandler.
- */
-// I-R2: groups that use the Telegram swarm bots (per MEMORY.md "Agent
-// Swarm" section). In these groups `containerInput.agentName` is the
-// spawn agent ("claire" usually), not the sub-agent that actually ran
-// the turn — so per-agent day-cap counters would mis-attribute. Skip
-// the Stop hook entirely until R2 inspects transcript content to
-// identify the sub-agent.
-const SWARM_GROUPS = new Set<string>([
-  'telegram_lab-claw',
-  'telegram_science-claw',
-  'telegram_home-claw',
-  'telegram_code-claw',
-  'telegram_coach-claw',
-]);
-
-export function createStopHook(
-  agentName: string | undefined,
-  sourceGroup: string,
-  sourceJid: string,
-): HookCallback {
-  return async (input) => {
-    const stop = input as { stop_hook_active?: boolean; last_assistant_message?: string;
-                            transcript_path?: string; session_id?: string };
-    if (stop.stop_hook_active === true) return {};            // R3 re-entry guard
-    if (!agentName) return {};
-    if (SWARM_GROUPS.has(sourceGroup)) return {};             // I-R2 swarm-skip
-
-    const lastMsg = stop.last_assistant_message ?? '';
-    if (lastMsg.length < 500) return {};
-
-    const tools = stop.transcript_path ? extractToolSequence(stop.transcript_path) : [];
-    const meaningful = tools.filter(t => t.tool.startsWith('mcp__') || t.tool === 'Skill');
-    if (new Set(meaningful.map(t => t.tool)).size < 3) return {};
-
-    // I2: word-boundary at sentence start
-    if (/(^|[.!?]\s+)(I|we)\s+(couldn't|cannot|failed)\b/i.test(lastMsg)) return {};
-    if (/\bunclear (whether|if|how)\b/i.test(lastMsg)) return {};
-
-    const rand = Math.random().toString(36).replace(/[^a-z0-9]/g, '').slice(0, 6).padEnd(6, '0');
-    const fname = `crystallize-candidate-${sourceGroup}-${agentName}-${Date.now()}-${rand}.json`;
-    const taskFile = path.join(STOP_HOOK_TASK_DIR, fname);
-
-    // I-R1: atomic write via .tmp+rename. Host IPC watcher polls the
-    // dir; a partial write race would shunt the file to errors/ and
-    // lose the candidate. Rename is atomic on the same filesystem.
-    const tmpPath = `${taskFile}.tmp`;
-    try {
-      fs.writeFileSync(tmpPath, JSON.stringify({
-        type: 'crystallize_candidate',
-        agent: agentName,
-        sourceGroup,
-        sourceJid,
-        sessionId: stop.session_id ?? '',
-        traceSummary: lastMsg.slice(0, 2048),
-        toolSequence: meaningful.slice(-20),
-      }));
-      fs.renameSync(tmpPath, taskFile);
-    } catch (err) {
-      log(`crystallize_candidate IPC write failed: ${err}`);
-      try { fs.unlinkSync(tmpPath); } catch { /* tmp may not exist */ }
-    }
-    return {};
-  };
-}
 
 function hashToolParams(params: unknown): string {
   const sorted = JSON.stringify(params, Object.keys((params ?? {}) as Record<string, unknown>).sort());
@@ -550,58 +378,6 @@ function createPreCompactHook(assistantName?: string): HookCallback {
   };
 }
 
-/**
- * Phase 2 of skill crystallization: emit a `skill_invoked` IPC whenever
- * the SDK's `Skill` tool is about to invoke a name we know to be a
- * crystallized skill for this agent. Fire-and-forget — the hook returns
- * `{}` immediately and the host bumps invocation_count + appends to
- * usage.jsonl asynchronously.
- *
- * `crystallizedSet` is built once on session start by reading the
- * read-only agent mount at /workspace/agent/skills/crystallized/.
- */
-function createPreToolUseHook(
-  agentName: string | undefined,
-  crystallizedSet: Set<string>,
-): HookCallback {
-  // Closure flag — log the raw Skill tool_input shape on FIRST sight only,
-  // so a future SDK shape drift is visible without spamming logs on every
-  // skill invocation.
-  let loggedShapeOnce = false;
-  return async (input) => {
-    if (!('tool_name' in input)) return {};
-    const toolName = (input as { tool_name?: string }).tool_name;
-    if (toolName !== 'Skill') return {};
-
-    const rawInput = (input as { tool_input?: unknown }).tool_input;
-    if (!loggedShapeOnce) {
-      log(`PreToolUse Skill input (first-sight): ${JSON.stringify(rawInput).slice(0, 200)}`);
-      loggedShapeOnce = true;
-    }
-
-    if (!agentName || !rawInput || typeof rawInput !== 'object') return {};
-    const skillName =
-      (rawInput as { skill?: string }).skill ??
-      (rawInput as { name?: string }).name;
-    if (!skillName || !crystallizedSet.has(skillName)) return {};
-
-    try {
-      const taskFile = `/workspace/ipc/tasks/skill-invoked-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
-      fs.writeFileSync(
-        taskFile,
-        JSON.stringify({
-          type: 'skill_invoked',
-          agent: agentName,
-          name: skillName,
-        }),
-      );
-    } catch (err) {
-      log(`skill_invoked IPC write failed: ${err}`);
-    }
-    return {};
-  };
-}
-
 export function sanitizeFilename(summary: string): string {
   return summary
     .toLowerCase()
@@ -821,12 +597,6 @@ async function runQuery(
   let lastSuccessAssistantText: string | undefined;
   let messageCount = 0;
   let resultCount = 0;
-  // Per-turn tool calls for the Phase 3 implicit-crystallize heuristic.
-  // Distinct from the module-scoped sessionToolCalls (which spans the
-  // whole session for the Pattern Engine). Reset would happen naturally
-  // because runQuery is called once per turn.
-  const turnToolCalls: ToolCallRecord[] = [];
-  const offerEnabled = process.env.IMPLICIT_CRYSTALLIZE_OFFER === '1';
 
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
@@ -863,35 +633,6 @@ async function runQuery(
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
-
-  // Phase 2 of skill crystallization: build the set of crystallized skill
-  // names so PreToolUse can emit telemetry only for those (not for every
-  // Skill invocation). Built from the read-only agent mount.
-  const crystallizedSkillNames: Set<string> = (() => {
-    if (!containerInput.agentName) return new Set<string>();
-    const dir = '/workspace/agent/skills/crystallized';
-    try {
-      const entries = fs.readdirSync(dir);
-      const names = new Set<string>();
-      for (const entry of entries) {
-        try {
-          const full = path.join(dir, entry);
-          if (
-            fs.statSync(full).isDirectory() &&
-            fs.existsSync(path.join(full, 'SKILL.md'))
-          ) {
-            names.add(entry);
-          }
-        } catch { /* skip unreadable entry */ }
-      }
-      return names;
-    } catch {
-      return new Set<string>();
-    }
-  })();
-  log(
-    `Crystallized skills tracked for invocation: ${[...crystallizedSkillNames].join(', ') || '(none)'}`,
-  );
 
   // Hindsight retain must not fire on scheduled tasks — bot-generated content
   // should not pollute the memory bank. The system-prompt hint alone is not
@@ -955,39 +696,6 @@ async function runQuery(
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
         ],
-        PreToolUse: [
-          {
-            hooks: [
-              createPreToolUseHook(
-                containerInput.agentName,
-                crystallizedSkillNames,
-              ),
-            ],
-          },
-        ],
-        // C-R3 kill switch: the Stop hook is gated on
-        // CRYSTALLIZE_CANDIDATE_ENABLED. In-container default is ON (any
-        // value !== '0' keeps the hook registered, including unset), but the
-        // host spawn path (src/container-runner.ts) currently pushes
-        // `-e CRYSTALLIZE_CANDIDATE_ENABLED=0` unconditionally, so in
-        // production the hook is OFF for every container. To re-enable, change
-        // the host push — setting the env elsewhere won't win against the
-        // explicit `-e`.
-        ...(process.env.CRYSTALLIZE_CANDIDATE_ENABLED !== '0'
-          ? {
-              Stop: [
-                {
-                  hooks: [
-                    createStopHook(
-                      containerInput.agentName,
-                      containerInput.groupFolder,
-                      containerInput.chatJid,
-                    ),
-                  ],
-                },
-              ],
-            }
-          : {}),
       },
     },
   })) {
@@ -1015,7 +723,6 @@ async function runQuery(
               timestamp: new Date().toISOString(),
             };
             sessionToolCalls.push(record);
-            turnToolCalls.push(record);
           }
         }
       }
@@ -1047,32 +754,12 @@ async function runQuery(
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
-      // Phase 3 of skill crystallization: append a passive nudge if the
-      // turn ran enough distinct MCP calls to plausibly be a recipe and
-      // the response is small enough that the suffix doesn't bury the
-      // answer. Heuristic + flag isolated in pure functions; here we only
-      // wire them. Only fires for successful results — error paths skip.
       const isSuccess =
         (message as { subtype?: string }).subtype === 'success';
       if (isSuccess && textResult) {
         // Last result wins: handles future SDK streams where subagent results
         // may interleave; we want the outer-loop final result for Honcho sync.
         lastSuccessAssistantText = textResult;
-      }
-      if (
-        isSuccess &&
-        textResult &&
-        shouldOfferCrystallize(turnToolCalls, textResult.length, {
-          offerEnabled,
-        })
-      ) {
-        const distinctMcp = new Set(
-          turnToolCalls
-            .filter((c) => c.tool.startsWith('mcp__'))
-            .map((c) => `${c.tool}|${c.paramsHash}`),
-        ).size;
-        textResult = appendCrystallizeOffer(textResult, distinctMcp);
-        log(`Appended crystallize-offer suggestion (${distinctMcp} distinct MCP calls)`);
       }
       writeOutput({
         status: 'success',
