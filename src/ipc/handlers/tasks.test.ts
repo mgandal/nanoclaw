@@ -457,7 +457,11 @@ describe('tasks_* cluster handlers', () => {
       const agentName = makeAgent('actions:\n  task_list: autonomous\n');
       try {
         await dispatch(
-          { type: 'task_list', requestId: 'req-payload-list', agent: agentName },
+          {
+            type: 'task_list',
+            requestId: 'req-payload-list',
+            agent: agentName,
+          },
           false,
         );
 

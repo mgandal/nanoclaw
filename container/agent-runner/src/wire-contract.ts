@@ -46,8 +46,6 @@ export const RESULTS_DIR_BY_TYPE: Record<string, string> = {
   pageindex_index: 'pageindex_results',
   skill_search: 'skill_results',
   save_skill: 'skill_results',
-  crystallize_skill: 'skill_results',
-  crystallize_candidate_fetch: 'crystallize_candidate_results',
   slack_dm_read: 'slack_results',
   slack_dm: 'slack_results',
   task_add: 'task_results',

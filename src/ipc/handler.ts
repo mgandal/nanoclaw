@@ -32,7 +32,6 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   'task_list',
   'slack_dm_read',
   'skill_search',
-  'skill_invoked',
   'imessage_search',
   'imessage_read',
   'imessage_list_contacts',
@@ -44,25 +43,19 @@ export const SKIP_GATE_ALLOWLIST: ReadonlySet<string> = new Set([
   // An agent whose trust.yaml lacks an entry falls to the 'ask' default
   // and stages — fail-safe, not silent. Non-agent callers are unaffected
   // (NON_AGENT_DECISION short-circuit in trust-gate.ts).
-  // Phase 4 (2026-05-19): save_skill + crystallize_skill REMOVED from this
-  // list as the gate-activation policy flip went live. All 9 agents'
-  // trust.yaml carry `save_skill: draft` + `crystallize_skill: draft`, so
-  // every call now stages in pending_actions; user `/approve pa-xxx`
-  // invokes the replay module (Phase 2) to actually write the SKILL.md.
-  // See docs/superpowers/specs/2026-05-19-ipc-gate-activation-design.md
-  // and docs/superpowers/plans/2026-05-19-ipc-gate-activation-plan.md
-  // Phase 4. Rollback: re-add both entries here AND re-add
-  // `skipGate: true` to the two authorize() blocks in
-  // src/ipc/handlers/skills.ts — gate stays inert without rows to approve.
+  // Phase 4 (2026-05-19): save_skill REMOVED from this list as the
+  // gate-activation policy flip went live — every call stages in
+  // pending_actions; user `/approve pa-xxx` invokes the replay module to
+  // actually write the SKILL.md.
+  // See docs/superpowers/specs/2026-05-19-ipc-gate-activation-design.md.
+  // 2026-07-19: the crystallize family (crystallize_skill,
+  // crystallize_candidate, crystallize_candidate_fetch, skill_invoked)
+  // was removed outright with the feature — handlers unregistered, so
+  // those wire types now fall through dispatch as unknown.
   // Self-directed agent wakeup. Rate-limited (10/agent/group) in
   // scheduleWakeupHandler.authorize; handler writes its own audit row.
   // Phase 1.1 — see docs/superpowers/specs/2026-05-19-ipc-agent-self-wakeup-design.md
   'schedule_wakeup',
-  // Crystallize candidate flow (spec 2026-05-23). Both are notify or
-  // read-only telemetry; the body-generation that *creates* a SKILL.md
-  // still goes through the existing crystallize_skill gate.
-  'crystallize_candidate',
-  'crystallize_candidate_fetch',
 ]);
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;

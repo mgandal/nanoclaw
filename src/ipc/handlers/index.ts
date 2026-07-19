@@ -13,14 +13,7 @@ import { messageHandler } from './message.js';
 import { sendFileHandler } from './send-file.js';
 import { pageindexFetchHandler, pageindexIndexHandler } from './pageindex.js';
 import { slackDmReadHandler, slackDmHandler } from './slack.js';
-import {
-  skillSearchHandler,
-  skillInvokedHandler,
-  saveSkillHandler,
-  crystallizeSkillHandler,
-  crystallizeCandidateHandler,
-  crystallizeCandidateFetchHandler,
-} from './skills.js';
+import { skillSearchHandler, saveSkillHandler } from './skills.js';
 import {
   taskAddHandler,
   taskCloseHandler,
@@ -75,11 +68,7 @@ export function registerBuiltinHandlers(): void {
   registerIpcHandler(slackDmReadHandler);
   registerIpcHandler(slackDmHandler);
   registerIpcHandler(skillSearchHandler);
-  registerIpcHandler(skillInvokedHandler);
   registerIpcHandler(saveSkillHandler);
-  registerIpcHandler(crystallizeSkillHandler);
-  registerIpcHandler(crystallizeCandidateHandler);
-  registerIpcHandler(crystallizeCandidateFetchHandler);
   registered = true;
 }
 

@@ -21,7 +21,6 @@ actions:
   pause_task: notify
   resume_task: notify
   cancel_task: notify
-  crystallize_skill: draft
   # === Batch 4 gate closure (2026-07-19) ===
   # task_* writes + pageindex_index now go through the gate. Autonomous =
   # behaviour parity with the old skipGate bypass, but every call leaves an
