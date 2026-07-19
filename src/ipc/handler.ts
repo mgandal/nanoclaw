@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from '../config.js';
-import { insertAgentAction } from '../db.js';
+import { insertAgentAction, isAgentEligibleForGroup } from '../db.js';
 import { logger } from '../logger.js';
 import { parseCompoundKey, fsPathToCompoundKey } from '../compound-key.js';
 import { RegisteredGroup } from '../types.js';
@@ -294,6 +294,51 @@ export async function dispatchIpcAction(
   if (!handler) return { handled: false };
 
   const responseKind = handler.responseKind ?? 'notify';
+  const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
+
+  // Payload-based agent attribution — see IpcHandler.payloadAgentAttribution.
+  // Runs FIRST so every downstream drop (requestId, parse) is attributed
+  // to the claimed agent and the eligibility gate covers all paths.
+  let payloadAttributed = false;
+  if (handler.payloadAgentAttribution && ctx.agentName === null) {
+    const claimed = (data as { agent?: unknown }).agent;
+    if (claimed !== undefined) {
+      // Malformed name → fail-safe drop (never silent unattributed
+      // execute). Well-formed but not eligible for THIS group → also
+      // drop, so a container cannot forge an audit row under an agent
+      // that runs in some OTHER group (cross-group attribution
+      // poisoning). Both write a failure result file so the poller
+      // doesn't hang.
+      const eligible =
+        typeof claimed === 'string' &&
+        isValidAgentName(claimed) &&
+        isAgentEligibleForGroup(claimed, ctx.baseGroup);
+      if (!eligible) {
+        logger.warn(
+          {
+            type: data.type,
+            sourceGroup: ctx.sourceGroup,
+            claimedAgent:
+              typeof claimed === 'string' ? claimed : '(non-string)',
+          },
+          'IPC payload agent field malformed or ineligible for group — dropping action',
+        );
+        if (responseKind === 'result') {
+          const rid = data.requestId;
+          if (typeof rid === 'string' && REQUEST_ID_PATTERN.test(rid)) {
+            writeResultFile(ctx.dataDir, ctx.sourceGroup, resultsDirName, rid, {
+              success: false,
+              message:
+                'Error: agent field invalid or not registered for this group — action not executed',
+            });
+          }
+        }
+        return { handled: true };
+      }
+      ctx.agentName = claimed;
+      payloadAttributed = true;
+    }
+  }
 
   // Rule 2: result-kind handlers require a valid requestId BEFORE we parse
   // or authorize. A malformed call cannot produce a result file (the poller
@@ -312,7 +357,9 @@ export async function dispatchIpcAction(
         data.type,
         null,
         'dispatch_drop_input',
-        'malformed requestId',
+        payloadAttributed
+          ? 'malformed requestId [payload-agent]'
+          : 'malformed requestId',
         'dropped_invalid_requestId',
       );
       return { handled: true };
@@ -326,37 +373,6 @@ export async function dispatchIpcAction(
   // didn't run).
   ctx.requestId = requestId;
 
-  // Payload-based agent attribution — see IpcHandler.payloadAgentAttribution.
-  // Runs before parse so the synthetic parse-drop audit rows are
-  // attributed too.
-  let payloadAttributed = false;
-  if (handler.payloadAgentAttribution && ctx.agentName === null) {
-    const claimed = (data as { agent?: unknown }).agent;
-    if (claimed !== undefined) {
-      if (typeof claimed !== 'string' || !isValidAgentName(claimed)) {
-        logger.warn(
-          { type: data.type, sourceGroup: ctx.sourceGroup, requestId },
-          'IPC payload agent field malformed — dropping action',
-        );
-        if (responseKind === 'result' && requestId !== null) {
-          writeResultFile(
-            ctx.dataDir,
-            ctx.sourceGroup,
-            handler.resultsDirName ?? `${handler.type}_results`,
-            requestId,
-            {
-              success: false,
-              message: 'Error: malformed agent field — action not executed',
-            },
-          );
-        }
-        return { handled: true };
-      }
-      ctx.agentName = claimed;
-      payloadAttributed = true;
-    }
-  }
-
   const input = handler.parse(data);
   if (input === null) {
     logger.warn(
@@ -368,7 +384,7 @@ export async function dispatchIpcAction(
       data.type,
       requestId,
       'dispatch_drop_input',
-      'parse rejected',
+      payloadAttributed ? 'parse rejected [payload-agent]' : 'parse rejected',
       'dropped_invalid_input',
     );
     return { handled: true };
@@ -399,7 +415,7 @@ export async function dispatchIpcAction(
           group_folder: ctx.baseGroup,
           action_type: handler.type,
           trust_level: 'contract_violation',
-          summary: `off-allowlist skipGate (target=${auth.target.slice(0, 100)})`,
+          summary: `off-allowlist skipGate (target=${auth.target.slice(0, 100)})${payloadAttributed ? ' [payload-agent]' : ''}`,
           target: auth.auditTarget ?? auth.target,
           outcome: 'denied_contract_violation',
         });
@@ -419,7 +435,6 @@ export async function dispatchIpcAction(
   const auditSummary = auth.auditSummary ?? auth.target;
   const auditTarget = auth.auditTarget ?? auth.target;
   const auditActionType = auth.actionTypeOverride ?? handler.type;
-  const resultsDirName = handler.resultsDirName ?? `${handler.type}_results`;
   // Forensic marker: audit rows whose attribution came from the payload
   // (container-stamped `agent` field) are distinguishable from
   // directory-derived attribution.

@@ -57,6 +57,10 @@ export const kgQueryHandler: IpcHandler<Input, ExecuteResult> = {
       target: 'knowledge-graph',
       auditSummary:
         typeof input.query === 'string' ? input.query.slice(0, 100) : '(query)',
+      // notifySummary is user-visible IF this action is ever set to trust
+      // level `notify` (result-kind notify fires on decision.notify since
+      // 2026-07-19). Unreachable today: read-only, skipGate for non-agent
+      // callers, no payloadAgentAttribution → ctx.agentName null in prod.
       notifySummary: `queried KG: ${
         typeof input.query === 'string' ? input.query.slice(0, 80) : '(query)'
       }`,

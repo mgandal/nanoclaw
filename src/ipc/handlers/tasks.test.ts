@@ -6,6 +6,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { _initTestDatabase, getDb, setRegisteredGroup } from '../../db.js';
 import {
   makeTrustAgent,
+  makeEligibleAgent,
   rmTrustAgent,
   sweepStaleFixtureAgents,
   readIpcResult,
@@ -362,8 +363,13 @@ describe('tasks_* cluster handlers', () => {
       // Production containers write IPC into the bare group dir — the
       // compound-dir attribution never fires there. The container MCP
       // server stamps `agent` into the payload instead; the dispatcher
-      // must attribute the gate from it.
-      const agentName = makeAgent('actions:\n  task_add: autonomous\n');
+      // must attribute the gate from it (agent must be eligible for the
+      // caller group).
+      const agentName = await makeEligibleAgent(
+        PREFIX,
+        SOURCE_GROUP,
+        'actions:\n  task_add: autonomous\n',
+      );
       const title = `payload-attr-task-${agentName}`;
       try {
         await dispatch(
@@ -393,7 +399,11 @@ describe('tasks_* cluster handlers', () => {
     });
 
     it('payload agent with draft trust stages from a bare group dir', async () => {
-      const agentName = makeAgent('actions:\n  task_add: draft\n');
+      const agentName = await makeEligibleAgent(
+        PREFIX,
+        SOURCE_GROUP,
+        'actions:\n  task_add: draft\n',
+      );
       const title = `payload-draft-task-${agentName}`;
       try {
         await dispatch(
@@ -424,6 +434,50 @@ describe('tasks_* cluster handlers', () => {
       }
     });
 
+    it('payload agent registered for ANOTHER group is refused from this caller group (no forged audit row)', async () => {
+      // A container can hand-write any agent name; attribution must be
+      // refused unless that agent runs in the CALLER group, else
+      // cross-group audit poisoning. The fixture agent exists on disk
+      // with autonomous trust (so refusal is about group eligibility,
+      // not trust) but is registered only for a different group.
+      const agentName = makeAgent('actions:\n  task_add: autonomous\n');
+      const { upsertAgentRegistry } = await import('../../db.js');
+      upsertAgentRegistry([
+        {
+          agent_name: agentName,
+          group_folder: 'telegram_lab-claw',
+          enabled: 1,
+        },
+      ]);
+      const title = `xgroup-task-${Date.now()}`;
+      try {
+        await dispatch(
+          {
+            type: 'task_add',
+            requestId: 'req-xgroup',
+            title,
+            agent: agentName,
+          },
+          false, // caller group is SOURCE_GROUP (telegram_other), not LAB
+        );
+
+        const forged = getDb()
+          .prepare('SELECT * FROM agent_actions WHERE agent_name = ?')
+          .all(agentName);
+        expect(forged).toHaveLength(0);
+        const tasks = getDb()
+          .prepare('SELECT * FROM tasks WHERE title = ?')
+          .all(title);
+        expect(tasks).toHaveLength(0);
+        const result = readResult('req-xgroup');
+        expect(result).not.toBeNull();
+        expect(result!.success).toBe(false);
+        expect(String(result!.message)).toMatch(/agent/i);
+      } finally {
+        rmAgent(agentName);
+      }
+    });
+
     it('malformed payload agent field drops the call with a failure result file', async () => {
       const title = `malformed-agent-task-${Date.now()}`;
       await dispatch(
@@ -449,7 +503,11 @@ describe('tasks_* cluster handlers', () => {
     });
 
     it('payload-attributed task_list gates and writes an allowed audit row', async () => {
-      const agentName = makeAgent('actions:\n  task_list: autonomous\n');
+      const agentName = await makeEligibleAgent(
+        PREFIX,
+        SOURCE_GROUP,
+        'actions:\n  task_list: autonomous\n',
+      );
       try {
         await dispatch(
           {

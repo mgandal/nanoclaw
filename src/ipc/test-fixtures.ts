@@ -43,6 +43,27 @@ export function rmTrustAgent(agentName: string): void {
 }
 
 /**
+ * makeTrustAgent + register the agent as enabled for `groupFolder` in
+ * agent_registry, so the dispatcher's payload-attribution eligibility
+ * check accepts a payload `agent` claim from that group. Requires an
+ * initialized test DB (call after _initTestDatabase). Import
+ * upsertAgentRegistry lazily to avoid a static db import in this
+ * fs-only fixtures module.
+ */
+export async function makeEligibleAgent(
+  prefix: string,
+  groupFolder: string,
+  trustYaml: string,
+): Promise<string> {
+  const agentName = makeTrustAgent(prefix, trustYaml);
+  const { upsertAgentRegistry } = await import('../db.js');
+  upsertAgentRegistry([
+    { agent_name: agentName, group_folder: groupFolder, enabled: 1 },
+  ]);
+  return agentName;
+}
+
+/**
  * Delete leftover fixture agent dirs from previous killed runs. Guarded
  * by the exact minted-name shape so a real agent (or anything
  * hand-created) can never match.

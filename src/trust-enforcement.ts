@@ -105,6 +105,22 @@ export function checkTrustAndStage(
     input.trust,
   );
 
+  // Stage the pending row BEFORE writing the audit row, so a staging
+  // throw (SQLITE_BUSY, bad payload) leaves NO 'staged' audit row
+  // claiming an approval that /pending will never surface. The audit row
+  // is the last write on every path, so its outcome always matches what
+  // actually happened.
+  let pendingId: string | null = null;
+  if (!decision.allowed && decision.stage) {
+    pendingId = insertPendingAction({
+      agent_name: input.agentName,
+      group_folder: input.groupFolder,
+      action_type: input.actionType,
+      summary: input.summary,
+      payload: input.payloadForStaging,
+    });
+  }
+
   insertAgentAction({
     agent_name: input.agentName,
     group_folder: input.groupFolder,
@@ -119,15 +135,7 @@ export function checkTrustAndStage(
         : 'blocked',
   });
 
-  let pendingId: string | null = null;
-  if (!decision.allowed && decision.stage) {
-    pendingId = insertPendingAction({
-      agent_name: input.agentName,
-      group_folder: input.groupFolder,
-      action_type: input.actionType,
-      summary: input.summary,
-      payload: input.payloadForStaging,
-    });
+  if (pendingId !== null) {
     logger.info(
       {
         pendingId,

@@ -1401,6 +1401,33 @@ export function getAgentRegistry(): Array<{
   }
 }
 
+/**
+ * True when `agentName` is registered (enabled) for `groupFolder`, either
+ * directly or via a `'*'` wildcard row. Used by the dispatcher's payload
+ * agent attribution to refuse cross-group identity claims — a container
+ * can only attribute audit rows to an agent that actually runs in its
+ * group. Fails open on DB error (returns false → caller treats the claim
+ * as ineligible, which degrades to unattributed, never to a forged row).
+ */
+export function isAgentEligibleForGroup(
+  agentName: string,
+  groupFolder: string,
+): boolean {
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 FROM agent_registry
+         WHERE agent_name = ? AND enabled = 1
+           AND (group_folder = ? OR group_folder = '*')
+         LIMIT 1`,
+      )
+      .get(agentName, groupFolder);
+    return row !== undefined && row !== null;
+  } catch {
+    return false;
+  }
+}
+
 export interface AgentRegistryInput {
   agent_name: string;
   group_folder: string;
@@ -1508,10 +1535,15 @@ export function insertPendingAction(input: PendingActionInput): string {
   const candidates = db
     .prepare(
       `SELECT id, payload_json FROM pending_actions
-       WHERE status = 'pending' AND agent_name = ? AND action_type = ?
-         AND summary = ?`,
+       WHERE status = 'pending' AND agent_name = ? AND group_folder = ?
+         AND action_type = ? AND summary = ?`,
     )
-    .all(input.agent_name, input.action_type, input.summary.slice(0, 500)) as {
+    .all(
+      input.agent_name,
+      input.group_folder,
+      input.action_type,
+      input.summary.slice(0, 500),
+    ) as {
     id: string;
     payload_json: string;
   }[];

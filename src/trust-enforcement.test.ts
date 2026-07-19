@@ -283,4 +283,67 @@ describe('checkTrustAndStage', () => {
       .all();
     expect(rows).toHaveLength(2);
   });
+
+  it('does NOT dedup identical stagings from DIFFERENT groups (group is part of identity)', () => {
+    // Same agent + action + summary + payload but two groups must not
+    // collapse onto one pending row — else group B's approver is denied
+    // and the replay runs in group A's context.
+    const db = _getTestDb();
+    const draft = { actions: { task_add: 'draft' } };
+    const payload = { type: 'task_add', title: 'shared title' };
+
+    const a = checkTrustAndStage({
+      ...baseInput,
+      groupFolder: 'telegram_group_a',
+      actionType: 'task_add',
+      payloadForStaging: payload,
+      trust: draft,
+    });
+    const b = checkTrustAndStage({
+      ...baseInput,
+      groupFolder: 'telegram_group_b',
+      actionType: 'task_add',
+      payloadForStaging: payload,
+      trust: draft,
+    });
+
+    expect(a.pendingId).not.toBe(b.pendingId);
+    const rows = db
+      .prepare(
+        "SELECT group_folder FROM pending_actions WHERE action_type = 'task_add'",
+      )
+      .all() as { group_folder: string }[];
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.group_folder))).toEqual(
+      new Set(['telegram_group_a', 'telegram_group_b']),
+    );
+  });
+
+  it('a staging insert throw leaves NO staged audit row (pending precedes audit)', () => {
+    // Ordering pin: pending row is inserted before the audit row, so a
+    // staging failure cannot leave a 'staged' audit row claiming an
+    // approval that /pending will never show. Force the throw with a
+    // circular payload (JSON.stringify throws in insertPendingAction).
+    const db = _getTestDb();
+    const circular: Record<string, unknown> = { type: 'task_add' };
+    circular.self = circular;
+
+    expect(() =>
+      checkTrustAndStage({
+        ...baseInput,
+        actionType: 'task_add',
+        payloadForStaging: circular,
+        trust: { actions: { task_add: 'draft' } },
+      }),
+    ).toThrow();
+
+    const auditRows = db
+      .prepare("SELECT * FROM agent_actions WHERE action_type = 'task_add'")
+      .all();
+    expect(auditRows).toHaveLength(0);
+    const pendingRows = db
+      .prepare("SELECT * FROM pending_actions WHERE action_type = 'task_add'")
+      .all();
+    expect(pendingRows).toHaveLength(0);
+  });
 });

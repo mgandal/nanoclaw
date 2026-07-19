@@ -20,13 +20,19 @@ import type {
  * Trust shape (Batch 4 closure, 2026-07-19):
  *   pageindex_fetch is read-only and stays on SKIP_GATE_ALLOWLIST
  *   (skipGate for every caller). pageindex_index is a WRITE and is
- *   gated: agent-attributed callers (directory- or payload-attributed)
- *   go through gateAndStage — all 9 agents ship trust.yaml
- *   `pageindex_index: autonomous`; a missing entry falls to the 'ask'
- *   default and stages. Non-agent callers pass via NON_AGENT_DECISION.
- *   Do NOT re-add skipGate to pageindexIndexHandler — the type is off
- *   the allowlist, so the dispatcher would deny every call as a
- *   contract violation (Rule 4).
+ *   gated (off the allowlist, no skipGate) so that IF an agent-attributed
+ *   caller ever appears it flows through gateAndStage — all 9 agents
+ *   ship trust.yaml `pageindex_index: autonomous`.
+ *
+ *   NOTE: today no producer writes a pageindex_index IPC request — the
+ *   only PDF indexing in the system is host-side and direct (indexPdf in
+ *   src/channels/telegram.ts auto-indexes >20-page attachments, no IPC,
+ *   no gate). So this handler and its gate are dormant scaffolding kept
+ *   in lockstep with pageindex_fetch. If a container tool is ever added,
+ *   it must stamp a validated `agent` field like the task_* tools do
+ *   (payloadAgentAttribution) for the gate to attribute in production.
+ *   Do NOT re-add skipGate — the type is off the allowlist, so the
+ *   dispatcher would deny every call as a contract violation (Rule 4).
  */
 
 /**
@@ -112,7 +118,9 @@ export const pageindexIndexHandler: IpcHandler<IndexInput, ExecuteResult> = {
   type: 'pageindex_index',
   responseKind: 'result',
   resultsDirName: 'pageindex_results',
-  payloadAgentAttribution: true,
+  // payloadAgentAttribution intentionally NOT set: no container producer
+  // stamps an `agent` field for this action today. Add it together with
+  // a stamping tool if pageindex_index ever becomes container-callable.
 
   parse(raw) {
     if (typeof raw !== 'object' || raw === null) return null;

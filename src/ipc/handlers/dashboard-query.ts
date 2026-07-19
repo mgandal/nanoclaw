@@ -73,6 +73,9 @@ export const dashboardQueryHandler: IpcHandler<Input, ExecuteResult> = {
       target: 'dashboard',
       auditSummary:
         typeof input.view === 'string' ? input.view.slice(0, 100) : '(query)',
+      // notifySummary is user-visible IF this action is ever set to trust
+      // level `notify`. Unreachable today: read-only, skipGate for
+      // non-agent callers, no payloadAgentAttribution.
       notifySummary: `queried ${
         typeof input.view === 'string' ? input.view.slice(0, 80) : '(view)'
       }`,
