@@ -221,4 +221,66 @@ describe('checkTrustAndStage', () => {
       .get() as { summary: string };
     expect(row.summary).toHaveLength(200);
   });
+
+  it('dedups identical pending stagings across retries (volatile fields ignored)', () => {
+    // An agent that retries a "failed"-looking staged call must not pile
+    // up duplicate /approve rows. requestId/timestamp churn per retry and
+    // must not defeat the dedup.
+    const db = _getTestDb();
+    const draft = { actions: { task_add: 'draft' } };
+
+    const first = checkTrustAndStage({
+      ...baseInput,
+      actionType: 'task_add',
+      payloadForStaging: {
+        type: 'task_add',
+        title: 'file grant report',
+        requestId: 'req-1',
+        timestamp: '2026-07-19T10:00:00.000Z',
+      },
+      trust: draft,
+    });
+    const second = checkTrustAndStage({
+      ...baseInput,
+      actionType: 'task_add',
+      payloadForStaging: {
+        type: 'task_add',
+        title: 'file grant report',
+        requestId: 'req-2',
+        timestamp: '2026-07-19T10:00:05.000Z',
+      },
+      trust: draft,
+    });
+
+    expect(first.pendingId).not.toBeNull();
+    expect(second.pendingId).toBe(first.pendingId);
+    const rows = db
+      .prepare("SELECT id FROM pending_actions WHERE action_type = 'task_add'")
+      .all();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('does NOT dedup stagings whose semantic payload differs', () => {
+    const db = _getTestDb();
+    const draft = { actions: { task_add: 'draft' } };
+
+    const a = checkTrustAndStage({
+      ...baseInput,
+      actionType: 'task_add',
+      payloadForStaging: { type: 'task_add', title: 'task A' },
+      trust: draft,
+    });
+    const b = checkTrustAndStage({
+      ...baseInput,
+      actionType: 'task_add',
+      payloadForStaging: { type: 'task_add', title: 'task B' },
+      trust: draft,
+    });
+
+    expect(a.pendingId).not.toBe(b.pendingId);
+    const rows = db
+      .prepare("SELECT id FROM pending_actions WHERE action_type = 'task_add'")
+      .all();
+    expect(rows).toHaveLength(2);
+  });
 });

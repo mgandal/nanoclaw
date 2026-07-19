@@ -1498,7 +1498,54 @@ export interface PendingActionRow {
   result: string | null;
 }
 
+// Per-call keys that differ on every retry of the same intent and must
+// not defeat staging dedup.
+const VOLATILE_STAGING_KEYS = new Set(['requestId', 'timestamp']);
+
+/**
+ * Payload identity for staging dedup: JSON with volatile per-call keys
+ * dropped and keys sorted, so an agent retrying the same request (fresh
+ * requestId/timestamp, identical intent) maps onto the same pending row.
+ */
+function semanticPayloadJson(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) {
+    return JSON.stringify(payload);
+  }
+  const record = payload as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(record)
+    .filter((k) => !VOLATILE_STAGING_KEYS.has(k))
+    .sort()) {
+    out[key] = record[key];
+  }
+  return JSON.stringify(out);
+}
+
 export function insertPendingAction(input: PendingActionInput): string {
+  // Retry dedup: an identical still-pending action (same agent, action
+  // type, and semantic payload) returns the existing row instead of
+  // stacking duplicate /approve entries every time an agent retries a
+  // staged call it mistook for a failure.
+  const semantic = semanticPayloadJson(input.payload);
+  const candidates = db
+    .prepare(
+      `SELECT id, payload_json FROM pending_actions
+       WHERE status = 'pending' AND agent_name = ? AND action_type = ?`,
+    )
+    .all(input.agent_name, input.action_type) as {
+    id: string;
+    payload_json: string;
+  }[];
+  for (const row of candidates) {
+    try {
+      if (semanticPayloadJson(JSON.parse(row.payload_json)) === semantic) {
+        return row.id;
+      }
+    } catch {
+      // Unparseable legacy row — never a dedup match.
+    }
+  }
+
   const id = `pa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   db.prepare(
     `INSERT INTO pending_actions

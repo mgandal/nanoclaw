@@ -861,6 +861,49 @@ async function waitForIpcResult(
   };
 }
 
+/**
+ * Render a trust-gated IPC result for the model. Staging is a SUCCESSFUL
+ * outcome — the action awaits user approval, it did not fail. Rendering
+ * it isError made agents retry, and every retry staged another duplicate
+ * approval request. Non-staged results keep the legacy
+ * isError-on-!success shape.
+ */
+function renderGatedResult(result: unknown): {
+  content: { type: 'text'; text: string }[];
+  isError: boolean;
+} {
+  const r = result as {
+    success?: boolean;
+    staged?: boolean;
+    pendingId?: string;
+  };
+  if (r && r.staged === true) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              staged: true,
+              pendingId: r.pendingId,
+              message: `Action staged for user approval${r.pendingId ? ` (${r.pendingId})` : ''}. It executes once the user runs /approve. Do NOT retry — retries create duplicate approval requests. Tell the user the action awaits their approval.`,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
+      isError: false,
+    };
+  }
+  return {
+    content: [
+      { type: 'text' as const, text: JSON.stringify(result, null, 2) },
+    ],
+    isError: !(result as { success?: boolean }).success,
+  };
+}
+
 async function waitForBrowserResult(
   requestId: string,
   maxWait = 120000,
@@ -1017,7 +1060,7 @@ Inputs:
 - group_folder: which group owns this task. Non-main callers are always stamped with their own caller group (payload value is ignored). Only the main group (CLAIRE) may stamp a different group_folder, or pass "" to make it a global task (visible+closable from any group).
 - force: true to skip the explicit duplicate-title check (the schema-level unique index on lower(title) WHERE status='open' still applies — there is no way to create two open rows with identical titles; archive one first).
 
-Returns: JSON { success: true, id: <new task id> } on success, or { success: false, error, duplicate_of? } on failure.`,
+Returns: JSON { success: true, id: <new task id> } on success, or { success: false, error, duplicate_of? } on failure. If your trust level gates this action, returns { staged: true, pendingId: "pa-…", message } with isError=false — the task is created after the user approves; do NOT retry, tell the user it awaits approval.`,
   {
     title: z.string().describe('Short imperative title — must be unique among open tasks unless force=true'),
     context: z.string().optional().describe('Free-text background / links / reasoning'),
@@ -1040,10 +1083,7 @@ Returns: JSON { success: true, id: <new task id> } on success, or { success: fal
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      isError: !(result as { success?: boolean }).success,
-    };
+    return renderGatedResult(result);
   },
 );
 
@@ -1066,7 +1106,7 @@ Inputs (all optional):
 - group_folder: filter to one group. Omit to see all groups (cross-group "global" view).
 - limit: max rows (default 100, max 1000).
 
-Returns: JSON { success: true, tasks: [{id, title, context, owner, priority, due_date, status, source, source_ref, group_folder, created_at, updated_at, completed_at}], count, truncated, limit }. Ordered: overdue (due_date <= today) first, then priority desc, then due_date asc. truncated=true means count === limit so more rows may exist; re-query with a larger limit or a filter.`,
+Returns: JSON { success: true, tasks: [{id, title, context, owner, priority, due_date, status, source, source_ref, group_folder, created_at, updated_at, completed_at}], count, truncated, limit }. Ordered: overdue (due_date <= today) first, then priority desc, then due_date asc. truncated=true means count === limit so more rows may exist; re-query with a larger limit or a filter. If your trust level gates this action, returns { staged: true, pendingId, message } with isError=false — do NOT retry.`,
   {
     status: z.enum(['open', 'done', 'archived', 'all']).optional(),
     owner: z.string().optional(),
@@ -1085,10 +1125,7 @@ Returns: JSON { success: true, tasks: [{id, title, context, owner, priority, due
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      isError: !(result as { success?: boolean }).success,
-    };
+    return renderGatedResult(result);
   },
 );
 
@@ -1115,7 +1152,8 @@ Auth: you can close tasks whose group_folder matches your caller group, or tasks
 Returns on success: { success: true, matched: <id>, status: "done"|"archived", completed_at: <iso> }.
 Returns on ambiguous title_match: { success: false, error: "ambiguous match", candidates: [{id, title, group_folder}, ...] } — pick an id and retry.
 Returns on no match: { success: false, error: "no open task matches" }.
-Returns on auth denial: { success: false, error: "not authorized: only the creator group or main may close this task" }.`,
+Returns on auth denial: { success: false, error: "not authorized: only the creator group or main may close this task" }.
+Returns when trust-gated: { staged: true, pendingId, message } with isError=false — the close executes after the user approves; do NOT retry.`,
   {
     id: z.number().int().positive().optional().describe('Exact task id (preferred)'),
     title_match: z.string().optional().describe('Case-insensitive substring match'),
@@ -1133,10 +1171,7 @@ Returns on auth denial: { success: false, error: "not authorized: only the creat
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      isError: !(result as { success?: boolean }).success,
-    };
+    return renderGatedResult(result);
   },
 );
 
@@ -1158,6 +1193,7 @@ Inputs:
 - reason: non-empty string explaining why the task is being reopened (required; used by trainer).
 
 Returns on success: { success: true, id: <id>, status: "open" }.
+Returns when trust-gated: { staged: true, pendingId, message } with isError=false — the reopen executes after the user approves; do NOT retry.
 Returns on not-found or already-open: { success: false, error: "<message>" }.
 Returns on auth denial: { success: false, error: "not authorized: ..." }.`,
   {
@@ -1175,10 +1211,7 @@ Returns on auth denial: { success: false, error: "not authorized: ..." }.`,
       timestamp: new Date().toISOString(),
     });
     const result = await waitForIpcResult(TASK_RESULTS_DIR, requestId, 30000);
-    return {
-      content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }],
-      isError: !(result as { success?: boolean }).success,
-    };
+    return renderGatedResult(result);
   },
 );
 
