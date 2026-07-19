@@ -96,6 +96,10 @@ graphify-out/
 # ByteRover local context cache
 .brv/
 
+# CodeGraph / Repowise local code indexes (per-machine, regenerable)
+.codegraph/
+.repowise/
+
 # Local retro/context cache (per-machine snapshots from /retro skill)
 .context/
 
