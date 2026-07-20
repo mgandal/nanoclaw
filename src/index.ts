@@ -57,7 +57,11 @@ import {
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
 } from './container-runtime.js';
-import { ALERT_COOLDOWN_MS, shouldDeliverAlert } from './alert-cooldown.js';
+import {
+  ALERT_COOLDOWN_MS,
+  initAlertCooldownPersistence,
+  shouldDeliverAlert,
+} from './alert-cooldown.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import {
   getAgentRegistry,
@@ -1185,6 +1189,9 @@ async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
+  // Load persisted alert cooldowns so a restart mid-incident (e.g. a crash
+  // loop while the OAuth token is expired) cannot re-deliver the same alert.
+  initAlertCooldownPersistence(path.join(STORE_DIR, 'alert-cooldowns.json'));
   // B1: persist bridge token so launchd-spawned bridge proxies (QMD,
   // Apple Notes, Todoist, Calendar) can read the same token. Must
   // happen before containers spawn and before the bridge proxies are

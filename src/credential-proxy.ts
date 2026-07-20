@@ -120,6 +120,10 @@ export function startCredentialProxy(
   const makeRequest = isHttps ? httpsRequest : httpRequest;
 
   let consecutiveAuthFailures = 0;
+  // Edge-triggered: one onAuthFailure per incident. Any non-401/403 upstream
+  // response means auth passed (429/5xx are post-auth), ending the incident
+  // and re-arming the alert.
+  let authAlertedThisIncident = false;
   const AUTH_FAILURE_THRESHOLD = 3;
 
   // Helper: re-read credentials from .env on each request so token refreshes
@@ -233,14 +237,15 @@ export function startCredentialProxy(
               consecutiveAuthFailures++;
               if (
                 consecutiveAuthFailures >= AUTH_FAILURE_THRESHOLD &&
+                !authAlertedThisIncident &&
                 onAuthFailure
               ) {
+                authAlertedThisIncident = true;
                 onAuthFailure(status);
-                // Reset to avoid firing on every subsequent request
-                consecutiveAuthFailures = 0;
               }
             } else {
               consecutiveAuthFailures = 0;
+              authAlertedThisIncident = false;
             }
 
             res.writeHead(upRes.statusCode!, upRes.headers);

@@ -451,6 +451,90 @@ describe('credential-proxy', () => {
     expect(authFailureCodes[0]).toBe(401);
   });
 
+  it('fires onAuthFailure once per incident, not once per threshold batch', async () => {
+    // Sustained outage: every request 401s. The callback must fire exactly
+    // once until a successful response re-arms it — not every 3rd request.
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((_req, res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    const authFailureCodes: number[] = [];
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'expired-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0, '127.0.0.1', (code) => {
+      authFailureCodes.push(code);
+    });
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    // 12 consecutive failures = 4 threshold batches — still one alert
+    for (let i = 0; i < 12; i++) {
+      await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: `/${proxyToken}/v1/messages`,
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+    }
+
+    expect(authFailureCodes).toHaveLength(1);
+  });
+
+  it('re-arms onAuthFailure after auth recovers, so a new incident alerts again', async () => {
+    let requestCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((_req, res) => {
+      requestCount++;
+      // Incident 1: requests 1-4 fail. Recovery: 5-6 succeed. Incident 2: 7-9 fail.
+      if (requestCount <= 4 || requestCount >= 7) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    const authFailureCodes: number[] = [];
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'flapping-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(0, '127.0.0.1', (code) => {
+      authFailureCodes.push(code);
+    });
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    for (let i = 0; i < 9; i++) {
+      await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: `/${proxyToken}/v1/messages`,
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+    }
+
+    // One alert for incident 1 (at request 3), one for incident 2 (at request 9)
+    expect(authFailureCodes).toHaveLength(2);
+  });
+
   it('resets auth failure counter on a successful response', async () => {
     let requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));
@@ -808,46 +892,6 @@ describe('credential-proxy', () => {
     // When token is empty string, oauthToken should be falsy,
     // so authorization header should NOT be set
     expect(lastUpstreamHeaders['authorization']).toBeUndefined();
-  });
-
-  it('should fire onAuthFailure again after counter resets from threshold', async () => {
-    let _requestCount = 0;
-    await new Promise<void>((r) => upstreamServer.close(() => r()));
-    upstreamServer = http.createServer((_req, res) => {
-      _requestCount++;
-      // All requests return 401
-      res.writeHead(401, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'unauthorized' }));
-    });
-    await new Promise<void>((resolve) =>
-      upstreamServer.listen(0, '127.0.0.1', resolve),
-    );
-    const newPort = (upstreamServer.address() as AddressInfo).port;
-
-    const authFailureCodes: number[] = [];
-    Object.assign(mockEnv, {
-      CLAUDE_CODE_OAUTH_TOKEN: 'expired-token',
-      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
-    });
-    proxyServer = await startCredentialProxy(0, '127.0.0.1', (code) => {
-      authFailureCodes.push(code);
-    });
-    proxyPort = (proxyServer.address() as AddressInfo).port;
-
-    // Send 6 requests — should fire callback at request 3, reset, then fire again at request 6
-    for (let i = 0; i < 6; i++) {
-      await makeRequest(
-        proxyPort,
-        {
-          method: 'POST',
-          path: `/${proxyToken}/v1/messages`,
-          headers: { 'content-type': 'application/json' },
-        },
-        '{}',
-      );
-    }
-
-    expect(authFailureCodes).toHaveLength(2);
   });
 
   it('should set anthropic-dangerous-direct-browser-access only in OAuth mode', async () => {

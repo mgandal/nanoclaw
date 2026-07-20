@@ -1,7 +1,11 @@
-import { describe, expect, beforeEach, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { describe, expect, beforeEach, afterEach, it } from 'vitest';
 import {
   shouldDeliverAlert,
   resetAlertCooldowns,
+  initAlertCooldownPersistence,
   ALERT_COOLDOWN_MS,
 } from './alert-cooldown.js';
 
@@ -55,6 +59,63 @@ describe('shouldDeliverAlert', () => {
     expect(shouldDeliverAlert('k', 1001)).toEqual({
       send: true,
       suppressedCount: 0,
+    });
+  });
+
+  describe('persistence across restarts', () => {
+    let dir: string;
+    let file: string;
+
+    beforeEach(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nc-alertcd-'));
+      file = path.join(dir, 'alert-cooldowns.json');
+    });
+
+    afterEach(() => {
+      resetAlertCooldowns();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('suppresses a repeat after a simulated restart within the window', () => {
+      initAlertCooldownPersistence(file);
+      expect(shouldDeliverAlert('k', 1000).send).toBe(true);
+
+      // Simulated restart: fresh in-memory state, same file
+      initAlertCooldownPersistence(file);
+      expect(shouldDeliverAlert('k', 2000)).toEqual({
+        send: false,
+        suppressedCount: 1,
+      });
+    });
+
+    it('delivers after a restart once the window has passed', () => {
+      initAlertCooldownPersistence(file);
+      shouldDeliverAlert('k', 1000);
+
+      initAlertCooldownPersistence(file);
+      expect(shouldDeliverAlert('k', 1000 + ALERT_COOLDOWN_MS).send).toBe(true);
+    });
+
+    it('round-trips multiple keys independently', () => {
+      initAlertCooldownPersistence(file);
+      shouldDeliverAlert('a', 1000);
+      shouldDeliverAlert('b', 2000);
+
+      initAlertCooldownPersistence(file);
+      expect(shouldDeliverAlert('a', 3000).send).toBe(false);
+      expect(shouldDeliverAlert('b', 3000).send).toBe(false);
+      expect(shouldDeliverAlert('c', 3000).send).toBe(true);
+    });
+
+    it('survives a corrupted state file without throwing', () => {
+      fs.writeFileSync(file, '{not json');
+      initAlertCooldownPersistence(file);
+      expect(shouldDeliverAlert('k', 1000).send).toBe(true);
+    });
+
+    it('works when the state file does not exist yet', () => {
+      initAlertCooldownPersistence(path.join(dir, 'missing', 'state.json'));
+      expect(shouldDeliverAlert('k', 1000).send).toBe(true);
     });
   });
 
