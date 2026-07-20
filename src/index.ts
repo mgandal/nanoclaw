@@ -57,6 +57,7 @@ import {
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
 } from './container-runtime.js';
+import { ALERT_COOLDOWN_MS, shouldDeliverAlert } from './alert-cooldown.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import {
   getAgentRegistry,
@@ -1069,9 +1070,26 @@ async function sendSystemAlert(
       logger.warn({ err, service }, 'sendSystemAlert: appendAlert failed');
     }
 
-    const text = fixInstructions
-      ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
-      : `⚠️ *${service}*: ${message}`;
+    // Identical alerts within the cooldown window are recorded above but not
+    // re-delivered — a sustained failure (e.g. expired token 401-ing every
+    // request) otherwise floods Telegram with dozens of copies.
+    const verdict = shouldDeliverAlert(`${service}:${message}`);
+    if (!verdict.send) {
+      logger.info(
+        { service, suppressedCount: verdict.suppressedCount },
+        'sendSystemAlert: duplicate suppressed by cooldown',
+      );
+      return;
+    }
+
+    const suppressedNote =
+      verdict.suppressedCount > 0
+        ? `\n\n_(${verdict.suppressedCount} repeats of this alert suppressed in the last ${Math.round(ALERT_COOLDOWN_MS / 60_000)}m)_`
+        : '';
+    const text =
+      (fixInstructions
+        ? `⚠️ *${service}*: ${message}\n\n_Fix:_ ${fixInstructions}`
+        : `⚠️ *${service}*: ${message}`) + suppressedNote;
 
     // Re-entrancy guard: if we're already in the fallback chain, go straight to file
     if (isSendingAlert) {
