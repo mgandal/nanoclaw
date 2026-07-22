@@ -81,9 +81,12 @@ export function registerFixHandlers(
       url: 'http://127.0.0.1:8888/health',
       expectStatus: 200,
     },
-    // Startup re-runs the LLM verify against the shim and can trail a cold
-    // model load, so allow a third attempt before escalating.
-    cooldownMs: 120_000,
+    // Hindsight binds 8888 in ~20s warm but up to ~135s under the GPU
+    // contention that takes it down in the first place. A 120s cooldown would
+    // let the next attempt kickstart -k an instance that is still starting,
+    // resetting the clock and livelocking; 180s clears the slow case, and the
+    // script additionally refuses to re-kick a restart still in flight.
+    cooldownMs: 180_000,
     maxAttempts: 3,
   });
   monitor.addFixHandler({

@@ -8,6 +8,17 @@
 # Restarting Hindsight while the shim is dark just repeats the loop — so probe
 # the dependency first, exactly as restart-honcho.sh does for the Docker daemon.
 #
+# Timing is the tricky part. Hindsight takes ~20s to bind when warm and up to
+# ~135s under GPU/model contention — which is the very condition that takes it
+# down, so the slow case is correlated, not hypothetical. The watchdog gives
+# this script 30s (execScript) and re-attempts on the handler's cooldown, so we
+# must (a) stay well inside 30s and (b) refuse to re-kick a restart that is
+# still in flight, or we SIGKILL the startup we are waiting for, forever.
+#
+# NOT covered: a shim wedge while Hindsight is already up. 8888 keeps answering
+# 200 (its /health reports DB connectivity only), so the watchdog never fires
+# and memory derivation degrades silently. That needs a separate probe.
+#
 # We deliberately do NOT restart the 8889 proxy: it tracks upstream state on its
 # own and reports {"upstream":"down"} without needing a bounce.
 set -euo pipefail
@@ -17,44 +28,102 @@ LAUNCHCTL=/bin/launchctl
 UID_NUM=$(id -u)
 
 SHIM_MODELS_URL="http://127.0.0.1:11435/v1/models"
+SHIM_CHAT_URL="http://127.0.0.1:11435/v1/chat/completions"
 UPSTREAM_HEALTH_URL="http://127.0.0.1:8888/health"
+# Owned by Hermes, not NanoClaw. Also serves the Honcho deriver and Hindsight
+# retain, so a bounce interrupts those too — hence the two-strike rule below.
 SHIM_LABEL="com.hermes.ollama-openai-shim"
 UPSTREAM_LABEL="com.hindsight-upstream"
 
+STATE_DIR="${HOME}/.nanoclaw"
+RESTART_STAMP="${STATE_DIR}/hindsight-restart.stamp"
+SHIM_STRIKE_STAMP="${STATE_DIR}/hindsight-shim-strike.stamp"
+
+# Must exceed the ~135s worst-case startup, and sit above the handler's 180s
+# cooldown so the next attempt cannot land mid-start.
+RESTART_GRACE_SECONDS=200
+SHIM_STRIKE_TTL_SECONDS=600
+WAIT_BUDGET_SECONDS=16
+
 if [ "${1:-}" = "--dry-run" ]; then
-  echo "DRY-RUN: would probe ${SHIM_MODELS_URL} then restart ${UPSTREAM_LABEL}"
+  echo "DRY-RUN: would check ${UPSTREAM_HEALTH_URL}, probe ${SHIM_MODELS_URL}, then restart ${UPSTREAM_LABEL}"
   exit 0
 fi
 
-# Idempotence guard. The watchdog can call us on a stale failure reading, and
-# bouncing a healthy Hindsight is actively harmful: startup re-runs the LLM
-# verify and the worker reclaims its task backlog, so a needless restart costs
-# 20-135s of downtime and a fresh burst of LLM load.
-if "$CURL" -sf -m 3 -o /dev/null "$UPSTREAM_HEALTH_URL"; then
+now_s() { date +%s; }
+
+# Age of a stamp file in seconds; a huge number when it does not exist.
+stamp_age() {
+  if [ -f "$1" ]; then
+    echo $(( $(now_s) - $(stat -f %m "$1") ))
+  else
+    echo 999999
+  fi
+}
+
+mkdir -p "$STATE_DIR"
+
+# Guard 1 — already healthy. The watchdog can call us on a stale reading, and
+# bouncing a healthy Hindsight costs 20-135s of downtime plus a fresh burst of
+# LLM load as the worker reclaims its backlog.
+if "$CURL" -sf -m 2 -o /dev/null "$UPSTREAM_HEALTH_URL"; then
   echo "hindsight upstream already healthy — nothing to do"
   exit 0
 fi
 
-# Dependency gate. A dead shim is the one condition we can fix from here; if
-# it merely answers slowly (cold 29GB model load) we still hand off to
-# Hindsight, whose own ~120s startup budget absorbs a load our 30s cannot.
-if ! "$CURL" -sf -m 4 -o /dev/null "$SHIM_MODELS_URL"; then
-  echo "shim unresponsive — restarting it; hindsight retried next tick"
-  "$LAUNCHCTL" kickstart -k "gui/${UID_NUM}/${SHIM_LABEL}" 2>&1 || true
+# Guard 2 — a restart is still in flight. Without this, the handler's cooldown
+# expires while a slow start is mid-flight and the next kickstart -k SIGKILLs
+# it, resetting the clock and livelocking at the cooldown cadence.
+RESTART_AGE=$(stamp_age "$RESTART_STAMP")
+if [ "$RESTART_AGE" -lt "$RESTART_GRACE_SECONDS" ]; then
+  echo "restart already in flight (${RESTART_AGE}s ago) — letting it finish"
   exit 0
 fi
 
-"$LAUNCHCTL" kickstart -k "gui/${UID_NUM}/${UPSTREAM_LABEL}" 2>&1
+# Dependency gate. Two strikes before bouncing the shim: a single failed probe
+# may just be the shim serving a long completion for another consumer serially,
+# and killing it mid-request would break that caller. A transient stall clears
+# by the next tick; a real outage strikes twice.
+if ! "$CURL" -sf -m 2 -o /dev/null "$SHIM_MODELS_URL"; then
+  STRIKE_AGE=$(stamp_age "$SHIM_STRIKE_STAMP")
+  if [ "$STRIKE_AGE" -ge "$SHIM_STRIKE_TTL_SECONDS" ]; then
+    : > "$SHIM_STRIKE_STAMP"
+    echo "shim unresponsive (first strike) — rechecking next tick"
+    exit 0
+  fi
+  # Second strike. Confirm with a real completion: /v1/models can answer while
+  # generation is wedged, and aborting our client-side request does not abort a
+  # cold model load server-side, so this probe is safe to time out.
+  if ! "$CURL" -sf -m 5 -o /dev/null -X POST "$SHIM_CHAT_URL" \
+      -H 'Content-Type: application/json' \
+      -d '{"model":"qwen3.6:35b-a3b-coding-nvfp4","messages":[{"role":"user","content":"ok"}],"max_tokens":1}'; then
+    rm -f "$SHIM_STRIKE_STAMP"
+    if ! "$LAUNCHCTL" kickstart -k "gui/${UID_NUM}/${SHIM_LABEL}"; then
+      echo "cannot kickstart ${SHIM_LABEL} — renamed, unloaded, or not a Hermes host?" >&2
+      exit 1
+    fi
+    echo "shim restarted; hindsight retried next tick"
+    exit 0
+  fi
+fi
+rm -f "$SHIM_STRIKE_STAMP"
 
-# The watchdog verifies with a single immediate HTTP check, so wait for the
-# port to actually bind. A warm start binds in ~10-20s; if it takes longer the
-# tick fails but Hindsight keeps starting and the next poll clears the event.
-for _ in $(seq 1 20); do
-  if "$CURL" -sf -m 2 -o /dev/null "$UPSTREAM_HEALTH_URL"; then
+: > "$RESTART_STAMP"
+if ! "$LAUNCHCTL" kickstart -k "gui/${UID_NUM}/${UPSTREAM_LABEL}"; then
+  echo "cannot kickstart ${UPSTREAM_LABEL} — renamed or unloaded?" >&2
+  exit 1
+fi
+
+# Bound the wait by wall clock, not iteration count: verifyFix runs a single
+# immediate check with no retry, so catching a warm start here saves a whole
+# cooldown. A slow start falls through and Guard 2 protects it until it binds.
+WAIT_DEADLINE=$(( $(now_s) + WAIT_BUDGET_SECONDS ))
+while [ "$(now_s)" -lt "$WAIT_DEADLINE" ]; do
+  if "$CURL" -sf -m 1 -o /dev/null "$UPSTREAM_HEALTH_URL"; then
     echo "hindsight upstream up"
     exit 0
   fi
   sleep 1
 done
 
-echo "hindsight upstream still binding after 20s — next tick will verify"
+echo "hindsight upstream still starting after ${WAIT_BUDGET_SECONDS}s — next tick verifies"

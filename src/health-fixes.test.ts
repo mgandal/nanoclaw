@@ -1,3 +1,6 @@
+import { execFileSync } from 'child_process';
+import path from 'path';
+
 import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('./env.js', () => ({
@@ -82,6 +85,10 @@ describe('registerFixHandlers', () => {
       .find((h) => h.service === 'mcp:Hindsight');
     expect(hindsight).toBeDefined();
     expect(hindsight.fixScript).toBe('/tmp/fixes/restart-hindsight.sh');
+    // Regression: at 120s the next attempt lands while a slow (~135s) start is
+    // still in flight, so kickstart -k SIGKILLs it and the watchdog livelocks
+    // at the cooldown cadence. Must stay above the worst-case startup.
+    expect(hindsight.cooldownMs).toBeGreaterThan(135_000);
     // Verify against the upstream (8888), not the 8889 proxy: the proxy
     // answers 503 with a JSON body while the upstream is down, and any HTTP
     // response counts as reachable — probing it would mask the outage.
@@ -90,6 +97,27 @@ describe('registerFixHandlers', () => {
       url: 'http://127.0.0.1:8888/health',
       expectStatus: 200,
     });
+  });
+});
+
+describe('restart-hindsight.sh', () => {
+  // The watchdog is the only caller and it runs at 3am; a bad shebang, a
+  // syntax error, or a lost exec bit would otherwise surface as an
+  // unexplained "Auto-fix failed". --dry-run parses the whole script and
+  // exercises the arg handling without touching a service.
+  it('runs --dry-run cleanly without touching any service', () => {
+    const script = path.join(
+      process.cwd(),
+      'scripts',
+      'fixes',
+      'restart-hindsight.sh',
+    );
+    const out = execFileSync(script, ['--dry-run'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: process.env.HOME },
+    });
+    expect(out).toContain('DRY-RUN');
   });
 });
 
