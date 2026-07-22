@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe('registerFixHandlers', () => {
-  it('registers the five watchdog handlers and the fix actions', () => {
+  it('registers the six watchdog handlers and the fix actions', () => {
     const addFixHandler = vi.fn();
     const setFixActions = vi.fn();
     const monitor = {
@@ -24,10 +24,11 @@ describe('registerFixHandlers', () => {
 
     registerFixHandlers(monitor, '/tmp/fixes');
 
-    expect(addFixHandler).toHaveBeenCalledTimes(5);
+    expect(addFixHandler).toHaveBeenCalledTimes(6);
     const ids = addFixHandler.mock.calls.map((c) => c[0].id);
     expect(ids).toEqual([
       'mcp-qmd',
+      'mcp-honcho',
       'mcp-apple-notes',
       'mcp-todoist',
       'container-runtime',
@@ -37,6 +38,29 @@ describe('registerFixHandlers', () => {
       '/tmp/fixes/restart-qmd.sh',
     );
     expect(setFixActions).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression: Honcho went dark for ~9h after the 2026-07-20 reboot because
+  // the watchdog alerted on `mcp:Honcho` but had no handler to restart it.
+  it('can self-heal Honcho (handler exists for the mcp:Honcho service key)', () => {
+    const addFixHandler = vi.fn();
+    const monitor = {
+      addFixHandler,
+      setFixActions: vi.fn(),
+    } as unknown as HealthMonitor;
+
+    registerFixHandlers(monitor, '/tmp/fixes');
+
+    const honcho = addFixHandler.mock.calls
+      .map((c) => c[0])
+      .find((h) => h.service === 'mcp:Honcho');
+    expect(honcho).toBeDefined();
+    expect(honcho.fixScript).toBe('/tmp/fixes/restart-honcho.sh');
+    expect(honcho.verify).toEqual({
+      type: 'http',
+      url: 'http://localhost:8010/health',
+      expectStatus: 200,
+    });
   });
 });
 

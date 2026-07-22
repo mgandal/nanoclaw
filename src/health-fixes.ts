@@ -33,6 +33,20 @@ export function registerFixHandlers(
     maxAttempts: 2,
   });
   monitor.addFixHandler({
+    id: 'mcp-honcho',
+    service: 'mcp:Honcho',
+    fixScript: path.join(fixScriptsDir, 'restart-honcho.sh'),
+    verify: {
+      type: 'http',
+      url: 'http://localhost:8010/health',
+      expectStatus: 200,
+    },
+    // Docker Desktop takes ~60-90s to cold-start, so allow a third attempt
+    // before escalating to the user.
+    cooldownMs: 120_000,
+    maxAttempts: 3,
+  });
+  monitor.addFixHandler({
     id: 'mcp-apple-notes',
     service: 'mcp:Apple Notes',
     fixScript: path.join(fixScriptsDir, 'restart-apple-notes.sh'),
