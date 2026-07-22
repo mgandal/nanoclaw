@@ -71,6 +71,22 @@ export function registerFixHandlers(
     maxAttempts: 2,
   });
   monitor.addFixHandler({
+    id: 'mcp-hindsight',
+    service: 'mcp:Hindsight',
+    fixScript: path.join(fixScriptsDir, 'restart-hindsight.sh'),
+    verify: {
+      type: 'http',
+      // The upstream, not the 8889 proxy: the proxy answers 503-with-body
+      // while the upstream is down, and any HTTP response reads as reachable.
+      url: 'http://127.0.0.1:8888/health',
+      expectStatus: 200,
+    },
+    // Startup re-runs the LLM verify against the shim and can trail a cold
+    // model load, so allow a third attempt before escalating.
+    cooldownMs: 120_000,
+    maxAttempts: 3,
+  });
+  monitor.addFixHandler({
     id: 'container-runtime',
     service: 'container-runtime',
     fixScript: path.join(fixScriptsDir, 'restart-container-runtime.sh'),

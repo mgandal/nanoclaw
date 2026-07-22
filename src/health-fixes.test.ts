@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe('registerFixHandlers', () => {
-  it('registers the six watchdog handlers and the fix actions', () => {
+  it('registers the seven watchdog handlers and the fix actions', () => {
     const addFixHandler = vi.fn();
     const setFixActions = vi.fn();
     const monitor = {
@@ -24,13 +24,14 @@ describe('registerFixHandlers', () => {
 
     registerFixHandlers(monitor, '/tmp/fixes');
 
-    expect(addFixHandler).toHaveBeenCalledTimes(6);
+    expect(addFixHandler).toHaveBeenCalledTimes(7);
     const ids = addFixHandler.mock.calls.map((c) => c[0].id);
     expect(ids).toEqual([
       'mcp-qmd',
       'mcp-honcho',
       'mcp-apple-notes',
       'mcp-todoist',
+      'mcp-hindsight',
       'container-runtime',
       'sqlite-lock',
     ]);
@@ -59,6 +60,34 @@ describe('registerFixHandlers', () => {
     expect(honcho.verify).toEqual({
       type: 'http',
       url: 'http://localhost:8010/health',
+      expectStatus: 200,
+    });
+  });
+
+  // Regression: Hindsight went dark three times across three separate
+  // NanoClaw processes (2026-07-21 22:04, 2026-07-22 07:24, 09:59) because
+  // it was the one polled MCP endpoint with no handler — the watchdog
+  // alerted OPS-claw once per incident and then waited for a human.
+  it('can self-heal Hindsight (handler exists for the mcp:Hindsight service key)', () => {
+    const addFixHandler = vi.fn();
+    const monitor = {
+      addFixHandler,
+      setFixActions: vi.fn(),
+    } as unknown as HealthMonitor;
+
+    registerFixHandlers(monitor, '/tmp/fixes');
+
+    const hindsight = addFixHandler.mock.calls
+      .map((c) => c[0])
+      .find((h) => h.service === 'mcp:Hindsight');
+    expect(hindsight).toBeDefined();
+    expect(hindsight.fixScript).toBe('/tmp/fixes/restart-hindsight.sh');
+    // Verify against the upstream (8888), not the 8889 proxy: the proxy
+    // answers 503 with a JSON body while the upstream is down, and any HTTP
+    // response counts as reachable — probing it would mask the outage.
+    expect(hindsight.verify).toEqual({
+      type: 'http',
+      url: 'http://127.0.0.1:8888/health',
       expectStatus: 200,
     });
   });
