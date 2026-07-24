@@ -109,6 +109,12 @@ import {
 } from './proactive-log.js';
 import { wireProactiveWatchers } from './startup/proactive-watchers.js';
 import { deliverText } from './outbound.js';
+import {
+  clearAuthIncident,
+  initAuthFailureHandling,
+  reportAuthFailure,
+  runOAuthRefreshScript,
+} from './auth-failure.js';
 import { findChannel, formatMessages } from './router.js';
 import {
   restoreRemoteControl,
@@ -690,10 +696,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
               { group: group.name },
               'Suppressing streaming output — IPC send_message already delivered to this chat',
             );
+            outputSentToUser = true;
           } else {
-            await deliverText([channel], chatJid, text, { kind: 'reply' });
+            const res = await deliverText([channel], chatJid, text, {
+              kind: 'reply',
+            });
+            // A suppressed auth-failure reply is not output the user saw, so
+            // the cursor must still roll back and these messages be retried.
+            if (res.reason !== 'auth-failure') outputSentToUser = true;
           }
-          outputSentToUser = true;
         }
         // Only reset idle timer on actual results, not session-update markers (result: null)
         resetIdleTimer();
@@ -1437,16 +1448,23 @@ async function main(): Promise<void> {
   }
 
   // Start credential proxy (containers route API calls through this)
+  // One owner for every Anthropic auth failure: the proxy's 401s and the
+  // agent-reply text that carries the same 401 both land here, so an
+  // incident produces one alert on one channel plus one token re-sync.
+  initAuthFailureHandling({
+    alert: (service, message, fixInstructions) => {
+      void sendSystemAlert(service, message, fixInstructions);
+    },
+    selfHeal: () => runOAuthRefreshScript(),
+  });
+
   const proxyServer = await startCredentialProxy(
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
     (statusCode) => {
-      void sendSystemAlert(
-        'Credential Proxy',
-        `${statusCode} auth failures from Anthropic API — token may be expired or invalid`,
-        'Check CLAUDE_CODE_OAUTH_TOKEN in .env or run scripts/refresh-api-key.sh',
-      );
+      void reportAuthFailure(`credential-proxy:${statusCode}`);
     },
+    clearAuthIncident,
   );
 
   // Health endpoint for external heartbeat (separate from credential proxy)

@@ -1,3 +1,4 @@
+import { isAuthFailureText, reportAuthFailure } from './auth-failure.js';
 import { logger } from './logger.js';
 import { findChannel, formatOutbound } from './router.js';
 import type { ChannelType } from './text-styles.js';
@@ -36,7 +37,7 @@ export interface DeliverTextOptions {
 
 export interface DeliverTextResult {
   sent: boolean;
-  reason?: 'no-channel' | 'empty';
+  reason?: 'no-channel' | 'empty' | 'auth-failure';
 }
 
 export async function deliverText(
@@ -49,6 +50,19 @@ export async function deliverText(
     throw new Error(
       'proactive sends must pass the outbound governor (deliverSendMessage) — direct deliverText(kind: proactive) is not a policy door',
     );
+  }
+
+  // Agent output that is really an Anthropic auth failure never goes to a
+  // chat: during one expired-token incident every group would otherwise get
+  // its own copy of the raw 401. It becomes a single system alert instead
+  // (kind 'system' is that alert, so it must pass through).
+  if (opts.kind !== 'system' && isAuthFailureText(rawText)) {
+    logger.error(
+      { jid, kind: opts.kind, sourceGroup: opts.sourceGroup },
+      'deliverText: suppressed Anthropic auth-failure text; routed to system alert',
+    );
+    void reportAuthFailure(`deliverText:${opts.sourceGroup ?? jid}`);
+    return { sent: false, reason: 'auth-failure' };
   }
 
   const channel = findChannel(channels, jid);

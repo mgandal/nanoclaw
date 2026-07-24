@@ -100,6 +100,7 @@ export function startCredentialProxy(
   port: number,
   host = '127.0.0.1',
   onAuthFailure?: (statusCode: number) => void,
+  onAuthRecovered?: () => void,
 ): Promise<Server> {
   // Read once at startup for auth mode detection and upstream URL (these rarely change)
   const initialSecrets = readEnvFile([
@@ -244,8 +245,14 @@ export function startCredentialProxy(
                 onAuthFailure(status);
               }
             } else {
+              // A non-401/403 upstream response is proof auth passed (429/5xx
+              // are post-auth), so it ends the incident. Report recovery only
+              // on the edge — this runs on every proxied request.
+              const wasFailing =
+                consecutiveAuthFailures > 0 || authAlertedThisIncident;
               consecutiveAuthFailures = 0;
               authAlertedThisIncident = false;
+              if (wasFailing) onAuthRecovered?.();
             }
 
             res.writeHead(upRes.statusCode!, upRes.headers);

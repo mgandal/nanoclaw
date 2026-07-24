@@ -8,6 +8,12 @@ vi.mock('./container-runner.js', () => ({
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
 import { runAgentTurn } from './agent-turn.js';
+import {
+  clearAuthIncident,
+  initAuthFailureHandling,
+  reportAuthFailure,
+  resetAuthFailureState,
+} from './auth-failure.js';
 import { _initTestDatabase, getSessionTimestamps, setSession } from './db.js';
 import { DATA_DIR } from './config.js';
 import type { RegisteredGroup } from './types.js';
@@ -260,5 +266,30 @@ describe('runAgentTurn container invocation', () => {
       ),
     ).rejects.toThrow('spawn failed');
     expect(sessions[GROUP.folder]).toBe('sess-live');
+  });
+
+  it('refuses to spawn while the Anthropic auth backoff is active', async () => {
+    initAuthFailureHandling({ alert: vi.fn(), selfHeal: vi.fn() });
+    await reportAuthFailure('test');
+    try {
+      const res = await runAgentTurn(baseOpts() as never);
+      expect(res.status).toBe('error');
+      expect(res.error).toMatch(/auth/i);
+      // No container spawned — that is the whole point of the backoff.
+      expect(mockRun).not.toHaveBeenCalled();
+    } finally {
+      resetAuthFailureState();
+    }
+  });
+
+  it('spawns normally once the incident clears', async () => {
+    initAuthFailureHandling({ alert: vi.fn(), selfHeal: vi.fn() });
+    await reportAuthFailure('test');
+    clearAuthIncident();
+    mockRun.mockResolvedValue(output({ status: 'success', result: 'ok' }));
+    const res = await runAgentTurn(baseOpts() as never);
+    expect(res.status).toBe('success');
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    resetAuthFailureState();
   });
 });

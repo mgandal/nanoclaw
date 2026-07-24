@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import { isAuthBackoffActive } from './auth-failure.js';
 import { ASSISTANT_NAME, DATA_DIR } from './config.js';
 import { parseCompoundKey } from './compound-key.js';
 import { ContainerOutput, runContainerAgent } from './container-runner.js';
@@ -107,6 +108,20 @@ export function sessionFileSize(
 export async function runAgentTurn(
   opts: AgentTurnOptions,
 ): Promise<ContainerOutput> {
+  // Anthropic auth is failing: a container spawned now can only come back
+  // with the same 401, so every group and every scheduled task would burn a
+  // VM to produce an error. Fail fast instead — callers already treat an
+  // error turn as "retry later" (cursor rollback / next schedule). The
+  // backoff expires on its own and the credential proxy clears it the moment
+  // a request authenticates again, so this cannot wedge.
+  if (isAuthBackoffActive()) {
+    return {
+      status: 'error',
+      result: null,
+      error: 'Anthropic auth failure backoff active — turn skipped',
+    };
+  }
+
   const {
     group,
     sessionKey,

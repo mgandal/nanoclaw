@@ -24,6 +24,7 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import { isAuthFailureText } from './auth-failure.js';
 import { createHonchoClient } from './honcho-client.js';
 import { HonchoSession } from './honcho-session.js';
 import type { ImageMediaType } from './screenshot-image.js';
@@ -761,6 +762,19 @@ async function runQuery(
       log(
         `Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`,
       );
+      // A 401 comes back as a *success* result whose text is the error. Report
+      // it as an error so the host suppresses the text, alerts once, and
+      // retries the turn instead of banking a reply the user never wanted.
+      if (isAuthFailureText(textResult)) {
+        log('Result is an authentication failure — reporting as error');
+        writeOutput({
+          status: 'error',
+          result: null,
+          newSessionId,
+          error: `Anthropic authentication failed: ${(textResult || '').slice(0, 300)}`,
+        });
+        continue;
+      }
       if ((message as { subtype?: string }).subtype === 'success' && textResult) {
         // Last result wins: handles future SDK streams where subagent results
         // may interleave; we want the outer-loop final result for Honcho sync.

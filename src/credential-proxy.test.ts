@@ -535,6 +535,83 @@ describe('credential-proxy', () => {
     expect(authFailureCodes).toHaveLength(2);
   });
 
+  it('fires onAuthRecovered on the edge only — once auth starts working again', async () => {
+    let requestCount = 0;
+    await new Promise<void>((r) => upstreamServer.close(() => r()));
+    upstreamServer = http.createServer((_req, res) => {
+      requestCount++;
+      // Requests 1-3 fail (incident), 4-6 succeed (recovery + steady state).
+      if (requestCount <= 3) {
+        res.writeHead(401, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      }
+    });
+    await new Promise<void>((resolve) =>
+      upstreamServer.listen(0, '127.0.0.1', resolve),
+    );
+    const newPort = (upstreamServer.address() as AddressInfo).port;
+
+    let recoveredCount = 0;
+    Object.assign(mockEnv, {
+      CLAUDE_CODE_OAUTH_TOKEN: 'recovering-token',
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${newPort}`,
+    });
+    proxyServer = await startCredentialProxy(
+      0,
+      '127.0.0.1',
+      () => {},
+      () => {
+        recoveredCount++;
+      },
+    );
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    for (let i = 0; i < 6; i++) {
+      await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: `/${proxyToken}/v1/messages`,
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+    }
+
+    // Exactly one recovery signal (request 4) — not one per healthy request.
+    expect(recoveredCount).toBe(1);
+  });
+
+  it('does not fire onAuthRecovered when auth never failed', async () => {
+    let recoveredCount = 0;
+    proxyServer = await startCredentialProxy(
+      0,
+      '127.0.0.1',
+      () => {},
+      () => {
+        recoveredCount++;
+      },
+    );
+    proxyPort = (proxyServer.address() as AddressInfo).port;
+
+    for (let i = 0; i < 3; i++) {
+      await makeRequest(
+        proxyPort,
+        {
+          method: 'POST',
+          path: `/${proxyToken}/v1/messages`,
+          headers: { 'content-type': 'application/json' },
+        },
+        '{}',
+      );
+    }
+
+    expect(recoveredCount).toBe(0);
+  });
+
   it('resets auth failure counter on a successful response', async () => {
     let requestCount = 0;
     await new Promise<void>((r) => upstreamServer.close(() => r()));

@@ -1,7 +1,14 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
+import {
+  initAuthFailureHandling,
+  resetAuthFailureState,
+} from './auth-failure.js';
 import { deliverText } from './outbound.js';
 import type { Channel } from './types.js';
+
+const AUTH_401 =
+  'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth access token has expired. Re-authenticate to continue."},"request_id":null}';
 
 function makeChannel(overrides: Partial<Channel> = {}): Channel {
   return {
@@ -72,5 +79,51 @@ describe('deliverText — the one outbound text door', () => {
       governed: true,
     });
     expect(res.sent).toBe(true);
+  });
+});
+
+describe('deliverText — Anthropic auth-failure containment', () => {
+  afterEach(() => resetAuthFailureState());
+
+  it('never lets the SDK 401 text reach a chat, and reports it once', async () => {
+    const alert = vi.fn();
+    initAuthFailureHandling({ alert, selfHeal: vi.fn() });
+    const tg = makeChannel();
+    const slack = makeChannel({
+      name: 'slack',
+      ownsJid: (jid: string) => jid.startsWith('slack:'),
+    });
+
+    // Every group's turn fails the same way during one incident.
+    const r1 = await deliverText([tg, slack], 'tg:1', AUTH_401, {
+      kind: 'reply',
+    });
+    const r2 = await deliverText([tg, slack], 'tg:2', AUTH_401, {
+      kind: 'reply',
+    });
+    const r3 = await deliverText([tg, slack], 'slack:C1', AUTH_401, {
+      kind: 'proactive',
+      governed: true,
+    });
+
+    expect([r1, r2, r3].every((r) => !r.sent)).toBe(true);
+    expect(r1.reason).toBe('auth-failure');
+    expect(tg.sendMessage).not.toHaveBeenCalled();
+    expect(slack.sendMessage).not.toHaveBeenCalled();
+    // One channel, one alert — not one per group.
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('still delivers the system alert that describes the incident', async () => {
+    initAuthFailureHandling({ alert: vi.fn(), selfHeal: vi.fn() });
+    const ch = makeChannel();
+    const res = await deliverText(
+      [ch],
+      'tg:ops',
+      '⚠️ *Anthropic Auth*: Failed to authenticate. API Error: 401',
+      { kind: 'system' },
+    );
+    expect(res.sent).toBe(true);
+    expect(ch.sendMessage).toHaveBeenCalledTimes(1);
   });
 });
