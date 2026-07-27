@@ -55,16 +55,12 @@ def _find_nanoclaw_dir() -> Path:
 
 NANOCLAW_DIR = _find_nanoclaw_dir()
 DB_PATH      = NANOCLAW_DIR / "store" / "messages.db"
-ENV_FILE     = NANOCLAW_DIR / ".env"
 IMAGE        = "nanoclaw-agent:latest"
 
-SECRET_KEYS = [
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_BASE_URL",
-    "ANTHROPIC_AUTH_TOKEN",
-    "OLLAMA_HOST",
-]
+# Host gateway address containers use to reach the host (Apple Container).
+CONTAINER_HOST_GATEWAY = "192.168.64.1"
+CREDENTIAL_PROXY_PORT  = 3002
+PROXY_TOKEN_FILE       = "store/.credential-proxy-token"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -80,20 +76,40 @@ def detect_runtime(preference: str | None) -> str:
     sys.exit("error: neither 'container' nor 'docker' found. Install one or pass --runtime.")
 
 
-def read_secrets(env_file: Path) -> dict:
-    secrets = {}
-    if not env_file.exists():
-        return secrets
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" in line:
-            key, _, val = line.partition("=")
-            key = key.strip()
-            if key in SECRET_KEYS:
-                secrets[key] = val.strip()
-    return secrets
+def redact_proxy_token(text: str) -> str:
+    """Mask the credential-proxy token embedded in an ANTHROPIC_BASE_URL."""
+    return re.sub(
+        r"(ANTHROPIC_BASE_URL=https?://[^/\s]+/)[^/\s]+",
+        r"\1***",
+        text,
+    )
+
+
+def read_proxy_token() -> str:
+    """Read the credential proxy's ephemeral token.
+
+    Containers never receive real credentials. The host runs a proxy that
+    injects the real OAuth token into every outbound Anthropic request; the
+    container only gets a URL carrying this token plus a placeholder auth
+    value (see src/container-runner.ts and src/credential-proxy.ts).
+
+    The token file is written 0600 on proxy start and deleted on stop, so its
+    absence means NanoClaw is not running — in which case there is no way to
+    authenticate and running anyway would just die inside the SDK.
+    """
+    token_file = NANOCLAW_DIR / PROXY_TOKEN_FILE
+    if not token_file.exists():
+        sys.exit(
+            f"error: credential proxy token not found at {token_file}.\n"
+            "       The proxy runs as part of NanoClaw and writes this file on "
+            "start.\n"
+            "       Start NanoClaw first: launchctl kickstart -k "
+            "gui/$(id -u)/com.nanoclaw"
+        )
+    token = token_file.read_text().strip()
+    if not token:
+        sys.exit(f"error: credential proxy token file {token_file} is empty.")
+    return token
 
 
 def get_groups(db: Path) -> list[dict]:
@@ -154,8 +170,19 @@ def build_mounts(folder: str, is_main: bool) -> list[tuple[str, str, bool]]:
 
 def run_container(runtime: str, image: str, payload: dict,
                   folder: str | None = None, is_main: bool = False,
-                  timeout: int = 300) -> None:
+                  timeout: int = 300, proxy_token: str = "") -> None:
     cmd = [runtime, "run", "-i", "--rm"]
+    # Route API traffic through the host credential proxy. agent-runner builds
+    # its SDK env from process.env only — anything in the JSON payload is
+    # ignored — so these must be real -e vars, mirroring the host spawn path.
+    base_url = (
+        f"http://{CONTAINER_HOST_GATEWAY}:{CREDENTIAL_PROXY_PORT}/{proxy_token}"
+    )
+    cmd += ["-e", f"ANTHROPIC_BASE_URL={base_url}"]
+    # OAuth mode: the SDK exchanges this placeholder for a temp API key and the
+    # proxy injects the real token on that exchange.
+    cmd += ["-e", "ANTHROPIC_AUTH_TOKEN=placeholder"]
+    cmd += ["-e", "HOME=/home/node"]
     if folder:
         for host, container, readonly in build_mounts(folder, is_main):
             if readonly:
@@ -163,13 +190,12 @@ def run_container(runtime: str, image: str, payload: dict,
             else:
                 cmd += ["-v", f"{host}:{container}"]
     cmd.append(image)
-    dbg(f"cmd: {' '.join(cmd)}")
+    # The proxy token is a live credential — it rides in the base URL path, so
+    # redact it before the cmd reaches a terminal or a pasted bug report.
+    dbg(f"cmd: {redact_proxy_token(' '.join(cmd))}")
 
-    # Show payload sans secrets
     if VERBOSE:
-        safe = {k: v for k, v in payload.items() if k != "secrets"}
-        safe["secrets"] = {k: "***" for k in payload.get("secrets", {})}
-        dbg(f"payload: {json.dumps(safe, indent=2)}")
+        dbg(f"payload: {json.dumps(payload, indent=2)}")
 
     proc = subprocess.Popen(
         cmd,
@@ -347,19 +373,17 @@ def main():
             sys.exit("error: no group specified and no main group found. Use -g or -j.")
 
     runtime = detect_runtime(args.runtime)
-    secrets = read_secrets(ENV_FILE)
-
-    if not secrets:
-        print("warning: no secrets found in .env — agent may not be authenticated", file=sys.stderr)
+    proxy_token = read_proxy_token()
 
     payload: dict = {
         "prompt": prompt,
         "chatJid": jid,
         "isMain": is_main,
-        "secrets": secrets,
     }
-    if group_name:
-        payload["groupFolder"] = group_name
+    # The runner keys session/memory/Honcho-peer paths off groupFolder, so this
+    # must be the on-disk folder (telegram_claire), not the display name.
+    if group_folder:
+        payload["groupFolder"] = group_folder
     if args.session:
         payload["sessionId"] = args.session
         payload["resumeAt"] = "latest"
@@ -367,7 +391,7 @@ def main():
     print(f"[{group_name or jid}] running via {runtime}...", file=sys.stderr)
     run_container(runtime, args.image, payload,
                   folder=group_folder, is_main=is_main,
-                  timeout=args.timeout)
+                  timeout=args.timeout, proxy_token=proxy_token)
 
 
 if __name__ == "__main__":
