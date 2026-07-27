@@ -7,7 +7,9 @@
 # .env on every request.
 
 set -euo pipefail
-LOCKDIR="/tmp/nanoclaw-oauth.lock"
+# Overridable so tests can take their own lock instead of contending with the
+# hourly launchd job (either one holding the shared lock makes the other skip).
+LOCKDIR="${NANOCLAW_OAUTH_LOCKDIR:-/tmp/nanoclaw-oauth.lock}"
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
   # Stale lock? Remove if older than 5 minutes
   if [ -d "$LOCKDIR" ] && find "$LOCKDIR" -maxdepth 0 -mmin +5 | grep -q .; then
@@ -42,20 +44,27 @@ if [ "$NEW_TOKEN" = "$CURRENT_TOKEN" ]; then
   exit 0
 fi
 
-# Check token expiry
-EXPIRES_OK=$(security find-generic-password -s "Claude Code-credentials" -a "mgandal" -w 2>/dev/null \
+# Check token expiry.
+#
+# This must NOT signal "expiring soon" via a non-zero exit. The script runs
+# under `set -e`, so a failing command substitution aborts here rather than
+# falling through to the warning below — which left .env holding the stale
+# token in exactly the window where refreshing matters most. Report the hours
+# remaining as a value and branch on it in the shell instead.
+# `|| EXPIRES_H=""` keeps a keychain/parse failure non-fatal; we only want the
+# printed value, never the exit code (see the CLAUDE.md `set -e` note).
+EXPIRES_H=$(security find-generic-password -s "Claude Code-credentials" -a "mgandal" -w 2>/dev/null \
   | python3 -c "
 import json, sys, time
 data = json.load(sys.stdin)
-expires = data['claudeAiOauth']['expiresAt'] / 1000
-remaining_h = (expires - time.time()) / 3600
+remaining_h = (data['claudeAiOauth']['expiresAt'] / 1000 - time.time()) / 3600
 print(f'{remaining_h:.1f}')
-if remaining_h < 0.5:
-    sys.exit(1)
-" 2>/dev/null)
+" 2>/dev/null) || EXPIRES_H=""
 
-if [ $? -ne 0 ]; then
-  log "WARNING: New token expires in <30min, updating anyway"
+if [ -z "$EXPIRES_H" ]; then
+  log "WARNING: could not determine token expiry, updating anyway"
+elif awk "BEGIN { exit !($EXPIRES_H < 0.5) }"; then
+  log "WARNING: New token expires in ${EXPIRES_H}h (<30min), updating anyway"
 fi
 
 # Update .env with new token
@@ -70,6 +79,6 @@ with open('$ENV_FILE', 'w') as f:
             f.write(line)
 "
 
-log "Token refreshed (expires in ${EXPIRES_OK}h) — credential proxy picks up new token automatically"
+log "Token refreshed (expires in ${EXPIRES_H:-unknown}h) — credential proxy picks up new token automatically"
 
 exit 0
