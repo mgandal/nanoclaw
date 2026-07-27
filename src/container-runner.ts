@@ -44,6 +44,15 @@ const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 /**
+ * Models passed to the Claude Agent SDK via ANTHROPIC_MODEL. Named rather than
+ * inlined because the "was this an upgrade?" log gate compares against the
+ * default — with literals on both sides, bumping one and not the other turns
+ * the rare cost-relevant Opus log into a line on every single container run.
+ */
+const LEAD_MODEL = 'claude-opus-4-8';
+const DEFAULT_MODEL = 'claude-sonnet-5';
+
+/**
  * Parse the LAST output-marker pair from accumulated container stdout. Returns
  * the parsed ContainerOutput, or null when no well-formed marker pair is
  * present or the enclosed JSON does not parse. Single source of truth for the
@@ -729,7 +738,7 @@ function buildContainerArgs(
   // so summarization etc. stays on the cheaper default (Haiku).
   //
   // Only the lead agent, in the main group, on an interactive turn, runs Opus
-  // 4.8; everything else stays on Sonnet 4.6. The eligibility gate keeps the
+  // 4.8; everything else stays on Sonnet 5. The eligibility gate keeps the
   // following on Sonnet: a non-lead/swarm bot in the main group, the lead in
   // another group, and an unattended scheduled task running AS the lead in the
   // main group. Lead-ness comes from the agent's identity.md `lead: true` flag
@@ -741,9 +750,9 @@ function buildContainerArgs(
   const isLead =
     eligibleForOpus &&
     loadAgentIdentity(path.join(AGENTS_DIR, agentName))?.lead === true;
-  const model = isLead ? 'claude-opus-4-8' : 'claude-sonnet-4-6';
+  const model = isLead ? LEAD_MODEL : DEFAULT_MODEL;
   args.push('-e', `ANTHROPIC_MODEL=${model}`);
-  if (model !== 'claude-sonnet-4-6') {
+  if (model !== DEFAULT_MODEL) {
     // Surface the rare, cost-relevant upgrade so Opus spend is attributable
     // from info-level logs (Sonnet is the default and stays unlogged).
     logger.info(

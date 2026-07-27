@@ -1485,23 +1485,23 @@ describe('container-runner MCP URL injection', () => {
     expect(modelVar).toBe('ANTHROPIC_MODEL=claude-opus-4-8');
   });
 
-  it('keeps non-lead agents in the main group on Sonnet 4.6', async () => {
+  it('keeps non-lead agents in the main group on Sonnet 5', async () => {
     // e.g. a swarm pool bot speaking in the main group must not inherit Opus.
     const modelVar = await modelEnvFor(
       { ...testGroup, isMain: true },
       { ...testInput, isMain: true, agentName: 'marvin' },
       false,
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
-  it('keeps the lead agent in a non-main group on Sonnet 4.6', async () => {
+  it('keeps the lead agent in a non-main group on Sonnet 5', async () => {
     const modelVar = await modelEnvFor(
       testGroup,
       { ...testInput, isMain: false, agentName: 'claire' },
       true,
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
   it('runs a lead agent NOT named claire on Opus 4.8', async () => {
@@ -1514,17 +1514,17 @@ describe('container-runner MCP URL injection', () => {
     expect(modelVar).toBe('ANTHROPIC_MODEL=claude-opus-4-8');
   });
 
-  it('keeps an agent named claire that is NOT the lead on Sonnet 4.6', async () => {
+  it('keeps an agent named claire that is NOT the lead on Sonnet 5', async () => {
     // Discriminates lead-flag gating from the old hardcoded-'claire' name gate.
     const modelVar = await modelEnvFor(
       { ...testGroup, isMain: true },
       { ...testInput, isMain: true, agentName: 'claire' },
       false,
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
-  it('keeps a main-group scheduled task on Sonnet 4.6 even for the lead', async () => {
+  it('keeps a main-group scheduled task on Sonnet 5 even for the lead', async () => {
     // Unattended cron-style runs must not silently use the pricier model.
     const modelVar = await modelEnvFor(
       { ...testGroup, isMain: true },
@@ -1536,10 +1536,10 @@ describe('container-runner MCP URL injection', () => {
       },
       true,
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
-  it('keeps the main group on Sonnet 4.6 when no agent is resolved', async () => {
+  it('keeps the main group on Sonnet 5 when no agent is resolved', async () => {
     // The agentless main-group path (empty agents dir / no targetAgent).
     const modelVar = await modelEnvFor(
       { ...testGroup, isMain: true },
@@ -1548,16 +1548,16 @@ describe('container-runner MCP URL injection', () => {
         isMain: true,
       },
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
-  it('keeps the main group on Sonnet 4.6 when the agent has no identity.md', async () => {
+  it('keeps the main group on Sonnet 5 when the agent has no identity.md', async () => {
     const modelVar = await modelEnvFor(
       { ...testGroup, isMain: true },
       { ...testInput, isMain: true, agentName: 'ghost' },
       undefined,
     );
-    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-4-6');
+    expect(modelVar).toBe('ANTHROPIC_MODEL=claude-sonnet-5');
   });
 
   it('logs the model and agent when the Opus upgrade is applied', async () => {
