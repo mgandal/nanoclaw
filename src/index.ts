@@ -367,6 +367,38 @@ export function _sessionFileSizeForTests(
   return sessionFileSize(groupFolder, sessionId);
 }
 
+/**
+ * Decide how a finished container turn should be reported back to GroupQueue.
+ *
+ * `ok: false` makes GroupQueue.scheduleRetry re-enqueue the group with
+ * exponential backoff; `ok: true` resets its retry counter and does nothing
+ * else.
+ *
+ * The `discardedPipedMessages` input is load-bearing: messages piped into an
+ * already-running container defer their agent-cursor advance (H2). If the
+ * container dies before confirming that turn, the advance is discarded and
+ * those messages are genuinely unanswered. Nothing else will pick them up —
+ * the message loop is edge-triggered on `lastSeq`, which was already advanced
+ * when the messages first arrived, so `getNewMessages` will never return them
+ * again. Reporting `ok: true` there strands them until the user happens to
+ * send another message (or the process restarts into recoverPendingMessages).
+ *
+ * Rollback is a separate axis and stays exactly as it was: only an error that
+ * produced no user-visible output rewinds the cursor. Discarded pipes never
+ * trigger a rollback — `lastAgentSeq` already sits behind them, so a plain
+ * re-run picks them up without re-sending anything already answered.
+ */
+export function processMessagesOutcome(opts: {
+  hadError: boolean;
+  outputSentToUser: boolean;
+  discardedPipedMessages: boolean;
+}): { ok: boolean; rollbackCursor: boolean } {
+  if (opts.hadError && !opts.outputSentToUser) {
+    return { ok: false, rollbackCursor: true };
+  }
+  return { ok: !opts.discardedPipedMessages, rollbackCursor: false };
+}
+
 /** @internal - H2 primitives exposed for direct unit testing. */
 export const _h2ForTests = {
   record: recordPendingPipedAdvance,
@@ -731,23 +763,21 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // H2: the container has exited. Any pending piped-message advance left
   // over never reached a 'success' turn — discard it so those messages get
   // re-read on the next poll (lastAgentSeq stays where it was).
-  if (discardPendingPipedAdvance(chatJid)) {
+  const discardedPipedMessages = discardPendingPipedAdvance(chatJid);
+  if (discardedPipedMessages) {
     logger.warn(
       { group: group.name, chatJid },
-      'Container exited with unconfirmed piped messages; they will be re-read next poll',
+      'Container exited with unconfirmed piped messages; forcing a retry to re-read them',
     );
   }
 
-  if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor —
-    // the user got their response and re-processing would send duplicates.
-    if (outputSentToUser) {
-      logger.warn(
-        { group: group.name },
-        'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
-      );
-      return true;
-    }
+  const outcome = processMessagesOutcome({
+    hadError: output === 'error' || hadError,
+    outputSentToUser,
+    discardedPipedMessages,
+  });
+
+  if (outcome.rollbackCursor) {
     // Roll back cursor so retries can re-process these messages
     lastAgentSeq[chatJid] = previousCursor;
     saveState();
@@ -755,10 +785,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       { group: group.name },
       'Agent error, rolled back message cursor for retry',
     );
-    return false;
+  } else if ((output === 'error' || hadError) && outputSentToUser) {
+    // The user got their response; re-processing would send duplicates.
+    logger.warn(
+      { group: group.name },
+      'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
+    );
   }
 
-  return true;
+  return outcome.ok;
 }
 
 async function runAgent(

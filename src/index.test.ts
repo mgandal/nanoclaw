@@ -1469,3 +1469,71 @@ describe('H2: pending piped-message cursor advance', () => {
     expect(_h2ForTests.readCursor('tg:group')).toBe(9);
   });
 });
+
+describe('processMessagesOutcome: discarded piped messages must re-run', () => {
+  const CLEAN = { hadError: false, outputSentToUser: false };
+
+  it('a clean turn with nothing discarded reports ok (no retry, no rollback)', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({ ...CLEAN, discardedPipedMessages: false }),
+    ).toEqual({ ok: true, rollbackCursor: false });
+  });
+
+  // The CLINIC-claw regression (2026-07-27): messages piped into a live
+  // container that then died unanswered were discarded from the pending
+  // advance, but the turn still reported ok — so GroupQueue reset retryCount
+  // and never re-ran. The message loop is edge-triggered on lastSeq (already
+  // advanced), so nothing re-read them until the user sent another message
+  // ~48 min later.
+  it('a turn that discarded piped messages reports NOT ok so a retry is scheduled', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({ ...CLEAN, discardedPipedMessages: true }),
+    ).toEqual({ ok: false, rollbackCursor: false });
+  });
+
+  it('an error with no output rolls the cursor back and reports NOT ok', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({
+        hadError: true,
+        outputSentToUser: false,
+        discardedPipedMessages: false,
+      }),
+    ).toEqual({ ok: false, rollbackCursor: true });
+  });
+
+  it('an error AFTER output skips the rollback (no duplicate replies)', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({
+        hadError: true,
+        outputSentToUser: true,
+        discardedPipedMessages: false,
+      }),
+    ).toEqual({ ok: true, rollbackCursor: false });
+  });
+
+  it('discarded pipes still force a retry when output was already sent, without rollback', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({
+        hadError: true,
+        outputSentToUser: true,
+        discardedPipedMessages: true,
+      }),
+    ).toEqual({ ok: false, rollbackCursor: false });
+  });
+
+  it('rollback still wins over the discard signal when no output was sent', async () => {
+    const { processMessagesOutcome } = await import('./index.js');
+    expect(
+      processMessagesOutcome({
+        hadError: true,
+        outputSentToUser: false,
+        discardedPipedMessages: true,
+      }),
+    ).toEqual({ ok: false, rollbackCursor: true });
+  });
+});
