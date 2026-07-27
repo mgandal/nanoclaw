@@ -174,6 +174,36 @@ function log(message: string): void {
   console.error(`[agent-runner] ${message}`);
 }
 
+/**
+ * Forward the Claude Code subprocess's own stderr into our log.
+ *
+ * Without this the SDK swallows it and a startup failure surfaces only as
+ * "Claude Code process exited with code 1" — no cause, nothing to act on.
+ * That opacity cost a full debugging session on 2026-07-27 (the `claw` CLI
+ * failing with no recoverable reason), so every query() call site passes this.
+ *
+ * Volume guard: the SDK also routes its debug logging here, which is far too
+ * chatty to mirror line-for-line into the host log on a healthy run. Cap the
+ * total forwarded per container so a pathological run can't flood the log,
+ * and drop the SDK's routine per-request debug chatter.
+ */
+const STDERR_FORWARD_LIMIT = 16_000;
+let stderrForwarded = 0;
+function forwardSdkStderr(data: string): void {
+  if (stderrForwarded >= STDERR_FORWARD_LIMIT) return;
+  for (const line of data.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (/^\[DEBUG\]|^\[VERBOSE\]/.test(trimmed)) continue;
+    stderrForwarded += trimmed.length;
+    if (stderrForwarded >= STDERR_FORWARD_LIMIT) {
+      log('[sdk-stderr] (truncated — forward limit reached)');
+      return;
+    }
+    log(`[sdk-stderr] ${trimmed}`);
+  }
+}
+
 export function getSessionSummary(
   sessionId: string,
   transcriptPath: string,
@@ -698,6 +728,7 @@ async function runQuery(
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
       mcpServers: buildMcpServers(mcpServerPath, containerInput),
+      stderr: forwardSdkStderr,
       hooks: {
         PreCompact: [
           { hooks: [createPreCompactHook(containerInput.assistantName)] },
@@ -963,6 +994,7 @@ async function main(): Promise<void> {
           permissionMode: 'bypassPermissions' as const,
           allowDangerouslySkipPermissions: true,
           settingSources: ['project', 'user'] as const,
+          stderr: forwardSdkStderr,
           hooks: {
             PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
           },

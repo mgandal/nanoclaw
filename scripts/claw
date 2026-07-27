@@ -183,6 +183,19 @@ def run_container(runtime: str, image: str, payload: dict,
     # proxy injects the real token on that exchange.
     cmd += ["-e", "ANTHROPIC_AUTH_TOKEN=placeholder"]
     cmd += ["-e", "HOME=/home/node"]
+
+    # Drop out of root. The agent-runner always asks the SDK for
+    # bypassPermissions, and Claude Code refuses --dangerously-skip-permissions
+    # under uid 0 ("cannot be used with root/sudo privileges"), so a container
+    # left as root dies at SDK startup. Mirrors src/container-runner.ts: main
+    # groups still START as root so entrypoint.sh can bind-mount over .env, then
+    # drop via setpriv using RUN_UID/RUN_GID; everything else uses --user.
+    host_uid, host_gid = os.getuid(), os.getgid()
+    if host_uid not in (0, 1000):
+        if is_main:
+            cmd += ["-e", f"RUN_UID={host_uid}", "-e", f"RUN_GID={host_gid}"]
+        else:
+            cmd += ["--user", f"{host_uid}:{host_gid}"]
     if folder:
         for host, container, readonly in build_mounts(folder, is_main):
             if readonly:
