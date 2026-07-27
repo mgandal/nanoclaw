@@ -127,4 +127,18 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw
 
 ## Container Build Cache
 
-The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, delete the builder container then re-run `./container/build.sh`:
+
+```bash
+container builder delete --force   # NOT `builder prune` (no such subcommand);
+                                   # --force is required while the builder runs
+./container/build.sh
+```
+
+Verify the rebuild actually took rather than trusting it — grep the built artifact for something only the new code contains:
+
+```bash
+container run -i --rm --entrypoint /bin/sh nanoclaw-agent:latest -c 'grep -c "<new-symbol>" /app/dist/index.js'
+```
+
+Note `/app/src` is only a read-only source cache for agents to inspect; the container executes `/app/dist` baked into the image at build time. Editing `container/agent-runner/src/` therefore requires a rebuild — refreshing `data/sessions/*/agent-runner-src/` alone changes nothing.

@@ -199,6 +199,22 @@ printf '%s\\n' '---NANOCLAW_OUTPUT_START---' '{"status":"success","result":"ok"}
         expect(argv).toContain(`${uid}:${gid}`);
       });
 
+      // Parity with container-runner.ts:286-293 — main gets the project root
+      // read-only, but store/ writable on top so the agent can query and write
+      // the SQLite DB. Without the second mount the DB is read-only under claw
+      // and every write silently fails against the read-only project mount.
+      it('gives a main-group container writable access to store/', () => {
+        const argv = runClawForGroup(true);
+        const storeMount = argv.find(
+          (a) => a.includes('/store:') && a.endsWith('/workspace/project/store'),
+        );
+        expect(storeMount).toBeDefined();
+        // Must be -v (writable), not a readonly --mount.
+        expect(argv).not.toContain(
+          `type=bind,source=${storeMount?.split(':')[0]},target=/workspace/project/store,readonly`,
+        );
+      });
+
       it('never leaves the container running the agent as root', () => {
         for (const isMain of [true, false]) {
           const argv = runClawForGroup(isMain);

@@ -159,7 +159,14 @@ def build_mounts(folder: str, is_main: bool) -> list[tuple[str, str, bool]]:
 
     mounts: list[tuple[str, str, bool]] = []
     if is_main:
+        # Project root read-only so the agent can read host application code
+        # but not modify it (that would bypass the sandbox on next restart).
+        # .env is shadowed inside the container by entrypoint.sh.
         mounts.append((str(NANOCLAW_DIR), "/workspace/project", True))
+        # ...but store/ writable on top, so the agent can query and write the
+        # SQLite DB. Mirrors src/container-runner.ts:286-293; without this the
+        # DB inherits the read-only project mount and every write fails.
+        mounts.append((str(NANOCLAW_DIR / "store"), "/workspace/project/store", False))
     mounts.append((str(group_dir),           "/workspace/group",    False))
     mounts.append((str(sessions_dir / ".claude"), "/home/node/.claude", False))
     mounts.append((str(ipc_dir),             "/workspace/ipc",      False))

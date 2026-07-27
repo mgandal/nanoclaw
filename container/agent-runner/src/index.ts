@@ -189,12 +189,24 @@ function log(message: string): void {
  */
 const STDERR_FORWARD_LIMIT = 16_000;
 let stderrForwarded = 0;
+/**
+ * Lines already emitted this container. The SDK repeats identical startup
+ * warnings once per spawn attempt — e.g. the benign "Claude configuration file
+ * not found at /home/node/.claude.json" trio prints four times on a normal run,
+ * turning 3 lines of signal into 12 across every group. Collapse repeats rather
+ * than pattern-matching known-benign strings: suppressing by content is how the
+ * original "exited with code 1" opacity happened, and a novel error still gets
+ * through on its first occurrence.
+ */
+const stderrSeen = new Set<string>();
 function forwardSdkStderr(data: string): void {
   if (stderrForwarded >= STDERR_FORWARD_LIMIT) return;
   for (const line of data.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (/^\[DEBUG\]|^\[VERBOSE\]/.test(trimmed)) continue;
+    if (stderrSeen.has(trimmed)) continue;
+    stderrSeen.add(trimmed);
     stderrForwarded += trimmed.length;
     if (stderrForwarded >= STDERR_FORWARD_LIMIT) {
       log('[sdk-stderr] (truncated — forward limit reached)');
