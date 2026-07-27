@@ -206,7 +206,8 @@ printf '%s\\n' '---NANOCLAW_OUTPUT_START---' '{"status":"success","result":"ok"}
       it('gives a main-group container writable access to store/', () => {
         const argv = runClawForGroup(true);
         const storeMount = argv.find(
-          (a) => a.includes('/store:') && a.endsWith('/workspace/project/store'),
+          (a) =>
+            a.includes('/store:') && a.endsWith('/workspace/project/store'),
         );
         expect(storeMount).toBeDefined();
         // Must be -v (writable), not a readonly --mount.
