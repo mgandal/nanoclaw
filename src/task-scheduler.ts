@@ -228,6 +228,35 @@ export function runGuardScript(
   });
 }
 
+/**
+ * Sentinel a scheduled task emits instead of a report when it has nothing to
+ * say. Prompts cannot make an agent produce NO final text — the SDK always
+ * returns a result string and runTask forwards it — so "EXIT SILENTLY, do not
+ * say anything at all" still reached the group as "No new files to process —
+ * silently exiting per instructions". Emitting a fixed token is an instruction
+ * an agent can actually follow; the host drops it here.
+ */
+export const NOOP_SENTINEL = 'NO_REPORT';
+
+/**
+ * Whether a task result should be swallowed rather than sent to the chat.
+ *
+ * Deliberately exact: only an empty result or one that is *entirely* the
+ * sentinel (bare whitespace, trailing punctuation, or markdown emphasis the
+ * channel formatter may add) qualifies. No natural-language matching — fuzzy
+ * "sounds like nothing happened" rules would eventually swallow a real report.
+ */
+export function isNoopResult(text: string | null | undefined): boolean {
+  if (!text) return true;
+  const stripped = text
+    .trim()
+    .replace(/^[*_`\s]+|[*_`\s]+$/g, '')
+    .replace(/[.!…\s]+$/, '')
+    .trim();
+  if (!stripped) return true;
+  return stripped.toUpperCase() === NOOP_SENTINEL;
+}
+
 async function runTask(
   task: ScheduledTask,
   deps: SchedulerDependencies,
@@ -412,8 +441,18 @@ async function runTask(
       onOutput: async (streamedOutput: ContainerOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          // Forward result to user (sendMessage handles formatting), unless the
+          // task signalled it has nothing to report — see NOOP_SENTINEL. The
+          // result is still recorded in task_run_logs either way, so a silent
+          // run stays auditable.
+          if (isNoopResult(streamedOutput.result)) {
+            logger.debug(
+              { taskId: task.id },
+              'Task reported no-op; suppressing chat message',
+            );
+          } else {
+            await deps.sendMessage(task.chat_jid, streamedOutput.result);
+          }
           scheduleClose();
         }
         if (streamedOutput.status === 'success') {
