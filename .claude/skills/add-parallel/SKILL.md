@@ -1,3 +1,8 @@
+---
+name: add-parallel
+description: Add Parallel AI MCP integration to NanoClaw for web search and deep research. Use when the user wants Parallel AI, Parallel Search/Task API, or asks to add web research capabilities.
+---
+
 # Add Parallel AI Integration
 
 Adds Parallel AI MCP integration to NanoClaw for advanced web research capabilities.

@@ -22,20 +22,7 @@ Do NOT make changes beyond what was requested. When asked for status checks, onl
 
 ## Wiki Knowledge Base
 
-Path: `/Volumes/sandisk4TB/marvin-vault/98-nanoKB` (host) — main-channel agents access it at `/workspace/extra/claire-vault/98-nanoKB/` via the conditional Apple Container mount
-
-Persistent, cross-referenced wiki covering Gandal Lab science, AI tooling, papers, tools, concepts, and syntheses. Feeds NanoClaw agents as the canonical reference when their local memory isn't enough.
-
-When you need context not already in this project's files/conversation:
-1. Read `wiki/hot.md` first (~500 words of recent context)
-2. If not enough, read `wiki/overview.md` (executive summary, folder shape)
-3. If you need a domain drill-down, read `wiki/<folder>/_index.md` for concepts/papers/tools/syntheses/methods/datasets
-4. Only then read individual pages under `wiki/<folder>/`
-
-Do NOT read the wiki for:
-- General TypeScript/Node/Bun questions, language syntax, or framework docs
-- Anything already in nanoclaw/ files or the current conversation
-- Tasks unrelated to Gandal Lab science or the user's broader AI-tooling context
+Gandal Lab science + AI-tooling reference at `/Volumes/sandisk4TB/marvin-vault/98-nanoKB` (in-container: `/workspace/extra/claire-vault/98-nanoKB/`). Use the `nanokb-wiki` skill when you need context not already in this repo's files or the conversation — it carries the read order and the do-not-read list.
 
 Never modify `wiki/log.md` past entries or anything under `98-nanoKB/sources/`.
 
@@ -45,14 +32,7 @@ Single Node.js process with skill-based channel system. Currently Telegram-only 
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/ipc.ts` | IPC watcher and task processing |
-| `src/container-runner.ts` | Spawns agent containers with mounts and MCP env vars |
-| `src/db.ts` | SQLite operations and schema migrations |
-| `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/agent-runner/src/ipc-mcp-stdio.ts` | All `nanoclaw.*` MCP tools exposed to in-container agents. Before editing a tool description, read `docs/context-engineering/tool-design.md` (what / when / inputs / returns rubric). |
+- Before editing a tool description in `container/agent-runner/src/ipc-mcp-stdio.ts` (all `nanoclaw.*` MCP tools exposed to in-container agents), read `docs/context-engineering/tool-design.md` (what / when / inputs / returns rubric).
 
 For the full tour of `src/`, `container/`, and `scripts/sync/`, see [README.md](README.md). For architecture-level rationale, see [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md).
 
@@ -69,16 +49,6 @@ Four types of skills exist in NanoClaw. See [CONTRIBUTING.md](CONTRIBUTING.md) f
 - **Operational skills** — instruction-only workflows, always on `main` (e.g. `/setup`, `/debug`)
 - **Container skills** — loaded inside agent containers at runtime (`container/skills/`)
 
-| Skill | When to Use |
-|-------|-------------|
-| `/setup` | First-time installation, authentication, service configuration |
-| `/customize` | Adding channels, integrations, changing behavior |
-| `/debug` | Container issues, logs, troubleshooting |
-| `/update-nanoclaw` | Bring upstream NanoClaw updates into a customized install |
-| `/init-onecli` | Install OneCLI Agent Vault and migrate `.env` credentials to it |
-| `/qodo-pr-resolver` | Fetch and fix Qodo PR review issues interactively or in batch |
-| `/get-qodo-rules` | Load org- and repo-level coding rules from Qodo before code tasks |
-
 ## Contributing
 
 Before creating a PR, adding a skill, or preparing any contribution, you MUST read [CONTRIBUTING.md](CONTRIBUTING.md). It covers accepted change types, the four skill types and their guidelines, SKILL.md format rules, PR requirements, and the pre-submission checklist (searching for existing PRs/issues, testing, description format).
@@ -89,12 +59,7 @@ Run commands directly—don't tell the user to run them. Build/run/test commands
 
 Quick commands:
 ```bash
-bun test                                # full vitest suite
-bun --bun vitest run src/foo.test.ts    # single file
-bun run build                           # tsc -> dist/
-bun run typecheck                       # tsc --noEmit
-bun run lint                            # eslint src/
-bun run dev                             # run from src (no build)
+bun --bun vitest run src/foo.test.ts    # single file (note the --bun flag)
 ```
 
 Service restart:
