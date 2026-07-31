@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { _initTestDatabase, insertPendingAction } from './db.js';
 
 /**
@@ -13,6 +13,23 @@ import { _initTestDatabase, insertPendingAction } from './db.js';
  */
 describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   let sentMessages: string[];
+
+  /**
+   * Imported once here rather than per-test.
+   *
+   * `import('./index.js')` transitively loads the whole orchestrator graph and
+   * costs ~2-3s even on an idle machine. Done inside an `it()`, that cold load
+   * is charged to the first test's 5s budget, and under full-suite parallel
+   * load (141 files competing for CPU) it crossed the limit — T11/T12 failed
+   * with "Test timed out in 5000ms" while passing in isolation. Paying it once
+   * in beforeAll, with its own generous timeout, takes the import off every
+   * per-test budget. Subsequent tests hit the ESM module cache regardless.
+   */
+  let handleApprovalSlashCommand: (typeof import('./index.js'))['handleApprovalSlashCommand'];
+
+  beforeAll(async () => {
+    ({ handleApprovalSlashCommand } = await import('./index.js'));
+  }, 60_000);
 
   beforeEach(() => {
     sentMessages = [];
@@ -41,7 +58,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
       payload: {},
     });
 
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: '/pending',
       sourceGroupFolder: 'telegram_claire',
@@ -73,7 +89,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
       payload: {},
     });
 
-    const { handleApprovalSlashCommand } = await import('./index.js');
     await handleApprovalSlashCommand({
       text: '/pending',
       sourceGroupFolder: 'telegram_lab-claw',
@@ -93,7 +108,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   });
 
   it('T13 — /pending empty queue replies "No pending actions."', async () => {
-    const { handleApprovalSlashCommand } = await import('./index.js');
     await handleApprovalSlashCommand({
       text: '/pending',
       sourceGroupFolder: 'telegram_claire',
@@ -106,7 +120,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   });
 
   it('T17 — /approve with no id replies usage hint', async () => {
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: '/approve',
       sourceGroupFolder: 'telegram_claire',
@@ -121,7 +134,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   });
 
   it('T18 — /approve with whitespace args replies usage hint', async () => {
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: '/approve pa abc def',
       sourceGroupFolder: 'telegram_claire',
@@ -135,7 +147,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   });
 
   it('T22 — /approve this is a great idea triggers usage hint (multi-word arg)', async () => {
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: '/approve this is a great idea',
       sourceGroupFolder: 'telegram_claire',
@@ -149,7 +160,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
   });
 
   it('T-noncmd — random text returns false (let agent handle)', async () => {
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: 'hello what is the weather',
       sourceGroupFolder: 'telegram_claire',
@@ -175,7 +185,6 @@ describe('src/index.ts approval slash-command wiring (Phase 3)', () => {
       summary: 'reject-target',
       payload: {},
     });
-    const { handleApprovalSlashCommand } = await import('./index.js');
     const replied = await handleApprovalSlashCommand({
       text: `/reject ${id}`,
       sourceGroupFolder: 'telegram_claire',
