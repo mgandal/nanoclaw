@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Iterable
 
-from email_ingest.types import FollowUp, AGE_THRESHOLD_DAYS
+from email_ingest.types import FollowUp, AGE_THRESHOLD_DAYS, RETENTION_DAYS
 
 log = logging.getLogger("email-ingest.aging")
 
@@ -53,3 +53,40 @@ def apply_aging(
         else:
             updated.append(it)
     return updated, aged
+
+
+def apply_retention(
+    items: Iterable[FollowUp],
+    now: datetime,
+    retention_days: int = RETENTION_DAYS,
+) -> tuple[list[FollowUp], list[FollowUp]]:
+    """Split items into (kept, archived) by age of last activity.
+
+    Only 'stale' and 'closed' entries are eligible. Open and snoozed items are
+    never archived however old they are — apply_aging owns the open->stale
+    transition, so an item still marked open is by definition live.
+
+    Closed entries date from `closed_at` (falling back to `created`); stale
+    entries date from `created`. An entry whose timestamp will not parse is
+    always kept: we never archive what we cannot date.
+    """
+    kept: list[FollowUp] = []
+    archived: list[FollowUp] = []
+    for it in items:
+        if it.status not in ("stale", "closed"):
+            kept.append(it)
+            continue
+        stamp = it.closed_at if (it.status == "closed" and it.closed_at) else it.created
+        marked = _parse_iso(stamp)
+        if marked is None:
+            log.warning(
+                "retention: unparseable timestamp %r on %s, keeping", stamp, it.who
+            )
+            kept.append(it)
+            continue
+        age_days = (now - marked).total_seconds() / 86400.0
+        if age_days > retention_days:
+            archived.append(it)
+        else:
+            kept.append(it)
+    return kept, archived

@@ -248,6 +248,40 @@ def _render_entry(f: FollowUp) -> list[str]:
     return lines
 
 
+ARCHIVE_HEADER = (
+    "# Follow-ups — archive\n"
+    "\n"
+    "_Cold storage for stale/closed follow-ups aged out of followups.md by "
+    "`apply_retention`. Nothing here was deleted — entries stay in the same "
+    "format and re-parse with `parse_file`. Not read by agents; grep it when "
+    "you need history._\n"
+)
+
+
+def append_archive(path: Path, items: list[FollowUp]) -> None:
+    """Append aged-out entries to the sidecar archive, creating it if needed.
+
+    Append-only by design: the archive is cold storage that only grows, so
+    rewriting it whole on every 4-hourly ingest would be wasted I/O. Entries
+    are rendered exactly as in followups.md (each carries its own
+    `- **status:**` field), so parse_file recovers them without section
+    headings."""
+    if not items:
+        return
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not path.exists()
+
+    out: list[str] = []
+    if new_file:
+        out.append(ARCHIVE_HEADER)
+    for it in items:
+        out.extend(_render_entry(it))
+
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(out).rstrip() + "\n")
+
+
 def write_file(path: Path, items: list[FollowUp]) -> None:
     """Atomically write followups.md from a list of items.
     Entries are grouped by status into Open/Stale/Closed sections."""

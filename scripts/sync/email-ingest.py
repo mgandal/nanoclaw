@@ -19,7 +19,7 @@ import requests
 # Add parent dir to path so email_ingest package is importable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from email_ingest.types import IngestState, STATE_DIR, LOG_FILE, FollowUp, FOLLOWUPS_FILE
+from email_ingest.types import IngestState, STATE_DIR, LOG_FILE, FollowUp, FOLLOWUPS_FILE, FOLLOWUPS_ARCHIVE
 from email_ingest.gmail_adapter import GmailAdapter
 from email_ingest.exchange_adapter import ExchangeAdapter
 from email_ingest.classifier import should_fast_skip, classify_email, OLLAMA_MODEL, reset_circuit_breaker
@@ -478,11 +478,21 @@ def run_followups_passes(
             else:
                 asks_added += 1
 
+        # Retention runs last, on the final list, so entries added above (always
+        # fresh and open) are never eligible. Cold stale/closed entries move to
+        # the sidecar archive — nothing is deleted, but followups.md stops
+        # growing without bound for the morning briefing that reads it.
+        items, archived_items = _aging_mod.apply_retention(items, now=now)
+        archived_count = len(archived_items)
+        if archived_items:
+            _followups_mod.append_archive(FOLLOWUPS_ARCHIVE, archived_items)
+
         _followups_mod.write_file(FOLLOWUPS_FILE, items)
 
     return {
         "followups_closed": closed_count,
         "followups_aged": aged_count,
+        "followups_archived": archived_count,
         "commitments_added": commitments_added,
         "asks_added": asks_added,
         "decisions_retained": decisions_retained,

@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 import json
+import os
 import time
 from pathlib import Path
 
@@ -93,8 +94,16 @@ FOLLOWUPS_FILE = (
     / "state"
     / "followups.md"
 )
+FOLLOWUPS_ARCHIVE = FOLLOWUPS_FILE.with_name("followups.archive.md")
 AGE_THRESHOLD_DAYS = 14
 JACCARD_THRESHOLD = 0.6
+
+# How long a stale/closed follow-up stays in followups.md before moving to the
+# sidecar archive. Claire reads followups.md for the morning briefing, so every
+# entry left here is paid for on every read; the Stale section had grown to
+# 523KB (~131k tokens) with no retention at all. Archiving never deletes —
+# entries move to followups.archive.md and stay parseable.
+RETENTION_DAYS = int(os.environ.get("FOLLOWUPS_RETENTION_DAYS", "60"))
 
 
 @dataclass

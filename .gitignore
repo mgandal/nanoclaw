@@ -33,10 +33,13 @@ groups/telegram_claire/*
 # - current.md: auto-rendered daily; previously slipped into git with PHI risk
 # - followups.md: email-derived, contains counterparty PII; managed by
 #   email-ingest.py and rebuilt on each ingest
+# - followups.archive.md: cold storage aged out of followups.md by
+#   apply_retention — same email-derived PII, same reason to stay out of git
 # - bugs.md: local personal bug inbox, not a templated baseline
 # - *.archived-*: superseded by the live tasks table in store/messages.db
 groups/global/state/current.md
 groups/global/state/followups.md
+groups/global/state/followups.archive.md
 groups/global/state/bugs.md
 groups/global/state/*.archived-*.md
 groups/global/state/*-report.md
