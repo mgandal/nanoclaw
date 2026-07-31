@@ -34,28 +34,55 @@ if [ -z "$NEW_TOKEN" ]; then
   exit 1
 fi
 
+# Check token expiry — on EVERY run, before the unchanged-token early exit.
+#
+# This script cannot renew anything; it only copies whatever Claude Code last
+# wrote to the keychain. The keychain token lives ~8h and is refreshed only as
+# a side effect of Claude Code running, so any stretch longer than that (e.g.
+# overnight) leaves an EXPIRED token that this script happily reports as
+# "unchanged, no update needed" while every scheduled task 401s. Checking
+# expiry here is the only place that state becomes visible before the failures.
+#
+# The helper must ALWAYS exit 0 and signal via stdout. Under `set -euo pipefail`
+# a `VAR=$(cmd)` whose cmd exits non-zero aborts the whole script at the
+# assignment — the previous `sys.exit(1)` on a nearly-expired token killed the
+# run *before* it wrote the token to .env, making the `if [ $? -ne 0 ]`
+# "updating anyway" branch unreachable. That inverted the intent: the one case
+# where a refresh matters most never refreshed. Same failure as 2b541732.
+EXPIRES_RAW=$(security find-generic-password -s "Claude Code-credentials" -a "mgandal" -w 2>/dev/null \
+  | python3 -c "
+import json, sys, time
+try:
+    data = json.load(sys.stdin)
+    expires = data['claudeAiOauth']['expiresAt'] / 1000
+    remaining_h = (expires - time.time()) / 3600
+    state = 'EXPIRED' if remaining_h <= 0 else ('LOW' if remaining_h < 0.5 else 'OK')
+    print(f'{remaining_h:.1f} {state}')
+except Exception:
+    print('? UNKNOWN')
+" 2>/dev/null)
+
+EXPIRES_OK="${EXPIRES_RAW%% *}"
+EXPIRES_STATE="${EXPIRES_RAW##* }"
+
+case "$EXPIRES_STATE" in
+  EXPIRED)
+    log "ERROR: keychain OAuth token EXPIRED ${EXPIRES_OK}h ago — scheduled tasks will 401 until Claude Code refreshes it (run \`claude\` interactively, or re-auth with /login)"
+    ;;
+  LOW)
+    log "WARNING: keychain OAuth token expires in ${EXPIRES_OK}h (<30min)"
+    ;;
+  UNKNOWN)
+    log "WARNING: Could not read token expiry from keychain"
+    ;;
+esac
+
 # Check current token in .env
 CURRENT_TOKEN=$(grep '^CLAUDE_CODE_OAUTH_TOKEN=' "$ENV_FILE" | cut -d= -f2-)
 
 if [ "$NEW_TOKEN" = "$CURRENT_TOKEN" ]; then
-  log "Token unchanged, no update needed"
+  log "Token unchanged (${EXPIRES_OK}h left), no update needed"
   exit 0
-fi
-
-# Check token expiry
-EXPIRES_OK=$(security find-generic-password -s "Claude Code-credentials" -a "mgandal" -w 2>/dev/null \
-  | python3 -c "
-import json, sys, time
-data = json.load(sys.stdin)
-expires = data['claudeAiOauth']['expiresAt'] / 1000
-remaining_h = (expires - time.time()) / 3600
-print(f'{remaining_h:.1f}')
-if remaining_h < 0.5:
-    sys.exit(1)
-" 2>/dev/null)
-
-if [ $? -ne 0 ]; then
-  log "WARNING: New token expires in <30min, updating anyway"
 fi
 
 # Update .env with new token
