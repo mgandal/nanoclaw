@@ -13,7 +13,7 @@ class BudgetExceeded(RuntimeError):
 
 # USD per million tokens. Add models as needed.
 PRICING_USD_PER_MTOK = {
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
     "claude-opus-4-7": {"input": 15.0, "output": 75.0},
     "claude-haiku-4-5-20251001": {"input": 0.8, "output": 4.0},
 }

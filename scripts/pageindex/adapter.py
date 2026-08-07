@@ -17,7 +17,7 @@ import anthropic
 import fitz  # pymupdf
 
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-sonnet-5"
 TOC_PAGES = 20
 FLAT_CHUNK_SIZE = 10
 

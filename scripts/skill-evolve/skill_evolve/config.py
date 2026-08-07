@@ -20,7 +20,7 @@ def _find_repo_root() -> Path:
 REPO_ROOT = _find_repo_root()
 
 # Default LLM model + judge model
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_TEMPERATURE = 0.0
 
 # Budget defaults

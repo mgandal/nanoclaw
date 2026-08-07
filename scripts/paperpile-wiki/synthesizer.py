@@ -23,7 +23,7 @@ from typing import Optional
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-sonnet-5"
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 MAX_RETRIES = 5
 MAX_EVIDENCE_PAPERS = 40
@@ -593,7 +593,7 @@ def synthesize_cluster(
     )
     markdown = f"{frontmatter}\n\n# {cluster_name}\n\n{body_text}\n\n{references}\n"
 
-    # Step 8: calculate cost (claude-sonnet-4-6 pricing)
+    # Step 8: calculate cost (claude-sonnet-5 pricing)
     cost = (total_input_tokens * 3.0 / 1_000_000) + (total_output_tokens * 15.0 / 1_000_000)
 
     return markdown, cost
