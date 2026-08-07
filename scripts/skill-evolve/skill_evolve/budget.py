@@ -4,7 +4,12 @@ Per spec I1: realistic budget is $20-40/run; this module enforces a
 configurable cap and aborts mid-run if exceeded.
 """
 from __future__ import annotations
+import sys
 from collections import defaultdict
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from claude_models import DEFAULT_MODEL, FALLBACK_MODEL  # noqa: E402
 
 
 class BudgetExceeded(RuntimeError):
@@ -13,9 +18,9 @@ class BudgetExceeded(RuntimeError):
 
 # USD per million tokens. Add models as needed.
 PRICING_USD_PER_MTOK = {
-    "claude-sonnet-5": {"input": 3.0, "output": 15.0},
+    DEFAULT_MODEL: {"input": 3.0, "output": 15.0},
     "claude-opus-4-7": {"input": 15.0, "output": 75.0},
-    "claude-haiku-4-5-20251001": {"input": 0.8, "output": 4.0},
+    FALLBACK_MODEL: {"input": 0.8, "output": 4.0},
 }
 
 

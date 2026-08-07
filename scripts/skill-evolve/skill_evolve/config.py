@@ -6,6 +6,7 @@ calls (subscription seat ToS — see spec Credentials section).
 """
 from __future__ import annotations
 import os
+import sys
 from pathlib import Path
 
 # Resolve repo root by walking up from this file until we find container/
@@ -19,8 +20,9 @@ def _find_repo_root() -> Path:
 
 REPO_ROOT = _find_repo_root()
 
-# Default LLM model + judge model
-DEFAULT_MODEL = "claude-sonnet-5"
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from claude_models import DEFAULT_MODEL  # noqa: E402
+
 DEFAULT_TEMPERATURE = 0.0
 
 # Budget defaults

@@ -15,16 +15,20 @@ Typical usage:
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from claude_models import DEFAULT_MODEL, FALLBACK_MODEL  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL = "claude-sonnet-5"
-FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+MODEL = DEFAULT_MODEL
 MAX_RETRIES = 5
 MAX_EVIDENCE_PAPERS = 40
 

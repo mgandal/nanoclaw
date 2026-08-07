@@ -12,12 +12,15 @@ Environment:
 import json
 import sys
 import os
+from pathlib import Path
 
 import anthropic
 import fitz  # pymupdf
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from claude_models import DEFAULT_MODEL  # noqa: E402
 
-MODEL = "claude-sonnet-5"
+MODEL = DEFAULT_MODEL
 TOC_PAGES = 20
 FLAT_CHUNK_SIZE = 10
 

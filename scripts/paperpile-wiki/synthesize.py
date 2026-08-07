@@ -32,6 +32,11 @@ OUTPUT_DIR = '/Volumes/sandisk4TB/marvin-vault/98-nanoKB/paperpile'
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+SCRIPTS_DIR = os.path.join(PROJECT_ROOT, 'scripts')
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+from claude_models import DEFAULT_MODEL  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Lookup helpers
@@ -290,7 +295,7 @@ Examples:
     parser.add_argument('--concurrency', type=int, default=1, metavar='N',
                         help='Max concurrent API calls (default: 1)')
     parser.add_argument('--model', type=str, default=None, metavar='MODEL',
-                        help='Claude model to use (default: claude-sonnet-5, falls back to haiku on 429)')
+                        help=f'Claude model to use (default: {DEFAULT_MODEL}, falls back to haiku on 429)')
     parser.add_argument('--db', metavar='PATH', default=DB_PATH,
                         help=f'Path to SQLite database (default: {DB_PATH})')
 
