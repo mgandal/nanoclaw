@@ -25,11 +25,34 @@ DEFAULT_BATCH_LIMIT = 100
 # each) and well under the memory budget.
 EXCHANGE_STDOUT_MAX_BYTES = 16 * 1024 * 1024
 
+# Minimum search window. The epoch advances on every successful run and
+# launchd fires every 4h (StartInterval 14400), so a naive max(1, ...) floor
+# collapsed the window to 1 day. Any stub past `batch_limit` was dropped from
+# memory AND fell outside the next run's window => permanent, silent loss.
+#
+# The remedy is a wider window, not a bigger batch: `processed_ids` already
+# dedupes (see fetch_since), so a stub cut by the cap is simply re-offered on
+# the following run for as long as it stays inside the window. Raising
+# batch_limit instead would breach the `gtimeout 1200` budget in sync-all.sh
+# (see test_default_exchange_batch_fits_time_budget, BUDGET_SAFE_CEILING=40).
+#
+# Sized against measurement, not taste: at a full 24-message batch, runs
+# already take 417-1003s of the 1200s budget (n=22, median 825s) => ~197s
+# worst-case headroom. Search costs ~0.26 s/stub, so 3d ~= 47s (150s left),
+# 7d ~= 109s (88s, too tight), 14d ~= 218s (negative => SIGKILL).
+# 3 days = 18 consecutive capped-or-failed runs of slack.
+MIN_SEARCH_WINDOW_DAYS = 3
+
 
 def compute_since_days(epoch: int) -> int:
-    """Convert epoch to days-ago for exchange-mail.sh --since flag."""
+    """Convert epoch to days-ago for exchange-mail.sh --since flag.
+
+    Floors at MIN_SEARCH_WINDOW_DAYS so messages deferred by the batch cap
+    stay discoverable on subsequent runs. Never shrinks a genuinely wider
+    window (post-downtime or backfill epochs keep their true age).
+    """
     days = math.ceil((time.time() - epoch) / 86400)
-    return max(1, days)
+    return max(MIN_SEARCH_WINDOW_DAYS, days)
 
 
 def parse_search_output(raw: str) -> list[dict]:
@@ -263,6 +286,21 @@ class ExchangeAdapter:
 
         # Filter already-processed and apply batch limit
         new_stubs = [s for s in all_stubs if s.get("id", "") not in processed_ids]
+
+        # Log what the cap discards. Without this, batch-cap loss is invisible:
+        # the log records what was fetched, never what was dropped. Deferred
+        # stubs are NOT lost — `processed_ids` dedupe plus the
+        # MIN_SEARCH_WINDOW_DAYS floor re-offers them next run — but a
+        # persistently non-zero deferral means inflow exceeds drain rate and
+        # the window floor needs re-sizing.
+        if len(new_stubs) > self.batch_limit:
+            deferred = len(new_stubs) - self.batch_limit
+            log.warning(
+                "Exchange batch cap truncated discovery: %d new stubs, "
+                "draining %d, deferring %d to next run (window=%dd)",
+                len(new_stubs), self.batch_limit, deferred, since_days,
+            )
+
         new_stubs = new_stubs[:self.batch_limit]
 
         # Fetch full body for each

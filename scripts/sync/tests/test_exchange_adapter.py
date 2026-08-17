@@ -57,11 +57,121 @@ def test_compute_since_days():
     assert days in (7, 8)  # ceil may round up
 
 
-def test_compute_since_days_minimum_1():
+def test_compute_since_days_floors_at_min_window():
+    """The search window must never collapse below MIN_SEARCH_WINDOW_DAYS.
+
+    RCA 2026-08-17: launchd StartInterval is 14400s (4h), so the epoch is
+    always <1 day old and this floored to 1. Combined with the batch cap at
+    exchange_adapter.py:266 (`new_stubs[:self.batch_limit]`), any stub past
+    the cap was dropped from memory AND fell outside the next run's 1-day
+    window => permanent, silent loss.
+
+    The fix is a wider floor, NOT a bigger batch: raising batch_limit past
+    BUDGET_SAFE_CEILING=40 re-creates the un-drainable-Exchange SIGKILL bug
+    (see test_default_exchange_batch_fits_time_budget).
+
+    Why 3 and not 7: at a full 24-message batch, runs already consume
+    417-1003s of the `gtimeout 1200` budget (n=22 steady-state cap hits,
+    median 825s) leaving ~197s headroom. Search measured at ~0.26 s/stub:
+    3d costs ~47s (150s headroom), 7d ~109s (88s, risky), 14d ~218s
+    (NEGATIVE headroom -> SIGKILL). 3d tolerates 18 consecutive
+    capped-or-failed runs before any message ages out of the window.
+
+    Supersedes the old `test_compute_since_days_minimum_1`, which pinned the
+    floor at 1 and encoded the bug as intent.
+    """
     import time
-    # Epoch in the future -> minimum 1 day
-    days = compute_since_days(int(time.time()) + 3600)
-    assert days == 1
+    from email_ingest.exchange_adapter import MIN_SEARCH_WINDOW_DAYS
+
+    assert MIN_SEARCH_WINDOW_DAYS == 3
+
+    # Epoch in the future -> still floors to the minimum window, never 0/negative
+    assert compute_since_days(int(time.time()) + 3600) == MIN_SEARCH_WINDOW_DAYS
+    # Epoch 1 hour ago (the real launchd case) -> floored, not 1
+    assert compute_since_days(int(time.time()) - 3600) == MIN_SEARCH_WINDOW_DAYS
+    # Epoch 4 hours ago (exact StartInterval) -> floored, not 1
+    assert compute_since_days(int(time.time()) - 14400) == MIN_SEARCH_WINDOW_DAYS
+
+
+def test_compute_since_days_does_not_shrink_a_wider_window():
+    """The floor must be a floor, not a clamp — a genuinely old epoch
+    (e.g. after downtime or a backfill) must keep its wide window."""
+    import time
+    now = int(time.time())
+    assert compute_since_days(now - (30 * 86400)) in (30, 31)
+
+
+def test_batch_cap_truncation_is_logged():
+    """Stubs discarded by the batch cap must be logged.
+
+    Today the drop is silent (`new_stubs[:self.batch_limit]` with no log),
+    which is why batch-cap loss is structurally unmeasurable from the log:
+    we can count what was fetched, never what was discarded. Without this
+    line there is no way to tell whether the 3-day floor is sufficient.
+    """
+    stubs = [{"id": f"m{i}", "subject": f"s{i}", "from": "a@b.edu",
+              "fromName": "A", "date": "2026-08-17T10:00",
+              "read": False, "flagged": False} for i in range(10)]
+
+    adapter = ExchangeAdapter(batch_limit=4)
+    with patch("email_ingest.exchange_adapter._run_exchange") as mock_run, \
+         patch("email_ingest.exchange_adapter.log") as mock_log, \
+         patch.object(adapter, "is_available", return_value=True):
+        def side_effect(args, timeout=None):
+            if args[0] == "search":
+                return json.dumps(stubs)
+            return json.dumps({"body": "hi", "to": ["mgandal@upenn.edu"]})
+        mock_run.side_effect = side_effect
+        adapter.fetch_since(0, set())
+
+    warnings = " ".join(
+        str(c.args[0]) % c.args[1:] if len(c.args) > 1 else str(c.args[0])
+        for c in mock_log.warning.call_args_list
+    )
+    assert "truncat" in warnings.lower() or "discard" in warnings.lower(), (
+        f"batch-cap truncation was not logged; warnings were: {warnings}"
+    )
+    # 20 stubs across 2 mailboxes, cap 4 -> 16 dropped
+    assert "16" in warnings, f"expected dropped-count 16 in: {warnings}"
+
+
+def test_stub_cut_by_batch_cap_is_reoffered_on_next_run():
+    """END-TO-END REGRESSION: a message cut by the batch cap on run N must
+    still be visible to run N+1.
+
+    This is the actual bug. Run 1 discovers 10, drains 4. Run 2 must be able
+    to see the remaining 6 — which requires the search window to still cover
+    them. With a 1-day floor and a 4-hourly schedule the window slid past
+    them and they were lost forever.
+    """
+    stubs = [{"id": f"m{i}", "subject": f"s{i}", "from": "a@b.edu",
+              "fromName": "A", "date": "2026-08-17T10:00",
+              "read": False, "flagged": False} for i in range(10)]
+    adapter = ExchangeAdapter(batch_limit=4)
+
+    def run_once(processed):
+        seen_since = {}
+        with patch("email_ingest.exchange_adapter._run_exchange") as mock_run, \
+             patch.object(adapter, "is_available", return_value=True):
+            def side_effect(args, timeout=None):
+                if args[0] == "search":
+                    seen_since["days"] = int(args[args.index("--since") + 1])
+                    return json.dumps(stubs)
+                return json.dumps({"body": "hi", "to": ["mgandal@upenn.edu"]})
+            mock_run.side_effect = side_effect
+            emails = adapter.fetch_since(int(__import__("time").time()) - 3600, processed)
+        return emails, seen_since["days"]
+
+    processed = set()
+    emails1, days1 = run_once(processed)
+    assert len(emails1) == 4
+    processed.update(e.id for e in emails1)
+
+    # Run 2: the window must still be wide enough to re-surface the remainder.
+    emails2, days2 = run_once(processed)
+    assert days2 >= 3, f"window collapsed to {days2}d — cut stubs are unreachable"
+    assert len(emails2) == 4, "remainder was not re-offered after the cap"
+    assert not {e.id for e in emails2} & {e.id for e in emails1}, "re-read same msgs"
 
 
 def test_body_truncation():
