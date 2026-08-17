@@ -17,6 +17,13 @@ PROFILE_FILE = STATE_DIR / "classifier-profile.json"
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "phi4-mini"  # Explicit — does NOT use OLLAMA_MODEL env var
 OLLAMA_TIMEOUT = 30  # seconds per call
+# Pin the classifier model in VRAM instead of letting the global
+# OLLAMA_KEEP_ALIVE=5m unload it between runs. email-ingest runs every 4h, so
+# the model was ALWAYS cold: measured 6.0s load + 1.4s inference = 7.4s per
+# call, against a 30s timeout that a contended GPU easily overruns. Warm, the
+# same call is 0.3s load + 1.2s = 1.5s. phi4-mini resident costs ~9GB of 128GB.
+# (2026-08-13: 21 of 81 sync runs were blowing sync-all.sh's gtimeout 1200.)
+OLLAMA_KEEP_ALIVE = "24h"
 OLLAMA_MAX_ATTEMPTS = 3  # 1 + 2 retries; absorbs Electron-app hiccups (sleep/wake, model swap)
 OLLAMA_BACKOFF_SEC = (1, 2)  # waits between attempts: 1s, then 2s; total worst-case ~3s overhead
 
@@ -292,6 +299,26 @@ def parse_classification(raw: str) -> ClassificationResult:
         )
 
 
+def _parse_retry_after(err: "requests.HTTPError") -> float | None:
+    """Extract Retry-After (seconds) from an HTTPError's response, if present.
+
+    Ollama's 429 handler may send Retry-After to indicate how long the caller
+    should wait before the inference slot frees up. Only numeric-seconds form
+    is honored (HTTP-date form is rare from a local Ollama server and not
+    worth the parsing complexity here); anything else falls back to the
+    fixed OLLAMA_BACKOFF_SEC schedule.
+    """
+    resp = getattr(err, "response", None)
+    headers = getattr(resp, "headers", None) or {}
+    value = headers.get("Retry-After")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def classify_email(email: NormalizedEmail) -> ClassificationResult:
     """Classify and summarize an email via Ollama (single combined call).
     Applies personalized weight adjustments if profile exists."""
@@ -314,13 +341,16 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
         prompt = build_exchange_prompt(email)
 
     last_err = None
+    attempts_made = 0
     for attempt in range(OLLAMA_MAX_ATTEMPTS):
+        attempts_made = attempt + 1
         try:
             resp = requests.post(OLLAMA_URL, json={
                 "model": OLLAMA_MODEL,
                 "system": system,
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
                 "options": {"temperature": 0.1, "num_predict": 512},
             }, timeout=OLLAMA_TIMEOUT)
             resp.raise_for_status()
@@ -357,25 +387,46 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
             # num_predict). Don't burn ~3s of retry on a misconfiguration that
             # the next sync will hit identically. 5xx falls through to the
             # transient-retry path.
+            #
+            # EXCEPTION: 429 Too Many Requests is NOT a misconfiguration — it's
+            # Ollama signaling slot contention (OLLAMA_NUM_PARALLEL=3, shared
+            # with other nanoclaw consumers on localhost:11434). Treating it as
+            # deterministic broke immediately with zero retry, which tripped
+            # the circuit breaker after 8 consecutive 429s and zeroed out
+            # entire ingest runs (RCA 2026-08-17: 3339x "429 Client Error: Too
+            # Many Requests" in the log, the single most common error, 3x more
+            # frequent than ConnectionError). 429 gets the same retry+backoff
+            # treatment as transport errors below, honoring Retry-After if the
+            # server sends one.
             status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 429:
+                last_err = e
+                if attempt < OLLAMA_MAX_ATTEMPTS - 1:
+                    retry_after = _parse_retry_after(e)
+                    wait = retry_after if retry_after is not None else \
+                        OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)]
+                    log.warning("Ollama request failed (attempt %d/%d): %s — retrying in %ss",
+                                attempts_made, OLLAMA_MAX_ATTEMPTS, e, wait)
+                    time.sleep(wait)
+                continue
             if status is not None and 400 <= status < 500:
                 last_err = e
                 break
             last_err = e
             if attempt < OLLAMA_MAX_ATTEMPTS - 1:
                 log.warning("Ollama request failed (attempt %d/%d): %s — retrying",
-                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                            attempts_made, OLLAMA_MAX_ATTEMPTS, e)
                 time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
         except requests.RequestException as e:
             last_err = e
             if attempt < OLLAMA_MAX_ATTEMPTS - 1:
                 log.warning("Ollama request failed (attempt %d/%d): %s — retrying",
-                            attempt + 1, OLLAMA_MAX_ATTEMPTS, e)
+                            attempts_made, OLLAMA_MAX_ATTEMPTS, e)
                 time.sleep(OLLAMA_BACKOFF_SEC[min(attempt, len(OLLAMA_BACKOFF_SEC) - 1)])
 
-    # Exhausted all attempts (or broke on 4xx) — a transient failure. Count it
-    # toward the breaker so a sustained outage trips fast instead of paying the
-    # full ~90s/email tax across the whole backlog.
+    # Exhausted all attempts (or broke on a genuine 4xx) — a transient failure.
+    # Count it toward the breaker so a sustained outage trips fast instead of
+    # paying the full ~90s/email tax across the whole backlog.
     _consecutive_failures += 1
     if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
         _circuit_open = True
@@ -384,7 +435,14 @@ def classify_email(email: NormalizedEmail) -> ClassificationResult:
             "fast-failing remaining emails this run (Ollama down/contended). "
             "Re-queued; next run drains them.", _consecutive_failures,
         )
-    log.error("Ollama request failed after %d attempts: %s", OLLAMA_MAX_ATTEMPTS, last_err)
+    # Report the TRUE attempt count, not the hardcoded max — a genuine 4xx
+    # breaks after 1 attempt, and logging OLLAMA_MAX_ATTEMPTS there falsely
+    # implied every failure had exhausted a 3-attempt retry budget (RCA
+    # 2026-08-17: this false log line masked the fact that 429s were never
+    # actually being retried, since it made 1-attempt and 3-attempt failures
+    # look identical in the log).
+    log.error("Ollama request failed after %d attempt%s: %s",
+               attempts_made, "" if attempts_made == 1 else "s", last_err)
     return ClassificationResult(
         relevance=0.0, topic="unknown", summary="",
         entities=[], action_items=[], skip_reason="ollama_error",

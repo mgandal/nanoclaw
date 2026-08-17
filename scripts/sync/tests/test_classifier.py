@@ -206,3 +206,176 @@ def test_classify_does_not_retry_on_4xx_client_error(monkeypatch):
     assert call_count["n"] == 1, (
         f"4xx is deterministic and must NOT retry, got {call_count['n']} attempts"
     )
+
+
+# --- 429 rate-limit is transient, not deterministic (RCA 2026-08-17) ---
+# Log evidence: 3339x "Ollama request failed after 3 attempts: 429 Client Error:
+# Too Many Requests" — the single most common error, 3x more frequent than
+# ConnectionError. Ollama is configured OLLAMA_NUM_PARALLEL=3 and shared with
+# other nanoclaw consumers on localhost:11434; 429 signals slot contention, not
+# a malformed prompt / model typo / oversized num_predict like other 4xx codes.
+
+def _make_429_response(retry_after: str | None = None) -> MagicMock:
+    import requests
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.headers = {"Retry-After": retry_after} if retry_after else {}
+    err = requests.HTTPError("429 Client Error: Too Many Requests")
+    err.response = resp
+    resp.raise_for_status.side_effect = err
+    return resp
+
+
+def test_classify_retries_on_429_rate_limit(monkeypatch):
+    """429 (Too Many Requests) must be retried like a transient failure, not
+    treated as a deterministic 4xx misconfiguration."""
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            return _make_429_response()
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = _ollama_success_payload(relevance=0.8)
+        return resp
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t429-retry")
+    result = classify_email(email)
+
+    assert result.skip_reason is None, (
+        f"429 must be retried, not fast-failed — got skip_reason={result.skip_reason!r}"
+    )
+    assert call_count["n"] == 3, (
+        f"expected 3 attempts (2x 429 + 1 success), got {call_count['n']}"
+    )
+
+
+def test_classify_honors_retry_after_header_on_429(monkeypatch):
+    """When Ollama sends Retry-After on a 429, the classifier should sleep
+    that duration instead of the fixed OLLAMA_BACKOFF_SEC schedule."""
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+    sleep_calls = []
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            return _make_429_response(retry_after="7")
+        resp = MagicMock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = _ollama_success_payload(relevance=0.8)
+        return resp
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda s: sleep_calls.append(s))
+
+    email = _make_email(id="t429-retryafter")
+    result = classify_email(email)
+
+    assert result.skip_reason is None
+    assert sleep_calls, "expected classifier to sleep before retrying the 429"
+    assert sleep_calls[0] == 7.0, (
+        f"expected Retry-After=7 to be honored, got sleep({sleep_calls[0]})"
+    )
+
+
+def test_classify_429_exhausted_retries_returns_ollama_error(monkeypatch):
+    """Sustained 429s (contention doesn't clear within the retry budget) still
+    exhaust OLLAMA_MAX_ATTEMPTS and return ollama_error — proving 429 now goes
+    through the full retry budget instead of breaking after attempt 1."""
+    from email_ingest import classifier
+
+    call_count = {"n": 0}
+
+    def fake_post(*args, **kwargs):
+        call_count["n"] += 1
+        return _make_429_response()
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t429-exhausted")
+    result = classify_email(email)
+
+    assert result.skip_reason == "ollama_error"
+    assert call_count["n"] == classifier.OLLAMA_MAX_ATTEMPTS, (
+        f"expected all {classifier.OLLAMA_MAX_ATTEMPTS} attempts to be used on "
+        f"sustained 429s (transient, not deterministic), got {call_count['n']}"
+    )
+
+
+def test_classify_genuine_4xx_still_fast_fails(monkeypatch):
+    """404 (e.g. model name typo) and 422 (malformed prompt) must remain
+    deterministic fast-fails — only 429 changes behavior."""
+    import requests
+    from email_ingest import classifier
+
+    for status in (404, 422):
+        call_count = {"n": 0}
+
+        def fake_post(*args, __status=status, **kwargs):
+            call_count["n"] += 1
+            resp = MagicMock()
+            resp.status_code = __status
+            err = requests.HTTPError(f"{__status} Client Error")
+            err.response = resp
+            resp.raise_for_status.side_effect = err
+            return resp
+
+        monkeypatch.setattr(classifier.requests, "post", fake_post)
+        import time as _time
+        monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+        email = _make_email(id=f"t{status}")
+        result = classify_email(email)
+
+        assert result.skip_reason == "ollama_error"
+        assert call_count["n"] == 1, (
+            f"{status} is a genuine deterministic 4xx and must NOT retry, "
+            f"got {call_count['n']} attempts"
+        )
+
+
+def test_classify_error_log_reports_true_attempt_count_on_4xx(monkeypatch, caplog):
+    """The final error log line must report how many attempts were actually
+    made, not the hardcoded OLLAMA_MAX_ATTEMPTS constant. A genuine 4xx breaks
+    after exactly 1 attempt, so the log must say 1, not 3."""
+    import logging as _logging
+    import requests
+    from email_ingest import classifier
+
+    def fake_post(*args, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 400
+        err = requests.HTTPError("400 Client Error: Bad Request")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
+        return resp
+
+    monkeypatch.setattr(classifier.requests, "post", fake_post)
+    import time as _time
+    monkeypatch.setattr(_time, "sleep", lambda _s: None)
+
+    email = _make_email(id="t400-logcount")
+    with caplog.at_level(_logging.ERROR):
+        result = classify_email(email)
+
+    assert result.skip_reason == "ollama_error"
+    error_records = [r for r in caplog.records if r.levelno == _logging.ERROR
+                      and "Ollama request failed after" in r.getMessage()]
+    assert error_records, "expected an 'Ollama request failed after N attempts' error log"
+    msg = error_records[0].getMessage()
+    assert "after 1 attempt" in msg, (
+        f"log must report the true attempt count (1), not the hardcoded "
+        f"OLLAMA_MAX_ATTEMPTS constant — got: {msg!r}"
+    )
