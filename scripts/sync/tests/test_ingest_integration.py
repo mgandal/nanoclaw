@@ -270,7 +270,7 @@ def test_hindsight_http_error_counted_as_zero(mock_extract, mock_parse, mock_wri
 
 
 @patch.dict(os.environ, {"EMAIL_FOLLOWUPS_ENABLED": "1"})
-def test_run_ingest_calls_followups_pipeline_with_classified_emails():
+def test_run_ingest_calls_followups_pipeline_with_classified_emails(tmp_state):
     """run_ingest must accumulate (email, relevance) tuples and hand them to run_followups_passes."""
     import email_ingest_module_under_test as m
     from email_ingest.types import NormalizedEmail, ClassificationResult, IngestState

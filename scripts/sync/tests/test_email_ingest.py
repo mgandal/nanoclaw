@@ -8,16 +8,6 @@ import pytest
 from email_ingest.types import IngestState, NormalizedEmail, ClassificationResult
 
 
-@pytest.fixture
-def tmp_state(tmp_path):
-    """Redirect state persistence to a temp directory."""
-    state_file = tmp_path / "email-ingest-state.json"
-    with patch("email_ingest.types.STATE_FILE", state_file), \
-         patch("email_ingest.types.STATE_DIR", tmp_path), \
-         patch("email_ingest.types.EXPORT_DIR", tmp_path / "exported"):
-        yield tmp_path
-
-
 def _make_email(id: str, source: str = "gmail", subject: str = "Test") -> NormalizedEmail:
     return NormalizedEmail(
         id=id, source=source, from_addr="alice@example.com",
